@@ -119,7 +119,8 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      preload: path.join(__dirname, 'preload.js'),
+      devTools: true // DevTools'u etkinleştir
     },
     frame: false,
     title: 'MAKARA POS',
@@ -127,6 +128,17 @@ function createWindow() {
     autoHideMenuBar: true, // Menü çubuğunu gizle
     fullscreen: true, // Tam ekran modu
     kiosk: true // Kiosk modu - görev çubuğu ve diğer Windows öğelerini gizler
+  });
+
+  // F12 ile DevTools aç/kapa
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12') {
+      if (mainWindow.webContents.isDevToolsOpened()) {
+        mainWindow.webContents.closeDevTools();
+      } else {
+        mainWindow.webContents.openDevTools();
+      }
+    }
   });
 
   if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
@@ -378,24 +390,58 @@ ipcMain.handle('select-image-file', async (event) => {
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
 
+// Log dosyası oluştur
+const logPath = path.join(app.getPath('userData'), 'update-log.txt');
+
+function writeLog(message) {
+  const timestamp = new Date().toISOString();
+  const logMessage = `[${timestamp}] ${message}\n`;
+  try {
+    fs.appendFileSync(logPath, logMessage, 'utf8');
+    console.log(message); // Console'a da yaz
+  } catch (error) {
+    console.error('Log yazma hatası:', error);
+  }
+}
+
+// GitHub update server URL'ini manuel olarak ayarla
+if (app.isPackaged) {
+  const feedURL = {
+    provider: 'github',
+    owner: 'ErolEmirhan',
+    repo: 'Makara-APP'
+  };
+  autoUpdater.setFeedURL(feedURL);
+  writeLog(`Auto-updater yapılandırıldı: ${feedURL.owner}/${feedURL.repo}`);
+  writeLog(`Update URL: https://github.com/${feedURL.owner}/${feedURL.repo}/releases/latest/download/latest.yml`);
+  writeLog(`Mevcut uygulama versiyonu: ${app.getVersion()}`);
+}
+
 // Update event handlers
 autoUpdater.on('checking-for-update', () => {
-  console.log('Güncelleme kontrol ediliyor...');
+  const msg = `Güncelleme kontrol ediliyor... (Mevcut: ${app.getVersion()})`;
+  writeLog(msg);
+  console.log('🔍 Güncelleme kontrol ediliyor...');
 });
 
 autoUpdater.on('update-available', (info) => {
-  console.log('Yeni güncelleme mevcut:', info.version);
+  const msg = `Yeni güncelleme mevcut: ${info.version}`;
+  writeLog(msg);
   if (mainWindow) {
     mainWindow.webContents.send('update-available', info);
   }
 });
 
 autoUpdater.on('update-not-available', (info) => {
-  console.log('Güncelleme yok, en son sürüm:', info.version);
+  const currentVersion = app.getVersion();
+  const msg = `Güncelleme yok - Mevcut versiyon: ${currentVersion}, En son sürüm: ${info.version || currentVersion}`;
+  writeLog(msg);
+  console.log('✅ En güncel versiyonu kullanıyorsunuz:', currentVersion);
 });
 
 autoUpdater.on('error', (err) => {
-  console.error('Güncelleme hatası:', err);
+  const msg = `Güncelleme hatası: ${err.message || err}`;
+  writeLog(msg);
   if (mainWindow) {
     mainWindow.webContents.send('update-error', err.message);
   }
@@ -437,7 +483,9 @@ ipcMain.handle('download-update', async () => {
 });
 
 ipcMain.handle('install-update', () => {
-  autoUpdater.quitAndInstall(false, true);
+  // isSilent: true = Windows dialog'unu gösterme, direkt yükle
+  // isForceRunAfter: true = Yüklemeden sonra otomatik çalıştır
+  autoUpdater.quitAndInstall(true, true);
 });
 
 app.whenReady().then(() => {
@@ -446,15 +494,26 @@ app.whenReady().then(() => {
 
   // Uygulama paketlenmişse güncelleme kontrolü yap
   if (app.isPackaged) {
+    writeLog(`Uygulama başlatıldı - Versiyon: ${app.getVersion()}`);
+    writeLog('Güncelleme kontrolü başlatılıyor...');
+    
     // İlk açılışta kontrol et
     setTimeout(() => {
-      autoUpdater.checkForUpdates();
+      writeLog('Güncelleme kontrolü yapılıyor...');
+      autoUpdater.checkForUpdates().catch(err => {
+        writeLog(`Güncelleme kontrolü hatası: ${err.message || err}`);
+      });
     }, 3000); // 3 saniye bekle, uygulama tam yüklensin
     
     // Her 4 saatte bir kontrol et
     setInterval(() => {
-      autoUpdater.checkForUpdates();
+      writeLog('Periyodik güncelleme kontrolü...');
+      autoUpdater.checkForUpdates().catch(err => {
+        writeLog(`Güncelleme kontrolü hatası: ${err.message || err}`);
+      });
     }, 4 * 60 * 60 * 1000); // 4 saat
+  } else {
+    writeLog('Development modu - güncelleme kontrolü yapılmıyor');
   }
 
   app.on('activate', () => {

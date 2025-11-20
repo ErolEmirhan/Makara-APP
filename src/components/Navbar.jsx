@@ -49,11 +49,22 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   return (
     <nav className="h-20 bg-white/90 backdrop-blur-xl border-b border-purple-200 px-8 flex items-center justify-between shadow-lg relative z-50">
       <div className="flex items-center space-x-4">
-        <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-lg overflow-hidden">
-          <img src="/icon.png" alt="Makara Logo" className="w-full h-full object-contain" />
+        <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-lg overflow-hidden bg-white p-1">
+          <img 
+            src="./logo.png" 
+            alt="Makara Logo" 
+            className="w-full h-full object-contain"
+            style={{ display: 'block' }}
+            onError={(e) => {
+              console.error('Logo yüklenemedi, icon.png kullanılıyor:', e.target.src);
+              e.target.src = './icon.png'; // Fallback
+            }}
+            onLoad={() => console.log('Logo başarıyla yüklendi')}
+          />
         </div>
         <div>
           <h1 className="text-3xl font-bold text-pink-500">Makara Satış Sistemi</h1>
+          <p className="text-xs text-gray-500 font-medium">v1.0.4</p>
         </div>
       </div>
 

@@ -1,6 +1,6 @@
 {
   "name": "makara-pos",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "MAKARA - Modern POS Uygulaması",
   "main": "electron/main.js",
   "scripts": {
@@ -77,7 +77,7 @@
       "multiLanguageInstaller": true,
       "runAfterFinish": true,
       "menuCategory": "Business",
-      "artifactName": "${productName} Setup ${version}.${ext}"
+      "artifactName": "MAKARA-POS-Setup-${version}.${ext}"
     },
     "publish": {
       "provider": "github",

@@ -8,13 +8,20 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && electron .",
     "build": "vite build",
+    "build:electron": "npm run build && electron-builder",
+    "build:win": "npm run build && electron-builder --win",
+    "build:win:publish": "npm run build && electron-builder --win --publish always",
     "preview": "vite preview"
   },
-  "keywords": ["electron", "pos", "makara"],
+  "keywords": [
+    "electron",
+    "pos",
+    "makara"
+  ],
   "author": "MAKARA",
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "^9.2.2",
+    "electron-updater": "^6.6.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
@@ -23,10 +30,59 @@
     "autoprefixer": "^10.4.17",
     "concurrently": "^8.2.2",
     "electron": "^28.1.3",
+    "electron-builder": "^24.13.3",
     "postcss": "^8.4.33",
     "tailwindcss": "^3.4.1",
     "vite": "^5.0.11",
     "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.makara.pos",
+    "productName": "MAKARA POS",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "sign": null,
+      "signingHashAlgorithms": null,
+      "certificateFile": null,
+      "certificatePassword": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MAKARA POS",
+      "installerIcon": "build/installer-icon.ico",
+      "uninstallerIcon": "build/installer-icon.ico",
+      "installerHeaderIcon": "build/installer-icon.ico",
+      "installerSidebar": "build/installer-welcome.bmp",
+      "installerHeader": "build/installer-header.bmp",
+      "warningsAsErrors": false,
+      "displayLanguageSelector": true,
+      "multiLanguageInstaller": true,
+      "runAfterFinish": true,
+      "menuCategory": "Business",
+      "artifactName": "${productName} Setup ${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "ErolEmirhan",
+      "repo": "Makara-APP"
+    }
   }
 }
-

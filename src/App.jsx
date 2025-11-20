@@ -7,8 +7,11 @@ import SalesHistory from './components/SalesHistory';
 import PaymentModal from './components/PaymentModal';
 import RoleSplash from './components/RoleSplash';
 import SaleSuccessToast from './components/SaleSuccessToast';
+import SplashScreen from './components/SplashScreen';
+import UpdateModal from './components/UpdateModal';
 
 function App() {
+  const [showSplash, setShowSplash] = useState(true);
   const [currentView, setCurrentView] = useState('pos'); // 'pos' or 'sales'
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
@@ -18,6 +21,8 @@ function App() {
   const [userType, setUserType] = useState('Admin'); // 'Admin' or 'Personel'
   const [activeRoleSplash, setActiveRoleSplash] = useState(null);
   const [saleSuccessInfo, setSaleSuccessInfo] = useState(null);
+  const [updateInfo, setUpdateInfo] = useState(null);
+  const [updateDownloadProgress, setUpdateDownloadProgress] = useState(null);
   const triggerRoleSplash = (role) => {
     setActiveRoleSplash(role);
     setTimeout(() => setActiveRoleSplash(null), 1000);
@@ -25,6 +30,27 @@ function App() {
 
   useEffect(() => {
     loadCategories();
+    
+    // Update event listeners
+    if (window.electronAPI) {
+      window.electronAPI.onUpdateAvailable((info) => {
+        setUpdateInfo({ ...info, downloaded: false });
+      });
+      
+      window.electronAPI.onUpdateDownloaded((info) => {
+        setUpdateInfo({ ...info, downloaded: true });
+      });
+      
+      window.electronAPI.onUpdateError((error) => {
+        console.error('Update error:', error);
+        // Hata durumunda modal'ı kapat
+        setUpdateInfo(null);
+      });
+      
+      window.electronAPI.onUpdateProgress((progress) => {
+        setUpdateDownloadProgress(progress);
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -44,6 +70,33 @@ function App() {
   const loadProducts = async (categoryId) => {
     const prods = await window.electronAPI.getProducts(categoryId);
     setProducts(prods);
+  };
+
+  const refreshProducts = async () => {
+    // Kategorileri yenile
+    const cats = await window.electronAPI.getCategories();
+    setCategories(cats);
+    
+    // Seçili kategoriyi koru veya ilk kategoriyi seç
+    let categoryToLoad = selectedCategory;
+    if (cats.length > 0) {
+      if (!categoryToLoad || !cats.find(c => c.id === categoryToLoad.id)) {
+        categoryToLoad = cats[0];
+        setSelectedCategory(cats[0]);
+      } else {
+        // Mevcut kategoriyi güncelle (order_index değişmiş olabilir)
+        const updatedCategory = cats.find(c => c.id === categoryToLoad.id);
+        if (updatedCategory) {
+          setSelectedCategory(updatedCategory);
+          categoryToLoad = updatedCategory;
+        }
+      }
+      
+      // Seçili kategorinin ürünlerini yenile
+      if (categoryToLoad) {
+        await loadProducts(categoryToLoad.id);
+      }
+    }
   };
 
   const addToCart = (product) => {
@@ -112,14 +165,19 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-[#f0f4ff] via-[#e0e7ff] to-[#fce7f3] text-gray-800">
-      <Navbar 
+    <>
+      {showSplash && (
+        <SplashScreen onComplete={() => setShowSplash(false)} />
+      )}
+      <div className="min-h-screen bg-gradient-to-br from-[#f0f4ff] via-[#e0e7ff] to-[#fce7f3] text-gray-800">
+        <Navbar 
         currentView={currentView} 
         setCurrentView={setCurrentView}
         totalItems={getTotalItems()}
         userType={userType}
         setUserType={setUserType}
         onRoleSplash={triggerRoleSplash}
+        onProductsUpdated={refreshProducts}
       />
       
       {currentView === 'pos' ? (
@@ -168,7 +226,28 @@ function App() {
         info={saleSuccessInfo}
         onClose={() => setSaleSuccessInfo(null)}
       />
-    </div>
+      {updateInfo && (
+        <UpdateModal
+          updateInfo={updateInfo}
+          downloadProgress={updateDownloadProgress}
+          onDownload={async () => {
+            if (window.electronAPI) {
+              await window.electronAPI.downloadUpdate();
+            }
+          }}
+          onInstall={() => {
+            if (window.electronAPI) {
+              window.electronAPI.installUpdate();
+            }
+          }}
+          onClose={() => {
+            setUpdateInfo(null);
+            setUpdateDownloadProgress(null);
+          }}
+        />
+      )}
+      </div>
+    </>
   );
 }
 

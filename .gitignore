@@ -42,4 +42,6 @@ release/
 
 # Build
 build/
+release/
+dist/
 

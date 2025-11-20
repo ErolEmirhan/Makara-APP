@@ -1,9 +1,11 @@
 import React, { useState, useRef, useEffect } from 'react';
 import PinModal from './PinModal';
+import SettingsModal from './SettingsModal';
 
-const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash }) => {
+const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const menuRef = useRef(null);
 
   // Dışarı tıklayınca menüyü kapat
@@ -47,12 +49,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   return (
     <nav className="h-20 bg-white/90 backdrop-blur-xl border-b border-purple-200 px-8 flex items-center justify-between shadow-lg relative z-50">
       <div className="flex items-center space-x-4">
-        <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-lg">
-          <span className="text-2xl font-bold">M</span>
+        <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-lg overflow-hidden">
+          <img src="/icon.png" alt="Makara Logo" className="w-full h-full object-contain" />
         </div>
         <div>
-          <h1 className="text-3xl font-bold gradient-text">MAKARA</h1>
-          <p className="text-xs text-gray-600">POS Sistemi</p>
+          <h1 className="text-3xl font-bold text-pink-500">Makara Satış Sistemi</h1>
         </div>
       </div>
 
@@ -79,21 +80,35 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </button>
 
         {userType === 'Admin' && (
-          <button
-            onClick={() => setCurrentView('sales')}
-            className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
-              currentView === 'sales'
-                ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg transform scale-105'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
-            }`}
-          >
-            <div className="flex items-center space-x-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-              </svg>
-              <span>Satış Detayları</span>
-            </div>
-          </button>
+          <>
+            <button
+              onClick={() => setCurrentView('sales')}
+              className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
+                currentView === 'sales'
+                  ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg transform scale-105'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
+              }`}
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Satış Detayları</span>
+              </div>
+            </button>
+            <button
+              onClick={() => setShowSettingsModal(true)}
+              className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800"
+            >
+              <div className="flex items-center space-x-2">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+                <span>Ayarlar</span>
+              </div>
+            </button>
+          </>
         )}
 
         <div className="relative ml-4 pl-4 border-l border-gray-300" ref={menuRef}>
@@ -189,6 +204,14 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         <PinModal
           onClose={handlePinClose}
           onSuccess={handlePinSuccess}
+        />
+      )}
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <SettingsModal
+          onClose={() => setShowSettingsModal(false)}
+          onProductsUpdated={onProductsUpdated}
         />
       )}
     </nav>

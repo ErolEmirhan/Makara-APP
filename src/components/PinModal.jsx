@@ -5,7 +5,15 @@ const PinModal = ({ onClose, onSuccess }) => {
   const [pin, setPin] = useState('');
   const [error, setError] = useState(false);
   const [success, setSuccess] = useState(false);
-  const correctPin = '1234';
+  const [correctPin, setCorrectPin] = useState('1234');
+
+  useEffect(() => {
+    const loadPin = async () => {
+      const pin = await window.electronAPI.getAdminPin();
+      setCorrectPin(pin);
+    };
+    loadPin();
+  }, []);
 
   useEffect(() => {
     if (pin.length === 4) {

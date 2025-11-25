@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, onSaveToTable, totalAmount, selectedTable, orderNote, onOrderNoteChange }) => {
+const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, onSaveToTable, totalAmount, selectedTable, orderNote, onOrderNoteChange, onToggleGift, onRequestAdisyon }) => {
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteText, setNoteText] = useState(orderNote || '');
   const textareaRef = useRef(null);
@@ -44,14 +44,30 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
             <p className="text-sm text-gray-500 mt-2">Ürün eklemek için tıklayın</p>
           </div>
         ) : (
-          cart.map((item) => (
-            <div key={item.id} className="cart-item animate-fade-in">
+          cart.map((item) => {
+            const isGift = item.isGift || false;
+            const displayPrice = isGift ? 0 : item.price;
+            const displayTotal = isGift ? 0 : (item.price * item.quantity);
+            
+            return (
+            <div key={item.id} className={`cart-item animate-fade-in ${isGift ? 'opacity-75' : ''}`}>
               <div className="flex-1">
-                <h4 className="font-medium text-gray-800 mb-1">{item.name}</h4>
-                <p className="text-sm text-purple-600">₺{item.price.toFixed(2)}</p>
+                <h4 className={`font-medium mb-1 ${isGift ? 'text-gray-500 line-through' : 'text-gray-800'}`}>
+                  {item.name}
+                </h4>
+                <div className="flex items-center space-x-2">
+                  <p className={`text-sm ${isGift ? 'text-gray-400 line-through' : 'text-purple-600'}`}>
+                    ₺{item.price.toFixed(2)}
+                  </p>
+                  {isGift && (
+                    <span className="text-xs font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded">
+                      İKRAM - ₺0.00
+                    </span>
+                  )}
+                </div>
               </div>
               
-              <div className="flex items-center space-x-3">
+              <div className="flex items-center space-x-2">
                 <div className="flex items-center space-x-2 bg-purple-50 rounded-lg p-1">
                   <button
                     onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
@@ -75,6 +91,18 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                 </div>
 
                 <button
+                  onClick={() => onToggleGift && onToggleGift(item.id)}
+                  className={`px-2 py-1 text-[10px] font-medium rounded-lg transition-all whitespace-nowrap ${
+                    isGift 
+                      ? 'bg-green-100 text-green-700 hover:bg-green-200' 
+                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  }`}
+                  title={isGift ? 'İkramı İptal Et' : 'İkram Et'}
+                >
+                  {isGift ? '✓' : 'İkram'}
+                </button>
+
+                <button
                   onClick={() => onRemoveItem(item.id)}
                   className="w-7 h-7 bg-red-500/20 hover:bg-red-500/30 rounded flex items-center justify-center transition-colors"
                 >
@@ -84,13 +112,20 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                 </button>
 
                 <div className="text-right min-w-[80px]">
-                  <p className="font-bold text-lg bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-                    ₺{(item.price * item.quantity).toFixed(2)}
-                  </p>
+                  {isGift ? (
+                    <div>
+                      <p className="text-xs text-gray-400 line-through">₺{(item.price * item.quantity).toFixed(2)}</p>
+                      <p className="font-bold text-lg text-green-600">₺0.00</p>
+                    </div>
+                  ) : (
+                    <p className="font-bold text-lg bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+                      ₺{(item.price * item.quantity).toFixed(2)}
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
-          ))
+          )})
         )}
       </div>
 
@@ -140,22 +175,40 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
         )}
 
         {selectedTable ? (
-          <button
-            onClick={onSaveToTable}
-            disabled={cart.length === 0}
-            className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
-              cart.length === 0
-                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
-            }`}
-          >
-            <div className="flex items-center justify-center space-x-2">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              <span>Masaya Kaydet</span>
-            </div>
-          </button>
+          <div className="space-y-3">
+            <button
+              onClick={onSaveToTable}
+              disabled={cart.length === 0}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
+                cart.length === 0
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
+              }`}
+            >
+              <div className="flex items-center justify-center space-x-2">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span>Masaya Kaydet</span>
+              </div>
+            </button>
+            <button
+              onClick={onRequestAdisyon}
+              disabled={cart.length === 0}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
+                cart.length === 0
+                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
+              }`}
+            >
+              <div className="flex items-center justify-center space-x-2">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Adisyon İste</span>
+              </div>
+            </button>
+          </div>
         ) : (
           <button
             onClick={onCheckout}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment }) => {
+const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon }) => {
   const [sessionDuration, setSessionDuration] = useState('');
 
   if (!order) return null;
@@ -38,8 +38,11 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     return () => clearInterval(interval);
   }, [order.order_date, order.order_time]);
 
-  // Başlangıç toplam tutarı (tüm ürünlerin toplamı)
-  const originalTotalAmount = items.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+  // Başlangıç toplam tutarı (ikram edilen ürünler hariç)
+  const originalTotalAmount = items.reduce((sum, item) => {
+    if (item.isGift) return sum;
+    return sum + (item.price * item.quantity);
+  }, 0);
   // Şu anki kalan tutar (order.total_amount)
   const remainingAmount = order.total_amount || 0;
   // Ödenen kısmi ödeme tutarı
@@ -93,24 +96,52 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
           <div>
             <h3 className="text-xl font-bold mb-4 gradient-text">Ürünler</h3>
             <div className="space-y-3">
-              {items.map((item) => (
+              {items.map((item) => {
+                const isGift = item.isGift || false;
+                const displayTotal = isGift ? 0 : (item.price * item.quantity);
+                const originalTotal = item.price * item.quantity;
+                
+                return (
                 <div
                   key={item.id}
-                  className="flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200 hover:bg-gray-100 transition-colors"
+                  className={`flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200 hover:bg-gray-100 transition-colors ${isGift ? 'opacity-75' : ''}`}
                 >
                   <div className="flex-1">
-                    <p className="font-semibold text-gray-800">{item.product_name}</p>
+                    <div className="flex items-center space-x-2 mb-1">
+                      <p className={`font-semibold ${isGift ? 'text-gray-500 line-through' : 'text-gray-800'}`}>
+                        {item.product_name}
+                      </p>
+                      {isGift && (
+                        <span className="text-[10px] font-bold text-green-600 bg-green-50 px-2 py-0.5 rounded">
+                          İKRAM
+                        </span>
+                      )}
+                    </div>
                     <p className="text-sm text-gray-500">
-                      {item.quantity} adet × ₺{item.price.toFixed(2)}
+                      {item.quantity} adet × {isGift ? (
+                        <>
+                          <span className="line-through text-gray-400">₺{item.price.toFixed(2)}</span>
+                          <span className="text-green-600 font-semibold ml-1">₺0.00</span>
+                        </>
+                      ) : (
+                        `₺${item.price.toFixed(2)}`
+                      )}
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="font-bold text-lg text-purple-600">
-                      ₺{(item.price * item.quantity).toFixed(2)}
-                    </p>
+                    {isGift ? (
+                      <div>
+                        <p className="text-xs text-gray-400 line-through">₺{originalTotal.toFixed(2)}</p>
+                        <p className="font-bold text-lg text-green-600">₺0.00</p>
+                      </div>
+                    ) : (
+                      <p className="font-bold text-lg text-purple-600">
+                        ₺{displayTotal.toFixed(2)}
+                      </p>
+                    )}
                   </div>
                 </div>
-              ))}
+              )})}
             </div>
           </div>
 
@@ -151,10 +182,21 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
 
           {/* Masayı Sonlandır ve Kısmi Ödeme Butonları */}
           {order.status === 'pending' && (
-            <div className="flex items-center justify-center gap-4 pt-4">
+            <div className="flex items-center justify-center gap-4 pt-4 flex-wrap">
+              <button
+                onClick={onRequestAdisyon}
+                className="px-6 py-4 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white font-bold text-lg rounded-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
+              >
+                <div className="flex items-center space-x-2">
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <span>Adisyon İste</span>
+                </div>
+              </button>
               <button
                 onClick={onPartialPayment}
-                className="px-8 py-4 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold text-lg rounded-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
+                className="px-6 py-4 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-bold text-lg rounded-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
               >
                 <div className="flex items-center space-x-2">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -165,7 +207,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               </button>
               <button
                 onClick={onCompleteTable}
-                className="px-8 py-4 bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white font-bold text-lg rounded-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
+                className="px-6 py-4 bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white font-bold text-lg rounded-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
               >
                 <div className="flex items-center space-x-2">
                   <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -16,51 +16,21 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
   };
 
   const handlePrint = async () => {
-    console.log('ReceiptModal: Yazdır butonuna tıklandı');
     setIsPrinting(true);
     
     try {
       await onPrint();
-      // 2 saniye bekle (loading gösterilsin)
+      // Kısa bir gecikme sonra disabled'ı kaldır
       setTimeout(() => {
         setIsPrinting(false);
-      }, 2000);
+      }, 1000);
     } catch (error) {
-      console.error('Yazdırma hatası:', error);
       setIsPrinting(false);
     }
   };
 
   return (
     <>
-      {/* Loading Popup */}
-      {isPrinting && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[100] animate-fade-in">
-          <div className="bg-white/95 backdrop-blur-xl border-2 border-green-200 rounded-3xl p-8 max-w-sm w-full mx-4 shadow-2xl animate-scale-in">
-            <div className="flex flex-col items-center justify-center space-y-6">
-              {/* Spinner */}
-              <div className="relative w-20 h-20">
-                <div className="absolute inset-0 border-4 border-green-200 rounded-full"></div>
-                <div className="absolute inset-0 border-4 border-transparent border-t-green-500 rounded-full animate-spin"></div>
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                  </svg>
-                </div>
-              </div>
-              
-              {/* Text */}
-              <div className="text-center">
-                <h3 className="text-2xl font-bold bg-gradient-to-r from-green-600 to-emerald-600 bg-clip-text text-transparent">
-                  Yazdırılıyor...
-                </h3>
-                <p className="text-sm text-gray-500 mt-2">Lütfen bekleyin</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
         <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
           <div className="flex items-center justify-between mb-6">
@@ -118,17 +88,52 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
                 <span>Toplam</span>
               </div>
             </div>
-            {items.map((item, index) => (
-              <div key={index} className="mb-2 text-xs">
-                <div className="flex justify-between mb-1">
-                  <span className="font-semibold">{item.name}</span>
-                  <span className="font-semibold">₺{(item.price * item.quantity).toFixed(2)}</span>
+            {items.map((item, index) => {
+              const isGift = item.isGift || false;
+              const displayPrice = isGift ? 0 : item.price;
+              const displayTotal = isGift ? 0 : (item.price * item.quantity);
+              
+              return (
+                <div key={index} className="mb-2 text-xs">
+                  <div className="flex justify-between mb-1">
+                    <div className="flex items-center space-x-2">
+                      <span className={`font-semibold ${isGift ? 'text-gray-500 line-through' : ''}`}>
+                        {item.name}
+                      </span>
+                      {isGift && (
+                        <span className="text-xs font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded">
+                          İKRAM
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-right">
+                      {isGift ? (
+                        <div>
+                          <span className="font-semibold text-gray-400 line-through text-xs block">
+                            ₺{(item.price * item.quantity).toFixed(2)}
+                          </span>
+                          <span className="font-semibold text-green-600">₺0.00</span>
+                        </div>
+                      ) : (
+                        <span className="font-semibold">₺{displayTotal.toFixed(2)}</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex justify-between text-gray-600">
+                    <span>
+                      {item.quantity} adet × {isGift ? (
+                        <>
+                          <span className="line-through text-gray-400">₺{item.price.toFixed(2)}</span>
+                          <span className="text-green-600 font-semibold ml-1">₺0.00</span>
+                        </>
+                      ) : (
+                        `₺${item.price.toFixed(2)}`
+                      )}
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between text-gray-600">
-                  <span>{item.quantity} adet × ₺{item.price.toFixed(2)}</span>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {saleInfo.orderNote && (
@@ -141,7 +146,11 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
           <div className="border-t-2 border-gray-400 pt-2 mt-3">
             <div className="flex justify-between text-sm font-bold mb-1">
               <span>TOPLAM:</span>
-              <span>₺{saleInfo.totalAmount?.toFixed(2) || '0.00'}</span>
+              <span>₺{items.reduce((sum, item) => {
+                // İkram edilen ürünleri toplamdan çıkar
+                if (item.isGift) return sum;
+                return sum + (item.price * item.quantity);
+              }, 0).toFixed(2) || '0.00'}</span>
             </div>
             <div className="flex justify-between text-xs text-gray-600">
               <span>Ödeme:</span>

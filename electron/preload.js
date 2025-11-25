@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   getCategories: () => ipcRenderer.invoke('get-categories'),
   createCategory: (categoryData) => ipcRenderer.invoke('create-category', categoryData),
+  deleteCategory: (categoryId) => ipcRenderer.invoke('delete-category', categoryId),
   getProducts: (categoryId) => ipcRenderer.invoke('get-products', categoryId),
   createSale: (saleData) => ipcRenderer.invoke('create-sale', saleData),
   getSales: () => ipcRenderer.invoke('get-sales'),
@@ -30,11 +31,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateProgress: (callback) => ipcRenderer.on('update-download-progress', (event, progress) => callback(progress)),
   // Print API
   printReceipt: (receiptData) => ipcRenderer.invoke('print-receipt', receiptData),
+  printAdisyon: (adisyonData) => ipcRenderer.invoke('print-adisyon', adisyonData),
   // Printer Management API
   getPrinters: () => ipcRenderer.invoke('get-printers'),
   assignCategoryToPrinter: (assignmentData) => ipcRenderer.invoke('assign-category-to-printer', assignmentData),
   getPrinterAssignments: () => ipcRenderer.invoke('get-printer-assignments'),
   removePrinterAssignment: (printerName, printerType) => ipcRenderer.invoke('remove-printer-assignment', printerName, printerType),
+  setCashierPrinter: (printerData) => ipcRenderer.invoke('set-cashier-printer', printerData),
+  getCashierPrinter: () => ipcRenderer.invoke('get-cashier-printer'),
   // Table Order Partial Payment API
   updateTableOrderAmount: (orderId, paidAmount) => ipcRenderer.invoke('update-table-order-amount', orderId, paidAmount),
   createPartialPaymentSale: (saleData) => ipcRenderer.invoke('create-partial-payment-sale', saleData),

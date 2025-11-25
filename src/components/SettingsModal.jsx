@@ -26,6 +26,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
   const categoryDropdownRef = useRef(null);
   const [deleteConfirmModal, setDeleteConfirmModal] = useState(null); // { productId, productName }
+  const [deleteCategoryModal, setDeleteCategoryModal] = useState(null); // { categoryId, categoryName, productCount }
   const [showAddCategoryModal, setShowAddCategoryModal] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [categoryError, setCategoryError] = useState('');
@@ -36,6 +37,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
   const [selectedPrinter, setSelectedPrinter] = useState(null);
   const [showCategoryAssignModal, setShowCategoryAssignModal] = useState(false);
   const [assigningCategory, setAssigningCategory] = useState(null);
+  const [cashierPrinter, setCashierPrinter] = useState(null);
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -59,6 +61,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
     if (activeTab === 'printers') {
       loadPrinters();
       loadPrinterAssignments();
+      loadCashierPrinter();
     }
   }, [activeTab]);
 
@@ -93,6 +96,38 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       setPrinterAssignments(assignments || []);
     } catch (error) {
       console.error('Yazıcı atamaları yükleme hatası:', error);
+    }
+  };
+
+  const loadCashierPrinter = async () => {
+    try {
+      const cashier = await window.electronAPI.getCashierPrinter();
+      setCashierPrinter(cashier);
+    } catch (error) {
+      console.error('Kasa yazıcısı yükleme hatası:', error);
+    }
+  };
+
+  const handleSetCashierPrinter = async (printerName, printerType) => {
+    try {
+      const isCurrentCashier = cashierPrinter && 
+        cashierPrinter.printerName === printerName && 
+        cashierPrinter.printerType === printerType;
+      
+      if (isCurrentCashier) {
+        // Zaten kasa yazıcısıysa, kaldır
+        await window.electronAPI.setCashierPrinter(null);
+        setCashierPrinter(null);
+        alert('Kasa yazıcısı kaldırıldı');
+      } else {
+        // Kasa yazıcısı olarak ayarla
+        await window.electronAPI.setCashierPrinter({ printerName, printerType });
+        setCashierPrinter({ printerName, printerType });
+        alert(`${printerName} kasa yazıcısı olarak ayarlandı`);
+      }
+    } catch (error) {
+      console.error('Kasa yazıcısı ayarlama hatası:', error);
+      alert('Kasa yazıcısı ayarlanırken hata oluştu: ' + error.message);
     }
   };
 
@@ -309,6 +344,38 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
     } catch (error) {
       console.error('Kategori ekleme hatası:', error);
       setCategoryError('Bir hata oluştu: ' + (error.message || 'Bilinmeyen hata'));
+    }
+  };
+
+  const handleDeleteCategory = async () => {
+    if (!deleteCategoryModal) return;
+    
+    try {
+      const result = await window.electronAPI.deleteCategory(deleteCategoryModal.categoryId);
+      
+      if (result && result.success) {
+        // Kategorileri yenile
+        await loadCategories();
+        
+        // Eğer silinen kategori seçiliyse, seçimi temizle
+        if (selectedCategory?.id === deleteCategoryModal.categoryId) {
+          setSelectedCategory(null);
+        }
+        
+        // Ana uygulamayı yenile
+        if (onProductsUpdated) {
+          onProductsUpdated();
+        }
+        
+        setDeleteCategoryModal(null);
+      } else {
+        alert(result?.error || 'Kategori silinemedi');
+        setDeleteCategoryModal(null);
+      }
+    } catch (error) {
+      console.error('Kategori silme hatası:', error);
+      alert('Kategori silinemedi: ' + error.message);
+      setDeleteCategoryModal(null);
     }
   };
 
@@ -679,27 +746,40 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                         </div>
                       </button>
                       {categories.map(cat => (
-                        <button
-                          key={cat.id}
-                          onClick={() => setSelectedCategory(cat)}
-                          className={`px-4 py-2.5 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 ${
-                            selectedCategory?.id === cat.id
-                              ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg scale-105'
-                              : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200 hover:border-purple-300'
-                          }`}
-                        >
-                          <div className="flex items-center space-x-2">
-                            <div className={`w-2 h-2 rounded-full ${
-                              selectedCategory?.id === cat.id ? 'bg-white' : 'bg-purple-500'
-                            }`}></div>
-                            <span>{cat.name}</span>
-                            {selectedCategory?.id === cat.id && (
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                              </svg>
-                            )}
-                          </div>
-                        </button>
+                        <div key={cat.id} className="relative group">
+                          <button
+                            onClick={() => setSelectedCategory(cat)}
+                            className={`px-4 py-2.5 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 ${
+                              selectedCategory?.id === cat.id
+                                ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg scale-105'
+                                : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200 hover:border-purple-300'
+                            }`}
+                          >
+                            <div className="flex items-center space-x-2">
+                              <div className={`w-2 h-2 rounded-full ${
+                                selectedCategory?.id === cat.id ? 'bg-white' : 'bg-purple-500'
+                              }`}></div>
+                              <span>{cat.name}</span>
+                              {selectedCategory?.id === cat.id && (
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                              )}
+                            </div>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteCategoryModal({ categoryId: cat.id, categoryName: cat.name });
+                            }}
+                            className="absolute -top-1 -right-1 w-6 h-6 bg-red-500 hover:bg-red-600 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow-lg z-10"
+                            title="Kategoriyi Sil"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </div>
                       ))}
                       <button
                         onClick={() => setShowAddCategoryModal(true)}
@@ -809,38 +889,67 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                   const assignedCategory = assignment 
                     ? categories.find(c => c.id === assignment.category_id)
                     : null;
+                  
+                  const isCashierPrinter = cashierPrinter && 
+                    cashierPrinter.printerName === printer.name && 
+                    cashierPrinter.printerType === printerSubTab;
 
                   return (
                     <div
                       key={printer.name}
-                      className="bg-white rounded-xl p-4 border border-gray-200 hover:shadow-md transition-all flex items-center justify-between"
+                      className="bg-white rounded-xl p-4 border border-gray-200 hover:shadow-md transition-all"
                     >
-                      <div className="flex items-center space-x-4 flex-1">
-                        <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-blue-200 to-purple-200 flex items-center justify-center">
-                          <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
-                          </svg>
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="font-semibold text-gray-800">{printer.displayName || printer.name}</h4>
-                          <p className="text-sm text-gray-500">{printer.description || 'Açıklama yok'}</p>
-                          {assignedCategory ? (
-                            <div className="mt-1">
-                              <span className="inline-flex items-center px-2 py-1 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium">
-                                📋 {assignedCategory.name}
-                              </span>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center space-x-4 flex-1">
+                          <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
+                            isCashierPrinter 
+                              ? 'bg-gradient-to-br from-green-400 to-emerald-500' 
+                              : 'bg-gradient-to-br from-blue-200 to-purple-200'
+                          }`}>
+                            <svg className={`w-6 h-6 ${isCashierPrinter ? 'text-white' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                            </svg>
+                          </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-semibold text-gray-800">{printer.displayName || printer.name}</h4>
+                              {isCashierPrinter && (
+                                <span className="inline-flex items-center px-2 py-1 rounded-lg bg-green-100 text-green-700 text-xs font-bold">
+                                  💰 KASA YAZICISI
+                                </span>
+                              )}
                             </div>
-                          ) : (
-                            <p className="text-xs text-gray-400 mt-1">Kategori atanmamış</p>
-                          )}
+                            <p className="text-sm text-gray-500">{printer.description || 'Açıklama yok'}</p>
+                            {assignedCategory ? (
+                              <div className="mt-1">
+                                <span className="inline-flex items-center px-2 py-1 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium">
+                                  📋 {assignedCategory.name}
+                                </span>
+                              </div>
+                            ) : (
+                              <p className="text-xs text-gray-400 mt-1">Kategori atanmamış</p>
+                            )}
+                          </div>
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleAssignCategory(printer.name, printerSubTab)}
-                        className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:shadow-lg transition-all font-medium"
-                      >
-                        Kategori Ayla
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleSetCashierPrinter(printer.name, printerSubTab)}
+                          className={`flex-1 px-4 py-2 rounded-lg hover:shadow-lg transition-all font-medium ${
+                            isCashierPrinter
+                              ? 'bg-gradient-to-r from-red-500 to-rose-500 text-white'
+                              : 'bg-gradient-to-r from-green-500 to-emerald-500 text-white'
+                          }`}
+                        >
+                          {isCashierPrinter ? '💰 Kasa Yazıcısını Kaldır' : '💰 Kasa Yazıcısı Seç'}
+                        </button>
+                        <button
+                          onClick={() => handleAssignCategory(printer.name, printerSubTab)}
+                          className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:shadow-lg transition-all font-medium"
+                        >
+                          Kategori Ayla
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -1053,6 +1162,50 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
               </button>
               <button
                 onClick={confirmDelete}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
+              >
+                <div className="flex items-center justify-center space-x-2">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                  <span>Sil</span>
+                </div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Category Confirmation Modal */}
+      {deleteCategoryModal && (
+        <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
+          <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden">
+            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-pink-500 to-red-500"></div>
+            
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 bg-gradient-to-br from-red-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+                <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-800 mb-2">Kategoriyi Sil</h3>
+              <p className="text-gray-600 mb-4">
+                <span className="font-semibold text-purple-600">{deleteCategoryModal.categoryName}</span> kategorisini silmek istediğinizden emin misiniz?
+              </p>
+              <p className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg border border-red-200">
+                ⚠️ Bu işlem geri alınamaz! Kategorideki tüm ürünler de silinecektir.
+              </p>
+            </div>
+
+            <div className="flex space-x-4">
+              <button
+                onClick={() => setDeleteCategoryModal(null)}
+                className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-all transform hover:scale-105"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleDeleteCategory}
                 className="flex-1 px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
               >
                 <div className="flex items-center justify-center space-x-2">

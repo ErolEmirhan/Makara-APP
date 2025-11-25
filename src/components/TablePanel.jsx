@@ -130,6 +130,55 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     setShowPartialPaymentModal(true);
   };
 
+  // Adisyon yazdır
+  const handleRequestAdisyon = async () => {
+    if (!selectedOrder || orderItems.length === 0) return;
+    
+    if (!window.electronAPI || !window.electronAPI.printAdisyon) {
+      console.error('printAdisyon API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
+      alert('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+      return;
+    }
+    
+    // Order items'ı adisyon formatına çevir
+    const adisyonItems = orderItems.map(item => ({
+      id: item.product_id,
+      name: item.product_name,
+      quantity: item.quantity,
+      price: item.price,
+      isGift: item.isGift || false,
+      category_id: null // Kategori bilgisi item'da yoksa sonra eklenebilir
+    }));
+    
+    const adisyonData = {
+      items: adisyonItems,
+      tableName: selectedOrder.table_name,
+      tableType: selectedOrder.table_type,
+      orderNote: null, // Order'da order_note yoksa null
+      sale_date: selectedOrder.order_date || new Date().toLocaleDateString('tr-TR'),
+      sale_time: selectedOrder.order_time || new Date().toLocaleTimeString('tr-TR')
+    };
+
+    try {
+      // Adisyon yazdırma toast'ını göster (eğer App.jsx'teki gibi bir toast sistemi varsa)
+      // Şimdilik sadece console log ile göster
+      console.log('Adisyon yazdırılıyor...');
+      
+      const result = await window.electronAPI.printAdisyon(adisyonData);
+      
+      if (result.success) {
+        console.log('Adisyon başarıyla yazdırıldı');
+        // Başarı mesajı gösterilebilir
+      } else {
+        console.error('Adisyon yazdırılamadı:', result.error);
+        alert('Adisyon yazdırılamadı: ' + (result.error || 'Bilinmeyen hata'));
+      }
+    } catch (error) {
+      console.error('Adisyon yazdırılırken hata:', error);
+      alert('Adisyon yazdırılamadı: ' + error.message);
+    }
+  };
+
   // Kısmi ödemeyi tamamla
   const handleCompletePartialPayment = async (payments) => {
     if (!selectedOrder || !window.electronAPI) {
@@ -305,6 +354,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           }}
           onCompleteTable={handleCompleteTable}
           onPartialPayment={handlePartialPayment}
+          onRequestAdisyon={handleRequestAdisyon}
         />
       )}
 

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, dialog, webContents } = require('elec
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
+const { execSync } = require('child_process');
 
 let mainWindow;
 let dbPath;
@@ -13,7 +14,8 @@ let db = {
   tableOrders: [],
   tableOrderItems: [],
   settings: {
-    adminPin: '1234'
+    adminPin: '1234',
+    cashierPrinter: null // { printerName, printerType } - Kasa yazıcısı ayarı
   },
   printerAssignments: [] // { printerName, printerType, category_id }
 };
@@ -29,7 +31,12 @@ function initDatabase() {
       
       // Eğer settings objesi yoksa ekle
       if (!db.settings) {
-        db.settings = { adminPin: '1234' };
+        db.settings = { adminPin: '1234', cashierPrinter: null };
+        saveDatabase();
+      }
+      // cashierPrinter yoksa ekle
+      if (db.settings && db.settings.cashierPrinter === undefined) {
+        db.settings.cashierPrinter = null;
         saveDatabase();
       }
       
@@ -200,6 +207,65 @@ ipcMain.handle('create-category', (event, categoryData) => {
   return { success: true, category: newCategory };
 });
 
+// Kategori silme handler'ı
+ipcMain.handle('delete-category', (event, categoryId) => {
+  const category = db.categories.find(c => c.id === categoryId);
+  
+  if (!category) {
+    return { success: false, error: 'Kategori bulunamadı' };
+  }
+  
+  // Bu kategorideki tüm ürünleri bul
+  const productsInCategory = db.products.filter(p => p.category_id === categoryId);
+  
+  // Kategorideki tüm ürünleri sil
+  if (productsInCategory.length > 0) {
+    // Her ürünü sil
+    productsInCategory.forEach(product => {
+      // Ürünü products listesinden kaldır
+      const productIndex = db.products.findIndex(p => p.id === product.id);
+      if (productIndex !== -1) {
+        db.products.splice(productIndex, 1);
+      }
+      
+      // Ürünle ilgili satış itemlarını bul ve sil
+      const saleItems = db.saleItems.filter(si => si.product_id === product.id);
+      saleItems.forEach(item => {
+        const itemIndex = db.saleItems.findIndex(si => si.id === item.id);
+        if (itemIndex !== -1) {
+          db.saleItems.splice(itemIndex, 1);
+        }
+      });
+      
+      // Ürünle ilgili masa sipariş itemlarını bul ve sil
+      const tableOrderItems = db.tableOrderItems.filter(oi => oi.product_id === product.id);
+      tableOrderItems.forEach(item => {
+        const itemIndex = db.tableOrderItems.findIndex(oi => oi.id === item.id);
+        if (itemIndex !== -1) {
+          db.tableOrderItems.splice(itemIndex, 1);
+        }
+      });
+    });
+  }
+  
+  // Kategoriye atanmış yazıcı var mı kontrol et
+  const printerAssignments = db.printerAssignments.filter(pa => pa.category_id === categoryId);
+  if (printerAssignments.length > 0) {
+    // Yazıcı atamalarını kaldır
+    db.printerAssignments = db.printerAssignments.filter(pa => pa.category_id !== categoryId);
+  }
+  
+  // Kategoriyi sil
+  const categoryIndex = db.categories.findIndex(c => c.id === categoryId);
+  if (categoryIndex !== -1) {
+    db.categories.splice(categoryIndex, 1);
+    saveDatabase();
+    return { success: true, deletedProducts: productsInCategory.length };
+  }
+  
+  return { success: false, error: 'Kategori silinemedi' };
+});
+
 ipcMain.handle('get-products', (event, categoryId) => {
   if (categoryId) {
     return db.products.filter(p => p.category_id === categoryId);
@@ -240,7 +306,8 @@ ipcMain.handle('create-sale', (event, saleData) => {
       product_id: item.id,
       product_name: item.name,
       quantity: item.quantity,
-      price: item.price
+      price: item.price,
+      isGift: item.isGift || false
     });
   });
 
@@ -253,7 +320,10 @@ ipcMain.handle('get-sales', () => {
   const salesWithItems = db.sales.map(sale => {
     const items = db.saleItems
       .filter(si => si.sale_id === sale.id)
-      .map(si => `${si.product_name} x${si.quantity}`)
+      .map(si => {
+        const giftText = si.isGift ? ' (İKRAM)' : '';
+        return `${si.product_name} x${si.quantity}${giftText}`;
+      })
       .join(', ');
     
     return {
@@ -311,7 +381,8 @@ ipcMain.handle('create-table-order', (event, orderData) => {
       product_id: item.id,
       product_name: item.name,
       quantity: item.quantity,
-      price: item.price
+      price: item.price,
+      isGift: item.isGift || false
     });
   });
 
@@ -379,7 +450,8 @@ ipcMain.handle('complete-table-order', (event, orderId) => {
       product_id: item.product_id,
       product_name: item.product_name,
       quantity: item.quantity,
-      price: item.price
+      price: item.price,
+      isGift: item.isGift || false
     });
   });
 
@@ -446,7 +518,8 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
       product_id: item.product_id,
       product_name: item.product_name,
       quantity: item.quantity,
-      price: item.price
+      price: item.price,
+      isGift: item.isGift || false
     });
   });
 
@@ -711,23 +784,305 @@ ipcMain.handle('install-update', () => {
 
 // Print Receipt Handler
 ipcMain.handle('print-receipt', async (event, receiptData) => {
-  let printWindow = null;
+  console.log('\n=== YAZDIRMA İŞLEMİ BAŞLADI ===');
+  console.log('📄 ReceiptData:', JSON.stringify(receiptData, null, 2));
   
   try {
-    console.log('print-receipt handler çağrıldı');
-    console.log('receiptData:', receiptData);
-    
     if (!mainWindow) {
-      console.error('Ana pencere bulunamadı');
+      console.error('❌ Ana pencere bulunamadı');
       return { success: false, error: 'Ana pencere bulunamadı' };
     }
 
-    // Varsayılan yazıcı otomatik olarak kullanılacak (deviceName belirtilmediğinde)
-    console.log('Varsayılan yazıcıya yazdırma yapılacak');
+    // CashierOnly kontrolü - eğer sadece kasa yazıcısından yazdırılacaksa kategori bazlı yazdırma yapma
+    const cashierOnly = receiptData.cashierOnly || false;
+    
+    if (cashierOnly) {
+      console.log('\n💰 SADECE KASA YAZICISI MODU');
+      console.log('   Kategori bazlı yazdırma atlanıyor, sadece kasa yazıcısından yazdırılacak');
+      
+      // Kasa yazıcısını kontrol et
+      const cashierPrinter = db.settings.cashierPrinter;
+      
+      if (!cashierPrinter || !cashierPrinter.printerName) {
+        console.error('   ❌ Kasa yazıcısı ayarlanmamış!');
+        return { success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen ayarlardan kasa yazıcısı seçin.' };
+      }
+      
+      console.log(`   ✓ Kasa yazıcısı bulundu: "${cashierPrinter.printerName}" (${cashierPrinter.printerType})`);
+      
+      // Tüm ürünlerin toplam tutarını hesapla (ikram edilenler hariç)
+      const totalAmount = receiptData.items.reduce((sum, item) => {
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
+      
+      const cashierReceiptData = {
+        ...receiptData,
+        items: receiptData.items, // TÜM ürünler
+        totalAmount: totalAmount
+      };
+      
+      console.log(`   🖨️ Kasa yazıcısına yazdırılıyor: "${cashierPrinter.printerName}"`);
+      console.log(`   Toplam ${receiptData.items.length} ürün, Toplam tutar: ₺${totalAmount.toFixed(2)}`);
+      
+      const result = await printToPrinter(
+        cashierPrinter.printerName, 
+        cashierPrinter.printerType, 
+        cashierReceiptData, 
+        false, // isProductionReceipt = false (tam fiş)
+        null
+      );
+      
+      if (result.success) {
+        console.log(`   ✅ Fiş yazdırma başarılı`);
+        return { success: true, results: [result], error: null };
+      } else {
+        console.error(`   ❌ Fiş yazdırma başarısız: ${result.error}`);
+        return { success: false, error: result.error, results: [result] };
+      }
+    }
+    
+    // 1. ReceiptData içindeki item'ları kategorilere göre grupla
+    console.log('\n📦 Ürünler kategorilere göre gruplanıyor...');
+    const items = receiptData.items || [];
+    console.log(`   Toplam ${items.length} ürün bulundu`);
+    
+    // Her item için kategori bilgisini bul
+    const categoryItemsMap = new Map(); // category_id -> items[]
+    
+    for (const item of items) {
+      // Item içinde category_id var mı kontrol et
+      let categoryId = item.category_id;
+      
+      // Eğer yoksa, ürün bilgisinden al
+      if (!categoryId && item.id) {
+        const product = db.products.find(p => p.id === item.id);
+        if (product) {
+          categoryId = product.category_id;
+          console.log(`   Ürün "${item.name}" için kategori ID bulundu: ${categoryId}`);
+        }
+      }
+      
+      // Eğer hala yoksa, ürün adına göre bul
+      if (!categoryId) {
+        const product = db.products.find(p => p.name === item.name);
+        if (product) {
+          categoryId = product.category_id;
+          console.log(`   Ürün adından kategori ID bulundu: ${categoryId}`);
+        }
+      }
+      
+      if (categoryId) {
+        if (!categoryItemsMap.has(categoryId)) {
+          categoryItemsMap.set(categoryId, []);
+        }
+        categoryItemsMap.get(categoryId).push(item);
+        console.log(`   ✓ "${item.name}" -> Kategori ID: ${categoryId}`);
+      } else {
+        console.warn(`   ⚠️ "${item.name}" için kategori bulunamadı, varsayılan yazıcı kullanılacak`);
+        // Kategori bulunamazsa, özel bir key kullan
+        if (!categoryItemsMap.has('no-category')) {
+          categoryItemsMap.set('no-category', []);
+        }
+        categoryItemsMap.get('no-category').push(item);
+      }
+    }
+    
+    console.log(`\n📋 Kategori grupları oluşturuldu: ${categoryItemsMap.size} kategori`);
+    categoryItemsMap.forEach((items, categoryId) => {
+      console.log(`   - Kategori ID ${categoryId}: ${items.length} ürün`);
+    });
+    
+    // 2. Kasa yazıcısını kontrol et
+    console.log('\n💰 Kasa yazıcısı kontrol ediliyor...');
+    const cashierPrinter = db.settings.cashierPrinter;
+    
+    if (cashierPrinter && cashierPrinter.printerName) {
+      console.log(`   ✓ Kasa yazıcısı bulundu: "${cashierPrinter.printerName}" (${cashierPrinter.printerType})`);
+    } else {
+      console.log(`   ⚠️ Kasa yazıcısı ayarlanmamış`);
+    }
+    
+    // 3. Her kategori için atanmış yazıcıları bul
+    console.log('\n🖨️ Yazıcı atamaları kontrol ediliyor...');
+    console.log(`   Toplam ${db.printerAssignments.length} yazıcı ataması var`);
+    
+    const printJobs = []; // { printerName, printerType, categoryId, items, receiptData, isCashierReceipt, isProductionReceipt }
+    
+    categoryItemsMap.forEach((categoryItems, categoryId) => {
+      console.log(`\n   Kategori ID ${categoryId} için yazıcı aranıyor...`);
+      
+      // Bu kategori için atanmış yazıcıyı bul
+      // categoryId'yi number'a çevir (karşılaştırma için)
+      const categoryIdNum = typeof categoryId === 'string' && categoryId !== 'no-category' ? parseInt(categoryId) : categoryId;
+      
+      const assignment = db.printerAssignments.find(a => {
+        const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+        return assignmentCategoryId === categoryIdNum;
+      });
+      
+      // Bu kategori için toplam tutarı hesapla (sadece bu kategorinin ürünleri, ikram edilenler hariç)
+      const categoryTotalAmount = categoryItems.reduce((sum, item) => {
+        // İkram edilen ürünleri toplamdan çıkar
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
+      
+      if (assignment) {
+        console.log(`   ✓ Yazıcı ataması bulundu:`);
+        console.log(`     - Yazıcı: "${assignment.printerName}"`);
+        console.log(`     - Tip: ${assignment.printerType}`);
+        console.log(`     - Kategori ID: ${assignment.category_id}`);
+        console.log(`     - Kategori Toplamı: ₺${categoryTotalAmount.toFixed(2)}`);
+        
+        // Bu kategori için yazdırma işi oluştur - sadece bu kategorinin ürünleri ve toplamı
+        const categoryReceiptData = {
+          ...receiptData,
+          items: categoryItems, // Sadece bu kategorinin ürünleri
+          totalAmount: categoryTotalAmount // Sadece bu kategorinin toplamı
+        };
+        
+        printJobs.push({
+          printerName: assignment.printerName,
+          printerType: assignment.printerType,
+          categoryId: categoryId,
+          items: categoryItems,
+          receiptData: categoryReceiptData,
+          isCashierReceipt: false,
+          isProductionReceipt: true
+        });
+      } else {
+        console.warn(`   ⚠️ Kategori ID ${categoryId} için yazıcı ataması bulunamadı`);
+        console.log(`   → Varsayılan yazıcı kullanılacak`);
+        console.log(`     - Kategori Toplamı: ₺${categoryTotalAmount.toFixed(2)}`);
+        
+        // Varsayılan yazıcıya yazdır - sadece bu kategorinin ürünleri ve toplamı
+        const categoryReceiptData = {
+          ...receiptData,
+          items: categoryItems, // Sadece bu kategorinin ürünleri
+          totalAmount: categoryTotalAmount // Sadece bu kategorinin toplamı
+        };
+        
+        printJobs.push({
+          printerName: null, // null = varsayılan yazıcı
+          printerType: 'default',
+          categoryId: categoryId,
+          items: categoryItems,
+          receiptData: categoryReceiptData,
+          isCashierReceipt: false,
+          isProductionReceipt: true
+        });
+      }
+    });
+    
+    // Kasa yazıcısına tam fiş ekle (eğer ayarlanmışsa)
+    if (cashierPrinter && cashierPrinter.printerName) {
+      // Tüm ürünlerin toplam tutarını hesapla (ikram edilenler hariç)
+      const totalAmount = items.reduce((sum, item) => {
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
+      
+      const cashierReceiptData = {
+        ...receiptData,
+        items: items, // TÜM ürünler
+        totalAmount: totalAmount
+      };
+      
+      // Kasa yazıcısını en başa ekle
+      printJobs.unshift({
+        printerName: cashierPrinter.printerName,
+        printerType: cashierPrinter.printerType,
+        categoryId: 'cashier',
+        items: items, // TÜM ürünler
+        receiptData: cashierReceiptData,
+        isCashierReceipt: true,
+        isProductionReceipt: false
+      });
+      
+      console.log(`\n💰 Kasa yazıcısı yazdırma işi eklendi: "${cashierPrinter.printerName}"`);
+      console.log(`   Toplam ${items.length} ürün, Toplam tutar: ₺${totalAmount.toFixed(2)}`);
+    }
+    
+    // Kategori yazıcıları için üretim fişi olarak işaretle
+    printJobs.forEach((job) => {
+      if (!job.isCashierReceipt) {
+        job.isProductionReceipt = true;
+        job.isCashierReceipt = false;
+      }
+    });
+    
+    console.log(`\n🎯 Toplam ${printJobs.length} yazdırma işi oluşturuldu`);
+    printJobs.forEach((job, index) => {
+      const receiptType = job.isCashierReceipt ? '💰 KASA FİŞİ' : '🏭 ÜRETİM FİŞİ';
+      console.log(`   ${index + 1}. ${receiptType}`);
+      console.log(`      Yazıcı: "${job.printerName || 'Varsayılan'}" (${job.printerType})`);
+      console.log(`      Kategori: ${job.categoryId}, Ürün sayısı: ${job.items.length}`);
+    });
+    
+    // 3. Her yazdırma işini sırayla gerçekleştir
+    const printResults = [];
+    
+    for (let i = 0; i < printJobs.length; i++) {
+      const job = printJobs[i];
+      console.log(`\n🖨️ YAZDIRMA ${i + 1}/${printJobs.length} BAŞLIYOR`);
+      console.log(`   Yazıcı: "${job.printerName || 'Varsayılan yazıcı'}"`);
+      console.log(`   Tip: ${job.printerType}`);
+      console.log(`   Kategori ID: ${job.categoryId}`);
+      console.log(`   Ürün sayısı: ${job.items.length}`);
+      
+      const result = await printToPrinter(
+        job.printerName, 
+        job.printerType, 
+        job.receiptData, 
+        job.isProductionReceipt || false, 
+        job.items
+      );
+      printResults.push(result);
+      
+      if (!result.success) {
+        console.error(`   ❌ Yazdırma başarısız: ${result.error}`);
+      } else {
+        console.log(`   ✅ Yazdırma başarılı`);
+      }
+      
+      // Yazıcılar arası kısa bekleme
+      if (i < printJobs.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    const successCount = printResults.filter(r => r.success).length;
+    
+    console.log(`\n=== YAZDIRMA İŞLEMİ TAMAMLANDI ===`);
+    console.log(`   Toplam ${printResults.length} iş, ${successCount} başarılı`);
+    
+    // Yazdırma işlemleri tamamlandı - her zaman success dön
+    return { 
+      success: true, 
+      results: printResults,
+      error: null
+    };
+  } catch (error) {
+    console.error('\n❌❌❌ YAZDIRMA HATASI ❌❌❌');
+    console.error('Hata mesajı:', error.message);
+    console.error('Hata detayı:', error.stack);
+    return { success: false, error: error.message };
+  }
+});
 
+// Yazıcıya yazdırma fonksiyonu
+async function printToPrinter(printerName, printerType, receiptData, isProductionReceipt = false, productionItems = null) {
+  let printWindow = null;
+  
+  try {
+    const receiptType = isProductionReceipt ? 'ÜRETİM FİŞİ' : 'KASA FİŞİ';
+    console.log(`   [printToPrinter] ${receiptType} yazdırılıyor: "${printerName || 'Varsayılan'}"`);
+    
     // Fiş içeriğini HTML olarak oluştur
-    const receiptHTML = generateReceiptHTML(receiptData);
-    console.log('Fiş HTML içeriği oluşturuldu');
+    const receiptHTML = isProductionReceipt 
+      ? generateProductionReceiptHTML(productionItems || receiptData.items, receiptData)
+      : generateReceiptHTML(receiptData);
 
     // Gizli bir pencere oluştur ve fiş içeriğini yükle
     printWindow = new BrowserWindow({
@@ -792,9 +1147,54 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
           console.log('Yükseklik kontrolü hatası:', error);
         }
         
-        // Varsayılan yazıcıya yazdır (deviceName belirtilmediğinde otomatik varsayılan kullanılır)
+        // Yazıcı adını belirle
+        let targetPrinterName = printerName;
+        
+        if (targetPrinterName) {
+          console.log(`   🎯 Yazıcı adı belirtildi: "${targetPrinterName}"`);
+          console.log(`   🔍 Yazıcının sistemde mevcut olup olmadığı kontrol ediliyor...`);
+          
+          // Sistem yazıcılarını al
+          try {
+            const powershellCmd = `Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json`;
+            const result = execSync(`powershell -Command "${powershellCmd}"`, { 
+              encoding: 'utf-8',
+              timeout: 5000 
+            });
+            
+            const printersData = JSON.parse(result);
+            const printersArray = Array.isArray(printersData) ? printersData : [printersData];
+            const availablePrinters = printersArray.map(p => p.Name || '').filter(n => n);
+            
+            console.log(`   📋 Sistemde ${availablePrinters.length} yazıcı bulundu`);
+            
+            // Yazıcı adını kontrol et (tam eşleşme veya kısmi eşleşme)
+            const exactMatch = availablePrinters.find(p => p === targetPrinterName);
+            const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
+            
+            if (exactMatch) {
+              targetPrinterName = exactMatch;
+              console.log(`   ✅ Yazıcı bulundu (tam eşleşme): "${targetPrinterName}"`);
+            } else if (partialMatch) {
+              targetPrinterName = partialMatch;
+              console.log(`   ✅ Yazıcı bulundu (kısmi eşleşme): "${targetPrinterName}"`);
+            } else {
+              console.warn(`   ⚠️ Yazıcı "${targetPrinterName}" sistemde bulunamadı!`);
+              console.log(`   📋 Mevcut yazıcılar:`, availablePrinters);
+              console.log(`   → Varsayılan yazıcı kullanılacak`);
+              targetPrinterName = null; // Varsayılan yazıcıya yazdır
+            }
+          } catch (error) {
+            console.error(`   ❌ Yazıcı kontrolü hatası:`, error.message);
+            console.log(`   → Belirtilen yazıcı adı kullanılacak: "${targetPrinterName}"`);
+          }
+        } else {
+          console.log(`   ℹ️ Yazıcı adı belirtilmedi, varsayılan yazıcı kullanılacak`);
+        }
+        
+        // Yazdırma seçenekleri
         const printOptions = {
-          silent: true, // Dialog gösterme, direkt varsayılan yazıcıya yazdır
+          silent: true, // Dialog gösterme
           printBackground: true,
           margins: {
             marginType: 'none' // Kenar boşluğu yok
@@ -806,24 +1206,37 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
           color: false, // Siyah-beyaz (termal yazıcılar için)
           copies: 1,
           duplex: 'none'
-          // deviceName belirtilmedi - varsayılan yazıcı otomatik kullanılacak
         };
+        
+        // Yazıcı adı belirtilmişse ekle
+        if (targetPrinterName) {
+          printOptions.deviceName = targetPrinterName;
+          console.log(`   📤 Yazdırma seçenekleri:`);
+          console.log(`      - Yazıcı: "${targetPrinterName}"`);
+          console.log(`      - Tip: ${printerType}`);
+        } else {
+          console.log(`   📤 Varsayılan yazıcıya yazdırılacak`);
+        }
 
+        console.log(`   🖨️ Yazdırma komutu gönderiliyor...`);
         printWindow.webContents.print(printOptions, (success, errorType) => {
-          console.log('Yazdırma callback çağrıldı - success:', success, 'errorType:', errorType);
+          console.log(`\n   📥 Yazdırma callback alındı`);
+          console.log(`      - Başarılı: ${success}`);
+          console.log(`      - Yazıcı: "${targetPrinterName || 'Varsayılan'}"`);
+          console.log(`      - Tip: ${printerType}`);
           
           if (!success) {
-            console.error('Yazdırma hatası:', errorType);
-            console.error('Hata tipi:', errorType);
+            console.error(`      ❌ Yazdırma başarısız!`);
+            console.error(`      Hata tipi: ${errorType}`);
             printReject(new Error(errorType || 'Yazdırma başarısız'));
           } else {
-            console.log('✓ Fiş başarıyla yazdırıldı');
+            console.log(`      ✅ Yazdırma başarılı!`);
+            console.log(`      🖨️ "${targetPrinterName || 'Varsayılan yazıcı'}" yazıcısına yazdırıldı`);
             printResolve(true);
           }
           
           // Yazdırma işlemi tamamlandıktan sonra pencereyi kapat
           setTimeout(() => {
-            console.log('Yazdırma penceresi kapatılıyor...');
             if (printWindow && !printWindow.isDestroyed()) {
               printWindow.close();
               printWindow = null;
@@ -858,25 +1271,259 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
       new Promise((_, reject) => setTimeout(() => reject(new Error('Yazdırma timeout')), 10000))
     ]);
 
-    console.log('print-receipt handler başarıyla tamamlandı');
-    return { success: true };
+    console.log(`   [printToPrinter] Yazdırma işlemi tamamlandı`);
+    return { success: true, printerName: targetPrinterName || 'Varsayılan' };
   } catch (error) {
-    console.error('Fiş yazdırma hatası:', error);
-    console.error('Hata detayı:', error.stack);
+    console.error(`   [printToPrinter] Hata:`, error.message);
+    console.error(`   Hata detayı:`, error.stack);
     
     // Hata durumunda pencereyi temizle
     if (printWindow && !printWindow.isDestroyed()) {
       printWindow.close();
     }
     
-    return { success: false, error: error.message };
+    return { success: false, error: error.message, printerName: printerName || 'Varsayılan' };
   }
-});
+}
+
+// Üretim fişi HTML içeriğini oluştur (fiyat yok, sadece ürün bilgileri)
+function generateProductionReceiptHTML(items, receiptData) {
+  const itemsHTML = items.map(item => {
+    const isGift = item.isGift || false;
+    
+    if (isGift) {
+      return `
+      <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #ccc;">
+        <div style="display: flex; justify-content: space-between; font-weight: 900; font-style: italic; margin-bottom: 4px; font-family: 'Montserrat', sans-serif;">
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <span style="text-decoration: line-through; color: #999;">${item.name}</span>
+            <span style="font-size: 8px; background: #dcfce7; color: #16a34a; padding: 2px 4px; border-radius: 3px; font-weight: 900;">İKRAM</span>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 10px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
+          <span>${item.quantity} adet</span>
+        </div>
+        ${item.extraNote ? `
+        <div style="font-size: 9px; color: #666; font-style: italic; margin-top: 4px; font-family: 'Montserrat', sans-serif;">
+          📝 ${item.extraNote}
+        </div>
+        ` : ''}
+      </div>
+    `;
+    }
+    
+    return `
+      <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #ccc;">
+        <div style="display: flex; justify-content: space-between; font-weight: 900; font-style: italic; margin-bottom: 4px; font-family: 'Montserrat', sans-serif;">
+          <span>${item.name}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 10px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
+          <span>${item.quantity} adet</span>
+        </div>
+        ${item.extraNote ? `
+        <div style="font-size: 9px; color: #666; font-style: italic; margin-top: 4px; font-family: 'Montserrat', sans-serif;">
+          📝 ${item.extraNote}
+        </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@900&display=swap" rel="stylesheet">
+      <style>
+        @media print {
+          @page {
+            size: 58mm auto;
+            margin: 0;
+            min-height: 100%;
+          }
+          body {
+            margin: 0;
+            padding: 10px 10px 20px 10px;
+            height: auto;
+            min-height: 100%;
+            color: #000 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          * {
+            color: #000 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+        }
+        * {
+          box-sizing: border-box;
+          font-family: 'Montserrat', sans-serif;
+          font-weight: 900;
+          font-style: italic;
+        }
+        p, span, div {
+          color: #000;
+          font-family: 'Montserrat', sans-serif;
+          font-weight: 900;
+          font-style: italic;
+        }
+        body {
+          font-family: 'Montserrat', sans-serif;
+          width: 58mm;
+          max-width: 58mm;
+          padding: 10px 10px 25px 10px;
+          margin: 0;
+          font-size: 12px;
+          font-weight: 900;
+          font-style: italic;
+          min-height: 100%;
+          height: auto;
+          overflow: visible;
+          color: #000;
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          text-rendering: optimizeLegibility;
+        }
+        html {
+          height: auto;
+          min-height: 100%;
+        }
+        .header {
+          text-align: center;
+          margin-bottom: 10px;
+          font-family: 'Montserrat', sans-serif;
+          font-weight: 900;
+          font-style: italic;
+        }
+        .header h3 {
+          font-size: 16px;
+          font-weight: 900;
+          font-style: italic;
+          margin: 5px 0;
+          font-family: 'Montserrat', sans-serif;
+        }
+        .info {
+          border-top: 1px solid #000;
+          border-bottom: 1px solid #000;
+          padding: 8px 0;
+          margin: 10px 0;
+          font-size: 10px;
+          color: #000;
+          font-weight: 900;
+          font-style: italic;
+          font-family: 'Montserrat', sans-serif;
+        }
+        .info div {
+          display: flex;
+          justify-content: space-between;
+          margin: 3px 0;
+        }
+        .items {
+          margin: 10px 0;
+          font-family: 'Montserrat', sans-serif;
+          font-weight: 900;
+          font-style: italic;
+        }
+        .footer {
+          text-align: center;
+          margin-top: 20px;
+          margin-bottom: 15px;
+          padding-top: 15px;
+          padding-bottom: 15px;
+          border-top: 3px solid #000;
+          font-size: 12px;
+          font-weight: 900;
+          font-style: italic;
+          color: #000;
+          page-break-inside: avoid;
+          display: block;
+          font-family: 'Montserrat', sans-serif;
+        }
+        .header {
+          page-break-inside: avoid;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h3>MAKARA</h3>
+        <p style="font-size: 10px; margin: 0; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">ÜRETİM FİŞİ</p>
+      </div>
+      
+      <div class="info">
+        <div>
+          <span>Tarih:</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_date || new Date().toLocaleDateString('tr-TR')}</span>
+        </div>
+        <div>
+          <span>Saat:</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_time || new Date().toLocaleTimeString('tr-TR')}</span>
+        </div>
+        ${receiptData.sale_id ? `
+        <div>
+          <span>Fiş No:</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">#${receiptData.sale_id}</span>
+        </div>
+        ` : ''}
+        ${receiptData.order_id ? `
+        <div>
+          <span>Sipariş No:</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">#${receiptData.order_id}</span>
+        </div>
+        ` : ''}
+      </div>
+
+      <div class="items">
+        <div style="display: flex; justify-content: space-between; font-weight: 900; font-style: italic; margin-bottom: 5px; padding-bottom: 5px; border-bottom: 1px solid #000; font-family: 'Montserrat', sans-serif;">
+          <span>Ürün</span>
+          <span>Adet</span>
+        </div>
+        ${itemsHTML}
+      </div>
+      
+      ${receiptData.orderNote ? `
+      <div style="margin: 10px 0; padding: 8px; background-color: #fef3c7; border: 1px solid #fbbf24; border-radius: 4px;">
+        <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #d97706; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
+        <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #92400e; margin: 0; font-family: 'Montserrat', sans-serif;">${receiptData.orderNote}</p>
+      </div>
+      ` : ''}
+    </body>
+    </html>
+  `;
+}
 
 // Fiş HTML içeriğini oluştur
 function generateReceiptHTML(receiptData) {
   const itemsHTML = receiptData.items.map(item => {
-    const itemTotal = item.price * item.quantity;
+    const isGift = item.isGift || false;
+    const displayPrice = isGift ? 0 : item.price;
+    const itemTotal = isGift ? 0 : (item.price * item.quantity);
+    const originalTotal = item.price * item.quantity;
+    
+    if (isGift) {
+      return `
+      <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #ccc;">
+        <div style="display: flex; justify-content: space-between; font-weight: 900; font-style: italic; margin-bottom: 4px; font-family: 'Montserrat', sans-serif;">
+          <div style="display: flex; align-items: center; gap: 4px;">
+            <span style="text-decoration: line-through; color: #999;">${item.name}</span>
+            <span style="font-size: 8px; background: #dcfce7; color: #16a34a; padding: 2px 4px; border-radius: 3px; font-weight: 900;">İKRAM</span>
+          </div>
+          <div style="text-align: right;">
+            <div style="text-decoration: line-through; color: #999; font-size: 10px;">₺${originalTotal.toFixed(2)}</div>
+            <span style="color: #16a34a; font-weight: 900;">₺0.00</span>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; font-size: 10px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
+          <span>${item.quantity} adet × <span style="text-decoration: line-through; color: #999;">₺${item.price.toFixed(2)}</span> <span style="color: #16a34a;">₺0.00</span></span>
+        </div>
+      </div>
+    `;
+    }
+    
     return `
       <div style="margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px dashed #ccc;">
         <div style="display: flex; justify-content: space-between; font-weight: 900; font-style: italic; margin-bottom: 4px; font-family: 'Montserrat', sans-serif;">
@@ -1084,7 +1731,11 @@ function generateReceiptHTML(receiptData) {
       <div class="total">
         <div>
           <span>TOPLAM:</span>
-          <span>₺${receiptData.totalAmount.toFixed(2)}</span>
+          <span>₺${receiptData.items.reduce((sum, item) => {
+            // İkram edilen ürünleri toplamdan çıkar
+            if (item.isGift) return sum;
+            return sum + (item.price * item.quantity);
+          }, 0).toFixed(2)}</span>
         </div>
         <div style="font-size: 11px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
           <span>Ödeme:</span>
@@ -1092,10 +1743,6 @@ function generateReceiptHTML(receiptData) {
         </div>
       </div>
 
-      <div class="footer">
-        <p style="margin: 8px 0; font-weight: 900; font-style: italic; color: #000; font-size: 12px; font-family: 'Montserrat', sans-serif;">Teşekkür ederiz!</p>
-        <p style="margin: 8px 0; font-weight: 900; font-style: italic; color: #000; font-size: 12px; font-family: 'Montserrat', sans-serif;">İyi günler dileriz</p>
-      </div>
     </body>
     </html>
   `;
@@ -1165,56 +1812,218 @@ app.on('before-quit', () => {
 // Printer Management IPC Handlers
 ipcMain.handle('get-printers', async () => {
   try {
-    if (!mainWindow) {
-      return { success: false, error: 'Ana pencere bulunamadı' };
+    console.log('=== YAZICI LİSTELEME BAŞLADI ===');
+    
+    // Windows PowerShell komutu ile yazıcıları ve port bilgilerini al
+    let printersData = [];
+    
+    console.log('📋 Windows sisteminden yazıcılar alınıyor...');
+    try {
+      // PowerShell komutu ile yazıcıları ve port bilgilerini al
+      const powershellCmd = `Get-WmiObject Win32_Printer | Select-Object Name, DisplayName, Description, Status, Default, PortName | ConvertTo-Json`;
+      console.log('   PowerShell komutu çalıştırılıyor...');
+      
+      const result = execSync(`powershell -Command "${powershellCmd}"`, { 
+        encoding: 'utf-8',
+        timeout: 10000 
+      });
+      
+      console.log('   PowerShell çıktısı alındı, uzunluk:', result.length, 'karakter');
+      console.log('   İlk 500 karakter:', result.substring(0, 500));
+      
+      if (result && result.trim()) {
+        const parsed = JSON.parse(result);
+        printersData = Array.isArray(parsed) ? parsed : [parsed];
+        console.log(`✅ Toplam ${printersData.length} yazıcı bulundu`);
+      } else {
+        console.warn('⚠️ PowerShell çıktısı boş!');
+        printersData = [];
+      }
+    } catch (psError) {
+      console.error('❌ PowerShell hatası:', psError.message);
+      console.error('   Hata detayı:', psError.stack);
+      // Alternatif yöntem dene
+      try {
+        console.log('   Alternatif yöntem deneniyor...');
+        const altCmd = `Get-Printer | ForEach-Object { [PSCustomObject]@{ Name = $_.Name; PortName = (Get-PrinterPort -PrinterName $_.Name).Name; DisplayName = $_.DisplayName; Description = $_.Comment; Status = $_.PrinterStatus; Default = $false } } | ConvertTo-Json`;
+        const altResult = execSync(`powershell -Command "${altCmd}"`, { encoding: 'utf-8', timeout: 10000 });
+        if (altResult && altResult.trim()) {
+          const parsed = JSON.parse(altResult);
+          printersData = Array.isArray(parsed) ? parsed : [parsed];
+          console.log(`✅ Alternatif yöntem ile ${printersData.length} yazıcı bulundu`);
+        }
+      } catch (altError) {
+        console.error('❌ Alternatif yöntem de başarısız:', altError.message);
+        console.error('   Alternatif hata detayı:', altError.stack);
+      }
     }
     
-    const printers = mainWindow.webContents.getPrinters();
+    if (printersData.length === 0) {
+      console.warn('⚠️ Hiç yazıcı bulunamadı! Sistem yazıcılarını kontrol edin.');
+      return {
+        success: true,
+        printers: {
+          usb: [],
+          network: [],
+          all: []
+        }
+      };
+    }
+    
+    console.log('\n📝 Bulunan yazıcılar:');
+    printersData.forEach((p, index) => {
+      console.log(`  ${index + 1}. İsim: "${p.Name || 'yok'}"`);
+      console.log(`     Display Name: "${p.DisplayName || 'yok'}"`);
+      console.log(`     Description: "${p.Description || 'yok'}"`);
+      console.log(`     Port: "${p.PortName || 'yok'}"`);
+      console.log(`     Status: ${p.Status || 0}`);
+      console.log(`     Default: ${p.Default || false}`);
+    });
     
     // Yazıcıları USB ve Ethernet olarak kategorize et
     const usbPrinters = [];
     const networkPrinters = [];
     
-    printers.forEach(printer => {
+    // IP adresi pattern kontrolü için regex
+    const ipAddressPattern = /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/;
+    
+    console.log('\n🔍 Yazıcılar kategorize ediliyor...\n');
+    
+    printersData.forEach((printer, index) => {
+      const printerName = printer.Name || '';
+      const displayName = printer.DisplayName || printerName;
+      const description = printer.Description || '';
+      const portName = printer.PortName || '';
+      const status = printer.Status || 0;
+      const isDefault = printer.Default || false;
+      
+      console.log(`--- Yazıcı ${index + 1}: "${printerName}" ---`);
+      
       const printerInfo = {
-        name: printer.name,
-        displayName: printer.displayName || printer.name,
-        description: printer.description || '',
-        status: printer.status || 0,
-        isDefault: printer.isDefault || false
+        name: printerName,
+        displayName: displayName,
+        description: description,
+        status: status,
+        isDefault: isDefault
       };
       
-      // Basit bir kontrol: network veya IP içeriyorsa network yazıcı
-      const isNetwork = printer.name.toLowerCase().includes('network') || 
-                       printer.name.toLowerCase().includes('ethernet') ||
-                       printer.name.toLowerCase().includes('tcp') ||
-                       printer.name.toLowerCase().includes('ip') ||
-                       printer.description?.toLowerCase().includes('network') ||
-                       printer.description?.toLowerCase().includes('ethernet');
+      const portNameLower = portName.toLowerCase();
+      
+      console.log(`  İsim: "${printerName}"`);
+      console.log(`  Display Name: "${displayName}"`);
+      console.log(`  Port: "${portName || 'BULUNAMADI'}"`);
+      console.log(`  Açıklama: "${description || 'yok'}"`);
+      console.log(`  Status: ${status}`);
+      console.log(`  Default: ${isDefault}`);
+      
+      // Network yazıcı kontrolü - daha kapsamlı
+      let isNetwork = false;
+      const networkReasons = [];
+      
+      // 1. Port adında IP adresi var mı kontrol et (örn: "IP_192.168.1.152")
+      const portHasIP = ipAddressPattern.test(portName);
+      if (portHasIP) {
+        const ipMatches = portName.match(ipAddressPattern);
+        console.log(`  ✓ Port adında IP adresi bulundu: ${ipMatches ? ipMatches.join(', ') : ''}`);
+        isNetwork = true;
+        networkReasons.push(`Port adında IP: ${ipMatches ? ipMatches[0] : ''}`);
+      }
+      
+      // 2. Port adı TCP/IP içeriyor mu kontrol et
+      const portCheck = portNameLower.includes('tcp') || 
+                       portNameLower.includes('ip_') || 
+                       portNameLower.includes('ip:') || 
+                       portNameLower.startsWith('192.') || 
+                       portNameLower.startsWith('10.') || 
+                       portNameLower.startsWith('172.');
+      
+      if (portCheck && !portHasIP) {
+        console.log(`  ✓ Port adı TCP/IP içeriyor veya IP ile başlıyor`);
+        isNetwork = true;
+        networkReasons.push('Port TCP/IP içeriyor');
+      }
+      
+      // 3. Yazıcı adında veya açıklamasında network kelimeleri var mı kontrol et
+      const printerNameLower = printerName.toLowerCase();
+      const descriptionLower = description.toLowerCase();
+      
+      const hasNetworkKeywords = printerNameLower.includes('network') || 
+                                printerNameLower.includes('ethernet') ||
+                                printerNameLower.includes('tcp') ||
+                                descriptionLower.includes('network') ||
+                                descriptionLower.includes('ethernet');
+      
+      if (hasNetworkKeywords) {
+        console.log(`  ✓ İsim/açıklamada network kelimesi bulundu`);
+        isNetwork = true;
+        networkReasons.push('İsim/açıklamada network kelimesi');
+      }
+      
+      // 4. Yazıcı adında veya açıklamasında IP adresi pattern'i var mı kontrol et
+      const nameHasIP = ipAddressPattern.test(printerName);
+      const descHasIP = ipAddressPattern.test(description);
+      
+      if (nameHasIP) {
+        const ipMatches = printerName.match(ipAddressPattern);
+        console.log(`  ✓ Yazıcı adında IP adresi bulundu: ${ipMatches ? ipMatches.join(', ') : ''}`);
+        isNetwork = true;
+        networkReasons.push(`İsimde IP: ${ipMatches ? ipMatches[0] : ''}`);
+      }
+      
+      if (descHasIP) {
+        const ipMatches = description.match(ipAddressPattern);
+        console.log(`  ✓ Açıklamada IP adresi bulundu: ${ipMatches ? ipMatches.join(', ') : ''}`);
+        isNetwork = true;
+        networkReasons.push(`Açıklamada IP: ${ipMatches ? ipMatches[0] : ''}`);
+      }
+      
+      // Özel IP kontrolü: 192.168.1.152
+      const targetIP = '192.168.1.152';
+      if (portName.includes(targetIP) || printerName.includes(targetIP) || description.includes(targetIP)) {
+        console.log(`  🎯 HEDEF IP (${targetIP}) BULUNDU!`);
+        isNetwork = true;
+        networkReasons.push(`Hedef IP: ${targetIP}`);
+      }
+      
+      console.log(`  📊 Network yazıcı mı? ${isNetwork ? 'EVET' : 'HAYIR'}`);
+      if (isNetwork && networkReasons.length > 0) {
+        console.log(`  📋 Nedenleri: ${networkReasons.join(', ')}`);
+      }
       
       if (isNetwork) {
         networkPrinters.push(printerInfo);
+        console.log(`  ✅ Network yazıcılar listesine eklendi\n`);
       } else {
         usbPrinters.push(printerInfo);
+        console.log(`  ✅ USB yazıcılar listesine eklendi\n`);
       }
     });
+    
+    console.log('\n=== KATEGORİZASYON SONUÇLARI ===');
+    console.log(`📦 USB Yazıcılar: ${usbPrinters.length}`);
+    usbPrinters.forEach(p => console.log(`   - ${p.name}`));
+    console.log(`🌐 Network Yazıcılar: ${networkPrinters.length}`);
+    networkPrinters.forEach(p => console.log(`   - ${p.name}`));
+    console.log('================================\n');
     
     return {
       success: true,
       printers: {
         usb: usbPrinters,
         network: networkPrinters,
-        all: printers.map(p => ({
-          name: p.name,
-          displayName: p.displayName || p.name,
-          description: p.description || '',
-          status: p.status || 0,
-          isDefault: p.isDefault || false
+        all: printersData.map(p => ({
+          name: p.Name || '',
+          displayName: p.DisplayName || p.Name || '',
+          description: p.Description || '',
+          status: p.Status || 0,
+          isDefault: p.Default || false
         }))
       }
     };
   } catch (error) {
-    console.error('Yazıcı listeleme hatası:', error);
+    console.error('❌❌❌ YAZICI LİSTELEME HATASI ❌❌❌');
+    console.error('Hata mesajı:', error.message);
+    console.error('Hata detayı:', error.stack);
     return { success: false, error: error.message };
   }
 });
@@ -1264,6 +2073,493 @@ ipcMain.handle('remove-printer-assignment', (event, printerName, printerType) =>
   
   return { success: false, error: 'Atama bulunamadı' };
 });
+
+// Kasa yazıcısı ayarları
+ipcMain.handle('set-cashier-printer', (event, printerData) => {
+  if (!printerData) {
+    db.settings.cashierPrinter = null;
+  } else {
+    db.settings.cashierPrinter = {
+      printerName: printerData.printerName,
+      printerType: printerData.printerType
+    };
+  }
+  saveDatabase();
+  console.log('💰 Kasa yazıcısı ayarlandı:', db.settings.cashierPrinter);
+  return { success: true, cashierPrinter: db.settings.cashierPrinter };
+});
+
+ipcMain.handle('get-cashier-printer', () => {
+  return db.settings.cashierPrinter || null;
+});
+
+// Adisyon yazdırma handler
+ipcMain.handle('print-adisyon', async (event, adisyonData) => {
+  console.log('\n=== ADİSYON YAZDIRMA İŞLEMİ BAŞLADI ===');
+  console.log('📄 AdisyonData:', JSON.stringify(adisyonData, null, 2));
+  
+  try {
+    if (!mainWindow) {
+      console.error('❌ Ana pencere bulunamadı');
+      return { success: false, error: 'Ana pencere bulunamadı' };
+    }
+
+    const items = adisyonData.items || [];
+    console.log(`   Toplam ${items.length} ürün bulundu`);
+    
+    // Kasa yazıcısını kontrol et
+    console.log('\n💰 Kasa yazıcısı kontrol ediliyor...');
+    const cashierPrinter = db.settings.cashierPrinter;
+    
+    if (!cashierPrinter || !cashierPrinter.printerName) {
+      console.error('   ❌ Kasa yazıcısı ayarlanmamış!');
+      return { success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen ayarlardan kasa yazıcısı seçin.' };
+    }
+    
+    console.log(`   ✓ Kasa yazıcısı bulundu: "${cashierPrinter.printerName}" (${cashierPrinter.printerType})`);
+    
+    // Tüm ürünleri kasa yazıcısına yazdır
+    console.log(`\n🖨️ ADİSYON YAZDIRMA BAŞLIYOR`);
+    console.log(`   Yazıcı: "${cashierPrinter.printerName}"`);
+    console.log(`   Tip: ${cashierPrinter.printerType}`);
+    console.log(`   Toplam ürün sayısı: ${items.length}`);
+    
+    const result = await printAdisyonToPrinter(
+      cashierPrinter.printerName, 
+      cashierPrinter.printerType, 
+      items, // Tüm ürünler
+      adisyonData
+    );
+    
+    if (!result.success) {
+      console.error(`   ❌ Adisyon yazdırma başarısız: ${result.error}`);
+      return { success: false, error: result.error || 'Adisyon yazdırılamadı' };
+    } else {
+      console.log(`   ✅ Adisyon yazdırma başarılı`);
+    }
+    
+    console.log(`\n=== ADİSYON YAZDIRMA İŞLEMİ TAMAMLANDI ===`);
+    
+    return { success: true, error: null };
+  } catch (error) {
+    console.error('\n❌❌❌ ADİSYON YAZDIRMA HATASI ❌❌❌');
+    console.error('Hata mesajı:', error.message);
+    console.error('Hata detayı:', error.stack);
+    return { success: false, error: error.message };
+  }
+});
+
+// Adisyon yazdırma fonksiyonu
+async function printAdisyonToPrinter(printerName, printerType, items, adisyonData) {
+  let printWindow = null;
+  
+  try {
+    console.log(`   [printAdisyonToPrinter] Adisyon yazdırılıyor: "${printerName || 'Varsayılan'}"`);
+    
+    // Adisyon HTML içeriğini oluştur
+    const adisyonHTML = generateAdisyonHTML(items, adisyonData);
+
+    // Gizli bir pencere oluştur ve adisyon içeriğini yükle
+    printWindow = new BrowserWindow({
+      show: false,
+      width: 220, // 58mm ≈ 220px (72 DPI'da)
+      height: 3000,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+
+    let printResolve, printReject;
+    const printPromise = new Promise((resolve, reject) => {
+      printResolve = resolve;
+      printReject = reject;
+    });
+
+    // Yazıcı adını başlangıçta belirle (dışarıda kullanılabilmesi için)
+    let targetPrinterName = printerName;
+
+    // Hem did-finish-load hem de dom-ready event'lerini dinle
+    let printStarted = false;
+    const startPrint = () => {
+      if (printStarted) return;
+      printStarted = true;
+      
+      console.log('İçerik yüklendi, yazdırma başlatılıyor...');
+      
+      // İçeriğin tamamen render edilmesi için daha uzun bir bekleme
+      setTimeout(async () => {
+        console.log('Yazdırma komutu gönderiliyor...');
+        
+        // İçeriğin tamamen render edildiğinden emin olmak için scroll yüksekliğini kontrol et ve pencere boyutunu ayarla
+        try {
+          const scrollHeight = await printWindow.webContents.executeJavaScript(`
+            (function() {
+              document.body.style.minHeight = 'auto';
+              document.body.style.height = 'auto';
+              document.documentElement.style.height = 'auto';
+              const height = Math.max(
+                document.body.scrollHeight, 
+                document.body.offsetHeight,
+                document.documentElement.scrollHeight,
+                document.documentElement.offsetHeight
+              );
+              return height;
+            })();
+          `);
+          
+          console.log('Sayfa yüksekliği:', scrollHeight, 'px');
+          
+          // Pencere yüksekliğini içeriğe göre ayarla (en az 3000px, içerik daha uzunsa onu kullan)
+          const windowHeight = Math.max(3000, scrollHeight + 200);
+          printWindow.setSize(220, windowHeight);
+          console.log('Pencere yüksekliği ayarlandı:', windowHeight, 'px');
+          
+          // Ekstra bir kısa bekleme - pencere boyutu değişikliğinin uygulanması için
+          await new Promise(resolve => setTimeout(resolve, 200));
+        } catch (error) {
+          console.log('Yükseklik kontrolü hatası:', error);
+        }
+        
+        // Yazıcı adını belirle (güncelle)
+        targetPrinterName = printerName;
+        
+        if (targetPrinterName) {
+          console.log(`   🎯 Yazıcı adı belirtildi: "${targetPrinterName}"`);
+          console.log(`   🔍 Yazıcının sistemde mevcut olup olmadığı kontrol ediliyor...`);
+          
+          // Sistem yazıcılarını al
+          try {
+            const powershellCmd = `Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json`;
+            const result = execSync(`powershell -Command "${powershellCmd}"`, { 
+              encoding: 'utf-8',
+              timeout: 5000 
+            });
+            
+            const printersData = JSON.parse(result);
+            const printersArray = Array.isArray(printersData) ? printersData : [printersData];
+            const availablePrinters = printersArray.map(p => p.Name || '').filter(n => n);
+            
+            console.log(`   📋 Sistemde ${availablePrinters.length} yazıcı bulundu`);
+            
+            // Yazıcı adını kontrol et (tam eşleşme veya kısmi eşleşme)
+            const exactMatch = availablePrinters.find(p => p === targetPrinterName);
+            const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
+            
+            if (exactMatch) {
+              targetPrinterName = exactMatch;
+              console.log(`   ✅ Yazıcı bulundu (tam eşleşme): "${targetPrinterName}"`);
+            } else if (partialMatch) {
+              targetPrinterName = partialMatch;
+              console.log(`   ✅ Yazıcı bulundu (kısmi eşleşme): "${targetPrinterName}"`);
+            } else {
+              console.warn(`   ⚠️ Yazıcı "${targetPrinterName}" sistemde bulunamadı!`);
+              console.log(`   📋 Mevcut yazıcılar:`, availablePrinters);
+              console.log(`   → Varsayılan yazıcı kullanılacak`);
+              targetPrinterName = null; // Varsayılan yazıcıya yazdır
+            }
+          } catch (error) {
+            console.error(`   ❌ Yazıcı kontrolü hatası:`, error.message);
+            console.log(`   → Belirtilen yazıcı adı kullanılacak: "${targetPrinterName}"`);
+          }
+        } else {
+          console.log(`   ℹ️ Yazıcı adı belirtilmedi, varsayılan yazıcı kullanılacak`);
+        }
+        
+        // Yazdırma seçenekleri
+        const printOptions = {
+          silent: true, // Dialog gösterme
+          printBackground: true,
+          margins: {
+            marginType: 'none' // Kenar boşluğu yok
+          },
+          landscape: false, // Dikey yönlendirme
+          scaleFactor: 100,
+          pagesPerSheet: 1,
+          collate: false,
+          color: false, // Siyah-beyaz (termal yazıcılar için)
+          copies: 1,
+          duplex: 'none'
+        };
+        
+        // Yazıcı adı belirtilmişse ekle
+        if (targetPrinterName) {
+          printOptions.deviceName = targetPrinterName;
+          console.log(`   📤 Yazdırma seçenekleri:`);
+          console.log(`      - Yazıcı: "${targetPrinterName}"`);
+          console.log(`      - Tip: ${printerType}`);
+        } else {
+          console.log(`   📤 Varsayılan yazıcıya yazdırılacak`);
+        }
+
+        console.log(`   🖨️ Yazdırma komutu gönderiliyor...`);
+        printWindow.webContents.print(printOptions, (success, errorType) => {
+          console.log(`\n   📥 Yazdırma callback alındı`);
+          console.log(`      - Başarılı: ${success}`);
+          console.log(`      - Yazıcı: "${targetPrinterName || 'Varsayılan'}"`);
+          console.log(`      - Tip: ${printerType}`);
+          
+          if (!success) {
+            console.error(`      ❌ Adisyon yazdırma başarısız!`);
+            console.error(`      Hata tipi: ${errorType}`);
+            printReject(new Error(errorType || 'Adisyon yazdırma başarısız'));
+          } else {
+            console.log(`      ✅ Adisyon yazdırma başarılı!`);
+            console.log(`      🖨️ "${targetPrinterName || 'Varsayılan yazıcı'}" yazıcısına yazdırıldı`);
+            printResolve(true);
+          }
+          
+          // Yazdırma işlemi tamamlandıktan sonra pencereyi kapat
+          setTimeout(() => {
+            if (printWindow && !printWindow.isDestroyed()) {
+              printWindow.close();
+              printWindow = null;
+            }
+          }, 1000);
+        });
+      }, 2000); // 2 saniye bekle - içeriğin tamamen render edilmesi için
+    };
+
+    printWindow.webContents.once('did-finish-load', () => {
+      console.log('did-finish-load event tetiklendi');
+      startPrint();
+    });
+
+    printWindow.webContents.once('dom-ready', () => {
+      console.log('dom-ready event tetiklendi');
+      startPrint();
+    });
+
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(adisyonHTML)}`);
+    console.log('HTML URL yüklendi');
+
+    // Fallback: Eğer 3 saniye içinde hiçbir event tetiklenmezse yine de yazdır
+    setTimeout(() => {
+      console.log('Fallback timeout: Yazdırma zorla başlatılıyor...');
+      startPrint();
+    }, 3000);
+
+    // Yazdırma işleminin tamamlanmasını bekle (max 10 saniye)
+    await Promise.race([
+      printPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Adisyon yazdırma timeout')), 10000))
+    ]);
+
+    console.log(`   [printAdisyonToPrinter] Adisyon yazdırma işlemi tamamlandı`);
+    return { success: true, printerName: targetPrinterName || 'Varsayılan' };
+  } catch (error) {
+    console.error(`   [printAdisyonToPrinter] Hata:`, error.message);
+    console.error(`   Hata detayı:`, error.stack);
+    
+    // Hata durumunda pencereyi temizle
+    if (printWindow && !printWindow.isDestroyed()) {
+      printWindow.close();
+    }
+    
+    return { success: false, error: error.message, printerName: printerName || 'Varsayılan' };
+  }
+}
+
+// Modern ve profesyonel adisyon HTML formatı
+function generateAdisyonHTML(items, adisyonData) {
+  const itemsHTML = items.map(item => {
+    const isGift = item.isGift || false;
+    
+    if (isGift) {
+      return `
+      <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #16a34a; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+            <span style="font-weight: 900; font-size: 13px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
+            <span style="font-size: 8px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 3px 6px; border-radius: 12px; font-weight: 900; box-shadow: 0 2px 4px rgba(22,163,74,0.3);">İKRAM</span>
+          </div>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 11px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+        </div>
+        ${item.extraNote ? `
+        <div style="margin-top: 6px; padding: 6px; background: white; border-radius: 4px; border-left: 3px solid #fbbf24;">
+          <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+        </div>
+        ` : ''}
+      </div>
+    `;
+    }
+    
+    return `
+      <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 4px solid #3b82f6; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+          <span style="font-weight: 900; font-size: 13px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <span style="font-size: 11px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+        </div>
+        ${item.extraNote ? `
+        <div style="margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;">
+          <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+        </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&display=swap" rel="stylesheet">
+      <style>
+        @media print {
+          @page {
+            size: 58mm auto;
+            margin: 0;
+            min-height: 100%;
+          }
+          body {
+            margin: 0;
+            padding: 12px 12px 20px 12px;
+            height: auto;
+            min-height: 100%;
+            color: #000 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          * {
+            color: #000 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+        }
+        * {
+          box-sizing: border-box;
+          font-family: 'Montserrat', sans-serif;
+        }
+        body {
+          font-family: 'Montserrat', sans-serif;
+          width: 58mm;
+          max-width: 58mm;
+          padding: 12px 12px 25px 12px;
+          margin: 0;
+          font-size: 12px;
+          min-height: 100%;
+          height: auto;
+          overflow: visible;
+          color: #000;
+          background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+          -webkit-font-smoothing: antialiased;
+          -moz-osx-font-smoothing: grayscale;
+          text-rendering: optimizeLegibility;
+        }
+        html {
+          height: auto;
+          min-height: 100%;
+        }
+        .header {
+          text-align: center;
+          margin-bottom: 16px;
+          padding-bottom: 16px;
+          border-bottom: 3px solid #3b82f6;
+          background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
+        .header h2 {
+          font-size: 20px;
+          font-weight: 900;
+          margin: 8px 0 4px 0;
+          font-family: 'Montserrat', sans-serif;
+          color: #1e293b;
+          text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header p {
+          font-size: 11px;
+          font-weight: 700;
+          margin: 0;
+          color: #64748b;
+          font-family: 'Montserrat', sans-serif;
+        }
+        .info {
+          background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+          border-radius: 12px;
+          padding: 12px;
+          margin: 12px 0;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .info div {
+          display: flex;
+          justify-content: space-between;
+          margin: 4px 0;
+          font-size: 10px;
+          font-weight: 700;
+          color: #475569;
+          font-family: 'Montserrat', sans-serif;
+        }
+        .info div span:last-child {
+          color: #1e293b;
+          font-weight: 900;
+        }
+        .items {
+          margin: 16px 0;
+        }
+        .footer {
+          text-align: center;
+          margin-top: 24px;
+          padding-top: 16px;
+          border-top: 3px solid #e2e8f0;
+          font-size: 11px;
+          font-weight: 700;
+          color: #64748b;
+          font-family: 'Montserrat', sans-serif;
+        }
+        .footer p {
+          margin: 4px 0;
+          font-weight: 900;
+          color: #1e293b;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h2>MAKARA</h2>
+        <p>ADİSYON</p>
+      </div>
+      
+      <div class="info">
+        ${adisyonData.tableName ? `
+        <div>
+          <span>Masa:</span>
+          <span>${adisyonData.tableName}</span>
+        </div>
+        ` : ''}
+        <div>
+          <span>Tarih:</span>
+          <span>${adisyonData.sale_date || new Date().toLocaleDateString('tr-TR')}</span>
+        </div>
+        <div>
+          <span>Saat:</span>
+          <span>${adisyonData.sale_time || new Date().toLocaleTimeString('tr-TR')}</span>
+        </div>
+      </div>
+
+      <div class="items">
+        ${itemsHTML}
+      </div>
+      
+      ${adisyonData.orderNote ? `
+      <div style="margin: 16px 0; padding: 12px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 12px; border-left: 4px solid #f59e0b; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <p style="font-size: 10px; font-weight: 900; color: #92400e; margin: 0 0 6px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
+        <p style="font-size: 10px; font-weight: 700; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif;">${adisyonData.orderNote}</p>
+      </div>
+      ` : ''}
+
+    </body>
+    </html>
+  `;
+}
 
 ipcMain.handle('quit-app', () => {
   saveDatabase();

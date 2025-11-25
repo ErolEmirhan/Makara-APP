@@ -10,6 +10,7 @@ import SplitPaymentModal from './components/SplitPaymentModal';
 import ReceiptModal from './components/ReceiptModal';
 import RoleSplash from './components/RoleSplash';
 import SaleSuccessToast from './components/SaleSuccessToast';
+import PrintToast from './components/PrintToast';
 import SplashScreen from './components/SplashScreen';
 import ExitSplash from './components/ExitSplash';
 import UpdateModal from './components/UpdateModal';
@@ -37,6 +38,7 @@ function App() {
   const [userType, setUserType] = useState('Personel'); // 'Admin' or 'Personel'
   const [activeRoleSplash, setActiveRoleSplash] = useState(null);
   const [saleSuccessInfo, setSaleSuccessInfo] = useState(null);
+  const [printToast, setPrintToast] = useState(null); // { status: 'printing' | 'success' | 'error', message: string }
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateDownloadProgress, setUpdateDownloadProgress] = useState(null);
   const [tableRefreshTrigger, setTableRefreshTrigger] = useState(0);
@@ -147,6 +149,14 @@ function App() {
     setCart(prevCart => prevCart.filter(item => item.id !== productId));
   };
 
+  const toggleGift = (productId) => {
+    setCart(prevCart =>
+      prevCart.map(item =>
+        item.id === productId ? { ...item, isGift: !item.isGift } : item
+      )
+    );
+  };
+
   const clearCart = () => {
     setCart([]);
     setOrderNote('');
@@ -162,6 +172,50 @@ function App() {
     }
   };
 
+  const requestAdisyon = async () => {
+    if (cart.length === 0 || !selectedTable) return;
+    
+    if (!window.electronAPI || !window.electronAPI.printAdisyon) {
+      console.error('printAdisyon API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
+      alert('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+      return;
+    }
+    
+    const adisyonData = {
+      items: cart,
+      tableName: selectedTable.name,
+      tableType: selectedTable.type,
+      orderNote: orderNote || null,
+      sale_date: new Date().toLocaleDateString('tr-TR'),
+      sale_time: new Date().toLocaleTimeString('tr-TR')
+    };
+
+    try {
+      // Adisyon yazdırma toast'ını göster
+      setPrintToast({ status: 'printing', message: 'Adisyon yazdırılıyor...' });
+      
+      const result = await window.electronAPI.printAdisyon(adisyonData);
+      
+      if (result.success) {
+        setPrintToast({ 
+          status: 'success', 
+          message: 'Adisyon başarıyla yazdırıldı' 
+        });
+      } else {
+        setPrintToast({ 
+          status: 'error', 
+          message: result.error || 'Adisyon yazdırılamadı' 
+        });
+      }
+    } catch (error) {
+      console.error('Adisyon yazdırılırken hata:', error);
+      setPrintToast({ 
+        status: 'error', 
+        message: 'Adisyon yazdırılamadı: ' + error.message 
+      });
+    }
+  };
+
   const completeTableOrder = async () => {
     if (cart.length === 0 || !selectedTable) return;
     
@@ -171,7 +225,11 @@ function App() {
       return;
     }
     
-    const totalAmount = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const totalAmount = cart.reduce((sum, item) => {
+      // İkram edilen ürünleri toplamdan çıkar
+      if (item.isGift) return sum;
+      return sum + (item.price * item.quantity);
+    }, 0);
     
     const orderData = {
       items: cart,
@@ -186,6 +244,23 @@ function App() {
       const result = await window.electronAPI.createTableOrder(orderData);
       
       if (result.success) {
+        // Adisyon yazdır (masaya kaydet'te de)
+        const adisyonData = {
+          items: cart,
+          tableName: selectedTable.name,
+          tableType: selectedTable.type,
+          orderNote: orderNote || null,
+          sale_date: new Date().toLocaleDateString('tr-TR'),
+          sale_time: new Date().toLocaleTimeString('tr-TR')
+        };
+        
+        if (window.electronAPI && window.electronAPI.printAdisyon) {
+          // Adisyon yazdırmayı arka planda yap, hata olsa bile devam et
+          window.electronAPI.printAdisyon(adisyonData).catch(err => {
+            console.error('Adisyon yazdırılırken hata:', err);
+          });
+        }
+        
         // Masa siparişi fişi için receiptData oluştur
         const tableReceiptData = {
           order_id: result.orderId,
@@ -231,7 +306,11 @@ function App() {
       return;
     }
 
-    const totalAmount = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const totalAmount = cart.reduce((sum, item) => {
+      // İkram edilen ürünleri toplamdan çıkar
+      if (item.isGift) return sum;
+      return sum + (item.price * item.quantity);
+    }, 0);
     
     const saleData = {
       items: cart,
@@ -263,7 +342,11 @@ function App() {
 
   const completeSplitPayment = async (payments) => {
     // Parçalı ödeme için tek bir satış oluştur (tüm ürünler bir arada)
-    const totalAmount = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const totalAmount = cart.reduce((sum, item) => {
+      // İkram edilen ürünleri toplamdan çıkar
+      if (item.isGift) return sum;
+      return sum + (item.price * item.quantity);
+    }, 0);
     
     // Ödeme yöntemlerini birleştir (örn: "Nakit + Kredi Kartı")
     const paymentMethods = [...new Set(payments.map(p => p.method))];
@@ -304,7 +387,11 @@ function App() {
   };
 
   const getTotalAmount = () => {
-    return cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    return cart.reduce((sum, item) => {
+      // İkram edilen ürünleri toplamdan çıkar
+      if (item.isGift) return sum;
+      return sum + (item.price * item.quantity);
+    }, 0);
   };
 
   const getTotalItems = () => {
@@ -407,10 +494,12 @@ function App() {
               onClearCart={clearCart}
               onCheckout={handlePayment}
               onSaveToTable={completeTableOrder}
+              onRequestAdisyon={requestAdisyon}
               totalAmount={getTotalAmount()}
               selectedTable={selectedTable}
               orderNote={orderNote}
               onOrderNoteChange={setOrderNote}
+              onToggleGift={toggleGift}
             />
           </div>
         </div>
@@ -446,31 +535,37 @@ function App() {
             setReceiptData(null);
           }}
           onPrint={async () => {
-            console.log('Yazdır butonuna tıklandı');
-            console.log('receiptData:', receiptData);
-            console.log('window.electronAPI:', window.electronAPI);
+            // Modal'ı hemen kapat
+            setShowReceiptModal(false);
+            setReceiptData(null);
+            
+            // Yazdırma toast'ını göster
+            setPrintToast({ status: 'printing', message: 'Fiş yazdırılıyor...' });
             
             if (window.electronAPI && window.electronAPI.printReceipt) {
-              console.log('printReceipt fonksiyonu bulundu, yazdırma başlatılıyor...');
               try {
                 // Yazdırma işlemini başlat (arka planda ama sonucu bekle)
-                const result = await window.electronAPI.printReceipt(receiptData);
-                console.log('Yazdırma sonucu:', result);
+                await window.electronAPI.printReceipt(receiptData);
                 
-                if (!result.success) {
-                  console.error('Yazdırma başarısız:', result.error);
-                  alert('Yazdırma hatası: ' + (result.error || 'Bilinmeyen hata'));
-                } else {
-                  console.log('✓ Yazdırma başarıyla tamamlandı');
-                }
+                // Yazdırma işlemi tamamlandı - başarılı say
+                setPrintToast({ 
+                  status: 'success', 
+                  message: 'Yazdırma Başarılı' 
+                });
               } catch (err) {
-                console.error('Yazdırma hatası:', err);
-                alert('Yazdırma hatası: ' + (err.message || err));
+                // Sadece gerçek hata durumunda error göster
+                setPrintToast({ 
+                  status: 'error', 
+                  message: err.message || 'Yazdırma hatası oluştu' 
+                });
               }
             } else {
-              console.warn('electronAPI veya printReceipt bulunamadı, fallback kullanılıyor');
               // Fallback: window.print()
               window.print();
+              setPrintToast({ 
+                status: 'success', 
+                message: 'Yazdırma Başarılı' 
+              });
             }
           }}
         />
@@ -480,6 +575,12 @@ function App() {
       <SaleSuccessToast
         info={saleSuccessInfo}
         onClose={() => setSaleSuccessInfo(null)}
+      />
+      <PrintToast
+        status={printToast?.status}
+        message={printToast?.message}
+        onClose={() => setPrintToast(null)}
+        autoHideDuration={printToast?.status === 'printing' ? null : 2500}
       />
       {updateInfo && (
         <UpdateModal

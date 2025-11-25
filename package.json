@@ -1,6 +1,6 @@
 {
   "name": "makara-pos",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "MAKARA - Modern POS Uygulaması",
   "main": "electron/main.js",
   "scripts": {
@@ -67,11 +67,6 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "MAKARA POS",
-      "installerIcon": "build/installer-icon.ico",
-      "uninstallerIcon": "build/installer-icon.ico",
-      "installerHeaderIcon": "build/installer-icon.ico",
-      "installerSidebar": "build/installer-welcome.bmp",
-      "installerHeader": "build/installer-header.bmp",
       "warningsAsErrors": false,
       "displayLanguageSelector": true,
       "multiLanguageInstaller": true,

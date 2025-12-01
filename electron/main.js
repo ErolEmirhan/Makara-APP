@@ -360,46 +360,106 @@ ipcMain.handle('create-table-order', (event, orderData) => {
   const orderDate = now.toLocaleDateString('tr-TR');
   const orderTime = now.toLocaleTimeString('tr-TR');
 
-  // Yeni sipariş ID'si
-  const orderId = db.tableOrders.length > 0 
-    ? Math.max(...db.tableOrders.map(o => o.id)) + 1 
-    : 1;
+  // Mevcut sipariş var mı kontrol et
+  const existingOrder = (db.tableOrders || []).find(
+    o => o.table_id === tableId && o.status === 'pending'
+  );
 
-  // Sipariş ekle
-  db.tableOrders.push({
-    id: orderId,
-    table_id: tableId,
-    table_name: tableName,
-    table_type: tableType,
-    total_amount: totalAmount,
-    order_date: orderDate,
-    order_time: orderTime,
-    status: 'pending', // 'pending', 'completed', 'cancelled'
-    order_note: orderNote || null
-  });
+  let orderId;
+  let isNewOrder = false;
 
-  // Sipariş itemlarını ekle
-  items.forEach(item => {
-    const itemId = db.tableOrderItems.length > 0 
-      ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 
-      : 1;
-      
-    db.tableOrderItems.push({
-      id: itemId,
-      order_id: orderId,
-      product_id: item.id,
-      product_name: item.name,
-      quantity: item.quantity,
-      price: item.price,
-      isGift: item.isGift || false,
-      staff_id: null, // Electron'dan eklenen ürünler için staff bilgisi yok
-      staff_name: null,
-      added_date: orderDate,
-      added_time: orderTime
+  if (existingOrder) {
+    // Mevcut siparişe ekle
+    orderId = existingOrder.id;
+    items.forEach(newItem => {
+      const existingItem = (db.tableOrderItems || []).find(
+        oi => oi.order_id === orderId && 
+              oi.product_id === newItem.id && 
+              oi.isGift === (newItem.isGift || false)
+      );
+      if (existingItem) {
+        existingItem.quantity += newItem.quantity;
+      } else {
+        const itemId = (db.tableOrderItems || []).length > 0 
+          ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 
+          : 1;
+        if (!db.tableOrderItems) db.tableOrderItems = [];
+        db.tableOrderItems.push({
+          id: itemId,
+          order_id: orderId,
+          product_id: newItem.id,
+          product_name: newItem.name,
+          quantity: newItem.quantity,
+          price: newItem.price,
+          isGift: newItem.isGift || false,
+          staff_id: null, // Electron'dan eklenen ürünler için staff bilgisi yok
+          staff_name: null,
+          added_date: orderDate,
+          added_time: orderTime
+        });
+      }
     });
-  });
+    // Toplam tutarı güncelle
+    const existingTotal = existingOrder.total_amount || 0;
+    existingOrder.total_amount = existingTotal + totalAmount;
+    if (orderNote) {
+      existingOrder.order_note = orderNote;
+    }
+  } else {
+    // Yeni sipariş oluştur
+    isNewOrder = true;
+    orderId = db.tableOrders.length > 0 
+      ? Math.max(...db.tableOrders.map(o => o.id)) + 1 
+      : 1;
+
+    db.tableOrders.push({
+      id: orderId,
+      table_id: tableId,
+      table_name: tableName,
+      table_type: tableType,
+      total_amount: totalAmount,
+      order_date: orderDate,
+      order_time: orderTime,
+      status: 'pending',
+      order_note: orderNote || null
+    });
+
+    // Sipariş itemlarını ekle
+    items.forEach(item => {
+      const itemId = db.tableOrderItems.length > 0 
+        ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 
+        : 1;
+        
+      if (!db.tableOrderItems) db.tableOrderItems = [];
+      db.tableOrderItems.push({
+        id: itemId,
+        order_id: orderId,
+        product_id: item.id,
+        product_name: item.name,
+        quantity: item.quantity,
+        price: item.price,
+        isGift: item.isGift || false,
+        staff_id: null,
+        staff_name: null,
+        added_date: orderDate,
+        added_time: orderTime
+      });
+    });
+  }
 
   saveDatabase();
+  
+  // Electron renderer process'e güncelleme gönder
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('new-order-created', { 
+      orderId, 
+      tableId,
+      tableName, 
+      tableType,
+      totalAmount: existingOrder ? existingOrder.total_amount : totalAmount,
+      isNewOrder
+    });
+  }
   
   // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
   if (io) {
@@ -409,7 +469,7 @@ ipcMain.handle('create-table-order', (event, orderData) => {
     });
   }
   
-  return { success: true, orderId };
+  return { success: true, orderId, isNewOrder };
 });
 
 ipcMain.handle('get-table-orders', (event, tableId) => {
@@ -929,13 +989,13 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
     console.log('\n🖨️ Yazıcı atamaları kontrol ediliyor...');
     console.log(`   Toplam ${db.printerAssignments.length} yazıcı ataması var`);
     
-    const printJobs = []; // { printerName, printerType, categoryId, items, receiptData, isCashierReceipt, isProductionReceipt }
+    // 2. Kategorileri yazıcılara göre grupla (aynı yazıcıya atanmış kategorileri birleştir)
+    const printerGroupsMap = new Map(); // printerKey -> { printerName, printerType, categories: [{ categoryId, items }] }
     
     categoryItemsMap.forEach((categoryItems, categoryId) => {
       console.log(`\n   Kategori ID ${categoryId} için yazıcı aranıyor...`);
       
       // Bu kategori için atanmış yazıcıyı bul
-      // categoryId'yi number'a çevir (karşılaştırma için)
       const categoryIdNum = typeof categoryId === 'string' && categoryId !== 'no-category' ? parseInt(categoryId) : categoryId;
       
       const assignment = db.printerAssignments.find(a => {
@@ -943,62 +1003,76 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
         return assignmentCategoryId === categoryIdNum;
       });
       
-      // Bu kategori için toplam tutarı hesapla (sadece bu kategorinin ürünleri, ikram edilenler hariç)
-      const categoryTotalAmount = categoryItems.reduce((sum, item) => {
-        // İkram edilen ürünleri toplamdan çıkar
+      if (!assignment) {
+        console.warn(`   ⚠️ Kategori ID ${categoryId} için yazıcı ataması bulunamadı, atlanıyor`);
+        return; // Kategori ataması yoksa atla
+      }
+      
+      console.log(`   ✓ Yazıcı ataması bulundu: "${assignment.printerName}"`);
+      
+      // Yazıcı key'i oluştur (aynı yazıcıyı gruplamak için)
+      const printerKey = `${assignment.printerName}::${assignment.printerType}`;
+      
+      if (!printerGroupsMap.has(printerKey)) {
+        printerGroupsMap.set(printerKey, {
+          printerName: assignment.printerName,
+          printerType: assignment.printerType,
+          categories: []
+        });
+      }
+      
+      // Bu kategoriyi yazıcı grubuna ekle
+      printerGroupsMap.get(printerKey).categories.push({
+        categoryId,
+        items: categoryItems
+      });
+    });
+    
+    console.log(`\n🖨️ Yazıcı grupları oluşturuldu: ${printerGroupsMap.size} yazıcı`);
+    printerGroupsMap.forEach((group, key) => {
+      console.log(`   - "${group.printerName}": ${group.categories.length} kategori`);
+    });
+    
+    // 3. Her yazıcı için tek bir yazdırma işi oluştur (kategoriler birleştirilmiş)
+    const printJobs = [];
+    
+    printerGroupsMap.forEach((group, printerKey) => {
+      // Tüm kategorilerin ürünlerini birleştir
+      const allItems = [];
+      group.categories.forEach(cat => {
+        allItems.push(...cat.items);
+      });
+      
+      // Toplam tutarı hesapla (ikram edilenler hariç)
+      const totalAmount = allItems.reduce((sum, item) => {
         if (item.isGift) return sum;
         return sum + (item.price * item.quantity);
       }, 0);
       
-      if (assignment) {
-        console.log(`   ✓ Yazıcı ataması bulundu:`);
-        console.log(`     - Yazıcı: "${assignment.printerName}"`);
-        console.log(`     - Tip: ${assignment.printerType}`);
-        console.log(`     - Kategori ID: ${assignment.category_id}`);
-        console.log(`     - Kategori Toplamı: ₺${categoryTotalAmount.toFixed(2)}`);
-        
-        // Bu kategori için yazdırma işi oluştur - sadece bu kategorinin ürünleri ve toplamı
-        const categoryReceiptData = {
-          ...receiptData,
-          items: categoryItems, // Sadece bu kategorinin ürünleri
-          totalAmount: categoryTotalAmount // Sadece bu kategorinin toplamı
-        };
-        
-        printJobs.push({
-          printerName: assignment.printerName,
-          printerType: assignment.printerType,
-          categoryId: categoryId,
-          items: categoryItems,
-          receiptData: categoryReceiptData,
-          isCashierReceipt: false,
-          isProductionReceipt: true
-        });
-      } else {
-        console.warn(`   ⚠️ Kategori ID ${categoryId} için yazıcı ataması bulunamadı`);
-        console.log(`   → Varsayılan yazıcı kullanılacak`);
-        console.log(`     - Kategori Toplamı: ₺${categoryTotalAmount.toFixed(2)}`);
-        
-        // Varsayılan yazıcıya yazdır - sadece bu kategorinin ürünleri ve toplamı
-        const categoryReceiptData = {
-          ...receiptData,
-          items: categoryItems, // Sadece bu kategorinin ürünleri
-          totalAmount: categoryTotalAmount // Sadece bu kategorinin toplamı
-        };
-        
-        printJobs.push({
-          printerName: null, // null = varsayılan yazıcı
-          printerType: 'default',
-          categoryId: categoryId,
-          items: categoryItems,
-          receiptData: categoryReceiptData,
-          isCashierReceipt: false,
-          isProductionReceipt: true
-        });
-      }
+      const combinedReceiptData = {
+        ...receiptData,
+        items: allItems, // Tüm kategorilerin ürünleri birleştirilmiş
+        totalAmount: totalAmount
+      };
+      
+      printJobs.push({
+        printerName: group.printerName,
+        printerType: group.printerType,
+        categoryId: 'combined', // Birleştirilmiş kategoriler
+        items: allItems,
+        receiptData: combinedReceiptData,
+        isCashierReceipt: false,
+        isProductionReceipt: true
+      });
+      
+      console.log(`   ✓ "${group.printerName}" için birleşik yazdırma işi oluşturuldu: ${allItems.length} ürün, ${group.categories.length} kategori`);
     });
     
-    // Kasa yazıcısına tam fiş ekle (eğer ayarlanmışsa)
-    if (cashierPrinter && cashierPrinter.printerName) {
+    // Kasa yazıcısına tam fiş ekle (sadece masa siparişi değilse - hızlı satış için)
+    // Masa siparişleri için kasa yazıcısına yazdırma yapma (sadece kategori bazlı yazıcılara yazdır)
+    const isTableOrder = receiptData.tableName || receiptData.order_id;
+    
+    if (!isTableOrder && cashierPrinter && cashierPrinter.printerName) {
       // Tüm ürünlerin toplam tutarını hesapla (ikram edilenler hariç)
       const totalAmount = items.reduce((sum, item) => {
         if (item.isGift) return sum;
@@ -1024,6 +1098,8 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
       
       console.log(`\n💰 Kasa yazıcısı yazdırma işi eklendi: "${cashierPrinter.printerName}"`);
       console.log(`   Toplam ${items.length} ürün, Toplam tutar: ₺${totalAmount.toFixed(2)}`);
+    } else if (isTableOrder) {
+      console.log(`\n📋 Masa siparişi tespit edildi - Kasa yazıcısına yazdırma atlanıyor (sadece kategori bazlı yazıcılara yazdırılacak)`);
     }
     
     // Kategori yazıcıları için üretim fişi olarak işaretle
@@ -2116,7 +2192,7 @@ ipcMain.handle('get-cashier-printer', () => {
   return db.settings.cashierPrinter || null;
 });
 
-// Adisyon yazdırma handler
+// Adisyon yazdırma handler - Kategori bazlı yazdırma yapar
 ipcMain.handle('print-adisyon', async (event, adisyonData) => {
   console.log('\n=== ADİSYON YAZDIRMA İŞLEMİ BAŞLADI ===');
   console.log('📄 AdisyonData:', JSON.stringify(adisyonData, null, 2));
@@ -2130,36 +2206,8 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
     const items = adisyonData.items || [];
     console.log(`   Toplam ${items.length} ürün bulundu`);
     
-    // Kasa yazıcısını kontrol et
-    console.log('\n💰 Kasa yazıcısı kontrol ediliyor...');
-    const cashierPrinter = db.settings.cashierPrinter;
-    
-    if (!cashierPrinter || !cashierPrinter.printerName) {
-      console.error('   ❌ Kasa yazıcısı ayarlanmamış!');
-      return { success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen ayarlardan kasa yazıcısı seçin.' };
-    }
-    
-    console.log(`   ✓ Kasa yazıcısı bulundu: "${cashierPrinter.printerName}" (${cashierPrinter.printerType})`);
-    
-    // Tüm ürünleri kasa yazıcısına yazdır
-    console.log(`\n🖨️ ADİSYON YAZDIRMA BAŞLIYOR`);
-    console.log(`   Yazıcı: "${cashierPrinter.printerName}"`);
-    console.log(`   Tip: ${cashierPrinter.printerType}`);
-    console.log(`   Toplam ürün sayısı: ${items.length}`);
-    
-    const result = await printAdisyonToPrinter(
-      cashierPrinter.printerName, 
-      cashierPrinter.printerType, 
-      items, // Tüm ürünler
-      adisyonData
-    );
-    
-    if (!result.success) {
-      console.error(`   ❌ Adisyon yazdırma başarısız: ${result.error}`);
-      return { success: false, error: result.error || 'Adisyon yazdırılamadı' };
-    } else {
-      console.log(`   ✅ Adisyon yazdırma başarılı`);
-    }
+    // Kategori bazlı adisyon yazdırma
+    await printAdisyonByCategory(items, adisyonData);
     
     console.log(`\n=== ADİSYON YAZDIRMA İŞLEMİ TAMAMLANDI ===`);
     
@@ -2390,21 +2438,32 @@ async function printAdisyonByCategory(items, adisyonData) {
   
   try {
     // 1. Ürünleri kategorilerine göre grupla
-    const categoryItemsMap = new Map();
+    const categoryItemsMap = new Map(); // categoryId -> items[]
+    const categoryInfoMap = new Map(); // categoryId -> { name, id }
     
     for (const item of items) {
       // Ürünün kategori ID'sini bul
       const product = db.products.find(p => p.id === item.id);
       if (product && product.category_id) {
         const categoryId = product.category_id;
+        const category = db.categories.find(c => c.id === categoryId);
+        
         if (!categoryItemsMap.has(categoryId)) {
           categoryItemsMap.set(categoryId, []);
+          categoryInfoMap.set(categoryId, {
+            id: categoryId,
+            name: category?.name || `Kategori ${categoryId}`
+          });
         }
         categoryItemsMap.get(categoryId).push(item);
       } else {
         // Kategori bulunamazsa, 'no-category' key kullan
         if (!categoryItemsMap.has('no-category')) {
           categoryItemsMap.set('no-category', []);
+          categoryInfoMap.set('no-category', {
+            id: 'no-category',
+            name: 'Diğer'
+          });
         }
         categoryItemsMap.get('no-category').push(item);
       }
@@ -2412,11 +2471,12 @@ async function printAdisyonByCategory(items, adisyonData) {
     
     console.log(`\n📋 Kategori grupları oluşturuldu: ${categoryItemsMap.size} kategori`);
     
-    // 2. Her kategori için atanmış yazıcıları bul ve yazdır
-    const printJobs = [];
+    // 2. Kategorileri yazıcılara göre grupla (aynı yazıcıya atanmış kategorileri birleştir)
+    const printerGroupsMap = new Map(); // printerKey -> { printerName, printerType, categories: [{ categoryId, categoryName, items }] }
     
     categoryItemsMap.forEach((categoryItems, categoryId) => {
       const categoryIdNum = typeof categoryId === 'string' && categoryId !== 'no-category' ? parseInt(categoryId) : categoryId;
+      const categoryInfo = categoryInfoMap.get(categoryId);
       
       // Bu kategori için atanmış yazıcıyı bul
       const assignment = db.printerAssignments.find(a => {
@@ -2424,47 +2484,80 @@ async function printAdisyonByCategory(items, adisyonData) {
         return assignmentCategoryId === categoryIdNum;
       });
       
+      let printerName, printerType;
+      
       if (assignment) {
-        console.log(`   ✓ Kategori ID ${categoryId} için yazıcı bulundu: "${assignment.printerName}"`);
-        printJobs.push({
-          printerName: assignment.printerName,
-          printerType: assignment.printerType,
-          categoryId: categoryId,
-          items: categoryItems
-        });
+        printerName = assignment.printerName;
+        printerType = assignment.printerType;
+        console.log(`   ✓ Kategori "${categoryInfo.name}" (ID: ${categoryId}) için yazıcı bulundu: "${printerName}"`);
       } else {
-        // Kasa yazıcısına yazdır (varsayılan)
-        const cashierPrinter = db.settings.cashierPrinter;
-        if (cashierPrinter && cashierPrinter.printerName) {
-          console.log(`   ⚠️ Kategori ID ${categoryId} için yazıcı ataması yok, kasa yazıcısına yazdırılacak`);
-          printJobs.push({
-            printerName: cashierPrinter.printerName,
-            printerType: cashierPrinter.printerType,
-            categoryId: categoryId,
-            items: categoryItems
-          });
-        }
+        // Kategori ataması yoksa atla (kasa yazıcısına adisyon yazdırma)
+        console.warn(`   ⚠️ Kategori "${categoryInfo.name}" (ID: ${categoryId}) için yazıcı ataması yok, atlanıyor`);
+        return; // Kasa yazıcısına adisyon yazdırma
       }
+      
+      // Yazıcı key'i oluştur (aynı yazıcıyı gruplamak için)
+      const printerKey = `${printerName}::${printerType}`;
+      
+      if (!printerGroupsMap.has(printerKey)) {
+        printerGroupsMap.set(printerKey, {
+          printerName,
+          printerType,
+          categories: []
+        });
+      }
+      
+      // Bu kategoriyi yazıcı grubuna ekle
+      printerGroupsMap.get(printerKey).categories.push({
+        categoryId,
+        categoryName: categoryInfo.name,
+        items: categoryItems
+      });
     });
     
-    // 3. Her yazdırma işini gerçekleştir
+    console.log(`\n🖨️ Yazıcı grupları oluşturuldu: ${printerGroupsMap.size} yazıcı`);
+    printerGroupsMap.forEach((group, key) => {
+      console.log(`   - "${group.printerName}": ${group.categories.length} kategori`);
+    });
+    
+    // 3. Her yazıcı için tek bir adisyon yazdır (kategoriler başlıklarla ayrılmış)
+    const printJobs = Array.from(printerGroupsMap.values());
+    
     for (let i = 0; i < printJobs.length; i++) {
       const job = printJobs[i];
-      const categoryAdisyonData = {
+      
+      // Tüm kategorilerin ürünlerini birleştir (kategori bilgisiyle)
+      const allItemsWithCategory = [];
+      job.categories.forEach(cat => {
+        cat.items.forEach(item => {
+          allItemsWithCategory.push({
+            ...item,
+            _categoryId: cat.categoryId,
+            _categoryName: cat.categoryName
+          });
+        });
+      });
+      
+      const printerAdisyonData = {
         ...adisyonData,
-        items: job.items
+        items: allItemsWithCategory,
+        categories: job.categories.map(cat => ({
+          categoryId: cat.categoryId,
+          categoryName: cat.categoryName,
+          items: cat.items
+        }))
       };
       
       console.log(`\n🖨️ ADİSYON YAZDIRMA ${i + 1}/${printJobs.length}`);
       console.log(`   Yazıcı: "${job.printerName}"`);
-      console.log(`   Kategori ID: ${job.categoryId}`);
-      console.log(`   Ürün sayısı: ${job.items.length}`);
+      console.log(`   Kategori sayısı: ${job.categories.length}`);
+      console.log(`   Toplam ürün sayısı: ${allItemsWithCategory.length}`);
       
       await printAdisyonToPrinter(
         job.printerName,
         job.printerType,
-        job.items,
-        categoryAdisyonData
+        allItemsWithCategory,
+        printerAdisyonData
       ).catch(err => {
         console.error(`   ❌ Adisyon yazdırma hatası:`, err);
       });
@@ -2478,75 +2571,136 @@ async function printAdisyonByCategory(items, adisyonData) {
     console.log(`\n=== KATEGORİ BAZLI ADİSYON YAZDIRMA TAMAMLANDI ===`);
   } catch (error) {
     console.error('\n❌ KATEGORİ BAZLI ADİSYON YAZDIRMA HATASI:', error);
-    // Hata durumunda kasa yazıcısına yazdırmayı dene
-    const cashierPrinter = db.settings.cashierPrinter;
-    if (cashierPrinter && cashierPrinter.printerName) {
-      console.log('   ⚠️ Kasa yazıcısına yazdırma deneniyor...');
-      await printAdisyonToPrinter(
-        cashierPrinter.printerName,
-        cashierPrinter.printerType,
-        items,
-        adisyonData
-      ).catch(err => {
-        console.error('   ❌ Kasa yazıcısına yazdırma hatası:', err);
-      });
-    }
+    // Hata durumunda kasa yazıcısına yazdırma yapma (sadece kategori bazlı yazıcılara yazdır)
   }
 }
 
 // Modern ve profesyonel adisyon HTML formatı
 function generateAdisyonHTML(items, adisyonData) {
-  const itemsHTML = items.map(item => {
-    const isGift = item.isGift || false;
-    const staffName = item.staff_name || null;
-    
-    if (isGift) {
-      return `
-      <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #16a34a; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
-            <span style="font-weight: 900; font-size: 13px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
-            <span style="font-size: 8px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 3px 6px; border-radius: 12px; font-weight: 900; box-shadow: 0 2px 4px rgba(22,163,74,0.3);">İKRAM</span>
+  // Eğer kategori bilgisi varsa, kategorilere göre grupla
+  const hasCategories = adisyonData.categories && adisyonData.categories.length > 0;
+  
+  let itemsHTML = '';
+  
+  if (hasCategories) {
+    // Kategorilere göre gruplanmış format
+    adisyonData.categories.forEach((category, catIndex) => {
+      // Kategori başlığı
+      itemsHTML += `
+        <div style="margin: ${catIndex > 0 ? '20px' : '0'} 0 12px 0; padding: 8px 12px; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border-radius: 8px; box-shadow: 0 2px 6px rgba(59,130,246,0.3);">
+          <h3 style="margin: 0; font-size: 12px; font-weight: 900; color: white; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;">
+            📦 ${category.categoryName}
+          </h3>
+        </div>
+      `;
+      
+      // Kategori ürünleri
+      category.items.forEach(item => {
+        const isGift = item.isGift || false;
+        const staffName = item.staff_name || null;
+        
+        if (isGift) {
+          itemsHTML += `
+          <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #16a34a; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+                <span style="font-weight: 900; font-size: 13px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
+                <span style="font-size: 8px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 3px 6px; border-radius: 12px; font-weight: 900; box-shadow: 0 2px 4px rgba(22,163,74,0.3);">İKRAM</span>
+              </div>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span style="font-size: 11px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+            </div>
+            ${staffName ? `
+            <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
+              <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
+            </div>
+            ` : ''}
+            ${item.extraNote ? `
+            <div style="margin-top: 6px; padding: 6px; background: white; border-radius: 4px; border-left: 3px solid #fbbf24;">
+              <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+            </div>
+            ` : ''}
           </div>
+        `;
+        } else {
+          itemsHTML += `
+          <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 4px solid #3b82f6; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <span style="font-weight: 900; font-size: 13px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
+            </div>
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <span style="font-size: 11px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+            </div>
+            ${staffName ? `
+            <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
+              <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
+            </div>
+            ` : ''}
+            ${item.extraNote ? `
+            <div style="margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;">
+              <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+            </div>
+            ` : ''}
+          </div>
+        `;
+        }
+      });
+    });
+  } else {
+    // Kategori bilgisi yoksa eski format (geriye dönük uyumluluk)
+    itemsHTML = items.map(item => {
+      const isGift = item.isGift || false;
+      const staffName = item.staff_name || null;
+      
+      if (isGift) {
+        return `
+        <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #16a34a; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
+              <span style="font-weight: 900; font-size: 13px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
+              <span style="font-size: 8px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 3px 6px; border-radius: 12px; font-weight: 900; box-shadow: 0 2px 4px rgba(22,163,74,0.3);">İKRAM</span>
+            </div>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <span style="font-size: 11px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+          </div>
+          ${staffName ? `
+          <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
+            <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
+          </div>
+          ` : ''}
+          ${item.extraNote ? `
+          <div style="margin-top: 6px; padding: 6px; background: white; border-radius: 4px; border-left: 3px solid #fbbf24;">
+            <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+          </div>
+          ` : ''}
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-          <span style="font-size: 11px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+      `;
+      }
+      
+      return `
+        <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 4px solid #3b82f6; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+            <span style="font-weight: 900; font-size: 13px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <span style="font-size: 11px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+          </div>
+          ${staffName ? `
+          <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
+            <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
+          </div>
+          ` : ''}
+          ${item.extraNote ? `
+          <div style="margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;">
+            <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+          </div>
+          ` : ''}
         </div>
-        ${staffName ? `
-        <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
-          <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
-        </div>
-        ` : ''}
-        ${item.extraNote ? `
-        <div style="margin-top: 6px; padding: 6px; background: white; border-radius: 4px; border-left: 3px solid #fbbf24;">
-          <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
-        </div>
-        ` : ''}
-      </div>
-    `;
-    }
-    
-    return `
-      <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 4px solid #3b82f6; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-          <span style="font-weight: 900; font-size: 13px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
-        </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-          <span style="font-size: 11px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
-        </div>
-        ${staffName ? `
-        <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
-          <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
-        </div>
-        ` : ''}
-        ${item.extraNote ? `
-        <div style="margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;">
-          <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
-        </div>
-        ` : ''}
-      </div>
-    `;
-  }).join('');
+      `;
+    }).join('');
+  }
 
   return `
     <!DOCTYPE html>
@@ -2838,26 +2992,37 @@ function generateMobileHTML(serverURL) {
     }
     .category-tabs {
       display: flex;
-      gap: 8px;
-      margin-bottom: 15px;
+      gap: 10px;
       overflow-x: auto;
-      padding-bottom: 10px;
+      padding-bottom: 8px;
       -webkit-overflow-scrolling: touch;
+      scrollbar-width: none;
+    }
+    .category-tabs::-webkit-scrollbar {
+      display: none;
     }
     .category-tab {
-      padding: 10px 18px;
-      border: 2px solid #e0e0e0;
-      border-radius: 20px;
+      padding: 12px 20px;
+      border: 2px solid #e5e7eb;
+      border-radius: 12px;
       background: white;
       font-size: 14px;
+      font-weight: 600;
       white-space: nowrap;
       cursor: pointer;
-      transition: all 0.3s;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      color: #6b7280;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .category-tab:active {
+      transform: scale(0.96);
     }
     .category-tab.active {
       border-color: #a855f7;
       background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
       color: white;
+      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);
+      transform: translateY(-1px);
     }
     .products-grid {
       display: grid;
@@ -2886,30 +3051,41 @@ function generateMobileHTML(serverURL) {
       background: #9333ea;
     }
     .product-card {
-      padding: 15px;
-      border: 2px solid #e0e0e0;
-      border-radius: 15px;
+      padding: 16px;
+      border: 2px solid #e5e7eb;
+      border-radius: 14px;
       background: white;
       cursor: pointer;
-      transition: all 0.3s;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 100px;
+    }
+    .product-card:hover {
+      border-color: #a855f7;
+      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.15);
+      transform: translateY(-2px);
     }
     .product-card:active {
-      border-color: #a855f7;
-      transform: scale(0.98);
+      transform: translateY(0) scale(0.98);
     }
     .product-name {
-      font-weight: bold;
-      margin-bottom: 5px;
+      font-weight: 700;
+      margin-bottom: 8px;
       font-size: 15px;
-      color: #333;
+      color: #1f2937;
+      line-height: 1.4;
     }
     .product-price {
       background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
       -webkit-background-clip: text;
       -webkit-text-fill-color: transparent;
       background-clip: text;
-      font-weight: bold;
+      font-weight: 800;
       font-size: 18px;
+      margin-top: auto;
     }
     .cart {
       position: fixed;
@@ -2917,54 +3093,159 @@ function generateMobileHTML(serverURL) {
       left: 0;
       right: 0;
       background: white;
-      padding: 15px;
       border-top: 3px solid #a855f7;
-      box-shadow: 0 -5px 20px rgba(0,0,0,0.2);
-      max-height: 50vh;
+      box-shadow: 0 -8px 30px rgba(0,0,0,0.15);
+      border-radius: 20px 20px 0 0;
+      transform: translateY(calc(100% - 70px));
+      transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      z-index: 1000;
+      max-height: 80vh;
+    }
+    .cart.open {
+      transform: translateY(0);
+    }
+    .cart-header {
+      padding: 16px 20px;
+      border-bottom: 2px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+      border-radius: 20px 20px 0 0;
+    }
+    .cart-header-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .cart-header-title span:first-child {
+      font-size: 18px;
+      font-weight: 700;
+      color: #1f2937;
+    }
+    .cart-header-title span:last-child {
+      font-size: 14px;
+      font-weight: 600;
+      color: #6b7280;
+      background: white;
+      padding: 4px 10px;
+      border-radius: 12px;
+    }
+    .cart-header-icon {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      transition: transform 0.3s;
+    }
+    .cart.open .cart-header-icon {
+      transform: rotate(180deg);
+    }
+    .cart-content {
+      padding: 20px;
+      max-height: calc(80vh - 80px);
       overflow-y: auto;
+      display: none;
+    }
+    .cart.open .cart-content {
+      display: block;
+    }
+    .cart-content::-webkit-scrollbar {
+      width: 6px;
+    }
+    .cart-content::-webkit-scrollbar-track {
+      background: #f1f1f1;
+      border-radius: 10px;
+    }
+    .cart-content::-webkit-scrollbar-thumb {
+      background: #a855f7;
+      border-radius: 10px;
     }
     .cart-items {
-      max-height: 200px;
+      max-height: 250px;
       overflow-y: auto;
-      margin-bottom: 15px;
+      margin-bottom: 20px;
+      padding-right: 5px;
+    }
+    .cart-items::-webkit-scrollbar {
+      width: 6px;
+    }
+    .cart-items::-webkit-scrollbar-track {
+      background: #f1f1f1;
+      border-radius: 10px;
+    }
+    .cart-items::-webkit-scrollbar-thumb {
+      background: #a855f7;
+      border-radius: 10px;
     }
     .cart-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 10px;
-      border-bottom: 1px solid #e0e0e0;
+      padding: 14px;
+      margin-bottom: 10px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 12px;
+      transition: all 0.3s;
+    }
+    .cart-item:hover {
+      background: #f3f4f6;
+      border-color: #d1d5db;
     }
     .cart-item-controls {
       display: flex;
       align-items: center;
-      gap: 10px;
+      gap: 8px;
     }
     .qty-btn {
-      width: 32px;
-      height: 32px;
+      width: 36px;
+      height: 36px;
       border: 2px solid #a855f7;
-      border-radius: 50%;
+      border-radius: 10px;
       background: white;
       color: #a855f7;
-      font-weight: bold;
+      font-weight: 700;
       cursor: pointer;
-      font-size: 18px;
+      font-size: 16px;
       display: flex;
       align-items: center;
       justify-content: center;
+      transition: all 0.3s;
+    }
+    .qty-btn:hover {
+      background: #a855f7;
+      color: white;
+      transform: scale(1.05);
+    }
+    .qty-btn:active {
+      transform: scale(0.95);
     }
     .send-btn {
       width: 100%;
-      padding: 15px;
+      padding: 18px;
       background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
       color: white;
       border: none;
-      border-radius: 15px;
-      font-size: 18px;
-      font-weight: bold;
+      border-radius: 14px;
+      font-size: 17px;
+      font-weight: 700;
       cursor: pointer;
-      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.4);
+      box-shadow: 0 4px 16px rgba(168, 85, 247, 0.4);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      letter-spacing: 0.3px;
+    }
+    .send-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(168, 85, 247, 0.5);
+    }
+    .send-btn:active {
+      transform: translateY(0) scale(0.98);
     }
     .loading {
       text-align: center;
@@ -3119,34 +3400,29 @@ function generateMobileHTML(serverURL) {
       box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);
     }
     .back-btn {
-      position: fixed;
-      top: 20px;
-      left: 20px;
-      z-index: 1000;
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 10px;
       padding: 12px 20px;
-      background: rgba(255, 255, 255, 0.95);
-      backdrop-filter: blur(10px);
+      background: white;
       color: #a855f7;
-      border: 2px solid rgba(168, 85, 247, 0.2);
-      border-radius: 16px;
+      border: 2px solid #e5e7eb;
+      border-radius: 12px;
       font-size: 15px;
       font-weight: 600;
       cursor: pointer;
-      box-shadow: 0 4px 20px rgba(168, 85, 247, 0.25);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      animation: backButtonSlideIn 0.4s ease-out;
     }
     .back-btn:hover {
-      background: rgba(255, 255, 255, 1);
-      border-color: rgba(168, 85, 247, 0.4);
-      transform: translateX(-2px);
-      box-shadow: 0 6px 25px rgba(168, 85, 247, 0.35);
+      background: #f9fafb;
+      border-color: #a855f7;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.2);
     }
     .back-btn:active {
-      transform: translateX(0) scale(0.98);
+      transform: translateY(0) scale(0.98);
     }
     .back-btn svg {
       width: 20px;
@@ -3155,16 +3431,6 @@ function generateMobileHTML(serverURL) {
     }
     .back-btn:hover svg {
       transform: translateX(-2px);
-    }
-    @keyframes backButtonSlideIn {
-      from {
-        opacity: 0;
-        transform: translateX(-20px);
-      }
-      to {
-        opacity: 1;
-        transform: translateX(0);
-      }
     }
     .logout-btn {
       position: fixed;
@@ -3324,20 +3590,17 @@ function generateMobileHTML(serverURL) {
     }
     .search-box {
       width: 100%;
-      padding: 12px 15px;
-      border: 2px solid #e0e0e0;
-      border-radius: 12px;
-      font-size: 15px;
-      margin-bottom: 15px;
-      transition: all 0.3s;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
     .search-box:focus {
       outline: none;
-      border-color: #a855f7;
-      box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.1);
+      border-color: #a855f7 !important;
+      background: white !important;
+      box-shadow: 0 0 0 4px rgba(168, 85, 247, 0.1) !important;
+      transform: translateY(-1px);
     }
     .search-box::placeholder {
-      color: #999;
+      color: #9ca3af;
     }
     .toast {
       position: fixed;
@@ -3589,25 +3852,39 @@ function generateMobileHTML(serverURL) {
       </div>
       
       <div id="orderSection" style="display: none;">
-        <!-- Sol Üst Geri Dön Butonu - Modern ve Profesyonel -->
-        <button class="back-btn" onclick="goBackToTables()">
-          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
-          </svg>
-          <span>Masalara Dön</span>
-        </button>
+        <!-- En Üst: Kategoriler ve Arama -->
+        <div style="position: sticky; top: 0; z-index: 100; background: white; padding: 15px 0; margin: -15px -15px 15px -15px; padding-left: 15px; padding-right: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
+          <!-- Geri Dön Butonu -->
+          <button class="back-btn" onclick="goBackToTables()" style="position: relative; top: 0; left: 0; margin-bottom: 12px; width: 100%; max-width: none; animation: none;">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
+            </svg>
+            <span>Masalara Dön</span>
+          </button>
+          
+          <!-- Kategoriler -->
+          <div style="margin-bottom: 12px;">
+            <div class="category-tabs" id="categoryTabs" style="gap: 10px; padding-bottom: 0;"></div>
+          </div>
+          
+          <!-- Arama Çubuğu -->
+          <div style="position: relative; margin-bottom: 0;">
+            <input type="text" id="searchInput" class="search-box" placeholder="🔍 Ürün ara..." oninput="filterProducts()" style="padding: 14px 16px 14px 48px; border: 2px solid #e5e7eb; border-radius: 14px; font-size: 15px; background: #f9fafb; transition: all 0.3s;">
+            <div style="position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #9ca3af; pointer-events: none;">
+              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+            </div>
+          </div>
+        </div>
         
-        <!-- Seçili Masa Bilgisi -->
-        <div class="selected-table-info" id="selectedTableInfo"></div>
+        <!-- Masa Bilgisi - Minimal -->
+        <div style="text-align: center; margin-bottom: 16px; padding: 8px 12px; background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border-radius: 10px; border: 1px solid #e5e7eb;">
+          <span style="font-size: 13px; font-weight: 600; color: #6b7280;" id="selectedTableInfo"></span>
+        </div>
         
-        <!-- Kategoriler -->
-        <div class="category-tabs" id="categoryTabs"></div>
-        
-        <!-- Arama Çubuğu -->
-        <input type="text" id="searchInput" class="search-box" placeholder="🔍 Ürün ara..." oninput="filterProducts()">
-        
-        <!-- Ürünler - Scrollable Container -->
-        <div style="overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; max-height: calc(100vh - 450px); padding-bottom: 20px;">
+        <!-- Ürünler -->
+        <div style="overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; max-height: calc(100vh - 320px); padding-bottom: 100px; padding-right: 5px;">
           <div class="products-grid" id="productsGrid"></div>
         </div>
       </div>
@@ -3615,11 +3892,31 @@ function generateMobileHTML(serverURL) {
   </div>
   
   <div class="cart" id="cart" style="display: none;">
-    <div class="cart-items" id="cartItems"></div>
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-      <span style="font-size: 20px; font-weight: bold;">Toplam: <span id="cartTotal">0</span> ₺</span>
+    <div class="cart-header" onclick="toggleCart()">
+      <div class="cart-header-title">
+        <span>Siparişi Gönder</span>
+        <span id="cartItemCount">0 ürün</span>
+      </div>
+      <div style="display: flex; align-items: center; gap: 12px;">
+        <span style="font-size: 20px; font-weight: 800; background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;"><span id="cartTotal">0.00</span> ₺</span>
+        <div class="cart-header-icon">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
+          </svg>
+        </div>
+      </div>
     </div>
-    <button class="send-btn" onclick="sendOrder()">📤 Siparişi Gönder</button>
+    <div class="cart-content">
+      <div class="cart-items" id="cartItems"></div>
+      <button class="send-btn" onclick="sendOrder()" style="margin-top: 20px;">
+        <span style="display: inline-flex; align-items: center; gap: 8px;">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/>
+          </svg>
+          Siparişi Gönder
+        </span>
+      </button>
+    </div>
   </div>
   
   <!-- Toast Notification -->
@@ -3860,7 +4157,7 @@ function generateMobileHTML(serverURL) {
       document.getElementById('orderSection').style.display = 'block';
       document.getElementById('cart').style.display = 'block';
       // Seçili masa bilgisini göster
-      document.getElementById('selectedTableInfo').textContent = '📋 ' + name + ' için sipariş oluşturuluyor';
+      document.getElementById('selectedTableInfo').textContent = name + ' için sipariş oluşturuluyor';
       // Arama çubuğunu temizle
       document.getElementById('searchInput').value = '';
       if (categories.length > 0) selectCategory(categories[0].id);
@@ -3924,23 +4221,42 @@ function generateMobileHTML(serverURL) {
       if (existing) existing.quantity++;
       else cart.push({ id: productId, name, price, quantity: 1 });
       updateCart();
+      // Sepeti otomatik aç
+      const cartEl = document.getElementById('cart');
+      if (cartEl && !cartEl.classList.contains('open')) {
+        cartEl.classList.add('open');
+      }
     }
     
     function updateCart() {
       const itemsDiv = document.getElementById('cartItems');
       const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-      itemsDiv.innerHTML = cart.map(item => 
-        '<div class="cart-item">' +
-          '<div><div style="font-weight: bold;">' + item.name + '</div><div style="color: #667eea;">' + item.price.toFixed(2) + ' ₺ x ' + item.quantity + '</div></div>' +
-          '<div class="cart-item-controls">' +
-            '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', -1)">-</button>' +
-            '<span style="min-width: 30px; text-align: center;">' + item.quantity + '</span>' +
-            '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', 1)">+</button>' +
-            '<button class="qty-btn" onclick="removeFromCart(' + item.id + ')" style="background: #ff4444; color: white; border-color: #ff4444;">×</button>' +
-          '</div>' +
-        '</div>'
-      ).join('');
+      const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+      
+      if (cart.length === 0) {
+        itemsDiv.innerHTML = '<div style="text-align: center; padding: 40px 20px; color: #9ca3af; font-size: 14px;">Sepetiniz boş</div>';
+      } else {
+        itemsDiv.innerHTML = cart.map(item => 
+          '<div class="cart-item">' +
+            '<div style="flex: 1;">' +
+              '<div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 4px;">' + item.name + '</div>' +
+              '<div style="color: #6b7280; font-size: 13px; font-weight: 600;">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + (item.price * item.quantity).toFixed(2) + ' ₺</div>' +
+            '</div>' +
+            '<div class="cart-item-controls">' +
+              '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', -1)" title="Azalt">-</button>' +
+              '<span style="min-width: 36px; text-align: center; font-weight: 700; color: #1f2937; font-size: 15px;">' + item.quantity + '</span>' +
+              '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', 1)" title="Artır">+</button>' +
+              '<button class="qty-btn" onclick="removeFromCart(' + item.id + ')" style="background: #ef4444; color: white; border-color: #ef4444; font-size: 18px;" title="Sil">×</button>' +
+            '</div>' +
+          '</div>'
+        ).join('');
+      }
+      
       document.getElementById('cartTotal').textContent = total.toFixed(2);
+      const cartItemCountEl = document.getElementById('cartItemCount');
+      if (cartItemCountEl) {
+        cartItemCountEl.textContent = totalItems + ' ürün';
+      }
     }
     
     function changeQuantity(productId, delta) {
@@ -3949,6 +4265,11 @@ function generateMobileHTML(serverURL) {
     }
     
     function removeFromCart(productId) { cart = cart.filter(item => item.id !== productId); updateCart(); }
+    
+    function toggleCart() {
+      const cartEl = document.getElementById('cart');
+      cartEl.classList.toggle('open');
+    }
     
     // Toast Notification Functions
     function showToast(type, title, message) {

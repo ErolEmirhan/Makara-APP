@@ -31,13 +31,29 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   useEffect(() => {
     loadTableOrders();
     
-    // Yeni sipariş geldiğinde dinle (mobil cihazdan gelen siparişler için)
+    // Yeni sipariş geldiğinde dinle (mobil cihazdan veya Electron'dan gelen siparişler için)
     if (window.electronAPI && window.electronAPI.onNewOrderCreated) {
-      const unsubscribe = window.electronAPI.onNewOrderCreated((data) => {
-        console.log('📱 Yeni sipariş alındı (mobil):', data);
+      const unsubscribe = window.electronAPI.onNewOrderCreated(async (data) => {
+        console.log('📦 Yeni sipariş alındı:', data);
         // Siparişleri yenile (kısa bir gecikme ile veritabanının güncellenmesini bekle)
-        setTimeout(() => {
-          loadTableOrders();
+        setTimeout(async () => {
+          await loadTableOrders();
+          
+          // Eğer modal açıksa ve aynı masaya sipariş eklendiyse, modal'daki sipariş detaylarını da yenile
+          if (showModal && selectedOrder && data.tableId === selectedOrder.table_id) {
+            try {
+              // Güncel siparişleri API'den yükle
+              const orders = await window.electronAPI.getTableOrders();
+              const updatedOrder = orders.find(o => o.id === selectedOrder.id && o.status === 'pending');
+              if (updatedOrder) {
+                const updatedItems = await window.electronAPI.getTableOrderItems(updatedOrder.id);
+                setSelectedOrder(updatedOrder);
+                setOrderItems(updatedItems || []);
+              }
+            } catch (error) {
+              console.error('Sipariş detayları yenilenirken hata:', error);
+            }
+          }
         }, 500);
       });
       
@@ -47,7 +63,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         }
       };
     }
-  }, []);
+  }, [showModal, selectedOrder]);
 
   // Masa tipi değiştiğinde siparişleri yenile
   useEffect(() => {

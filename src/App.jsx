@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Navbar from './components/Navbar';
 import CategoryPanel from './components/CategoryPanel';
 import TablePanel from './components/TablePanel';
@@ -42,6 +42,8 @@ function App() {
   const [updateDownloadProgress, setUpdateDownloadProgress] = useState(null);
   const [tableRefreshTrigger, setTableRefreshTrigger] = useState(0);
   const [showExitSplash, setShowExitSplash] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const searchInputRef = useRef(null);
   const triggerRoleSplash = (role) => {
     setActiveRoleSplash(role);
     setTimeout(() => setActiveRoleSplash(null), 1000);
@@ -90,6 +92,17 @@ function App() {
     const prods = await window.electronAPI.getProducts(categoryId);
     setProducts(prods);
   };
+
+  // Arama sorgusuna göre ürünleri filtrele
+  const filteredProducts = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return products;
+    }
+    const query = searchQuery.toLowerCase().trim();
+    return products.filter(product => 
+      product.name.toLowerCase().includes(query)
+    );
+  }, [products, searchQuery]);
 
   const refreshProducts = async () => {
     // Kategorileri yenile
@@ -249,7 +262,7 @@ function App() {
         } else {
           console.log('✨ Yeni sipariş oluşturuldu:', result.orderId);
         }
-        // Adisyon yazdır (masaya kaydet'te de)
+        // Sadece kategori bazlı yazıcılardan adisyon yazdır (kasa yazıcısından adisyon çıkmasın)
         const adisyonData = {
           items: cart,
           tableName: selectedTable.name,
@@ -266,33 +279,7 @@ function App() {
           });
         }
         
-        // Masa siparişi fişi için receiptData oluştur ve direkt yazdır
-        const tableReceiptData = {
-          order_id: result.orderId,
-          totalAmount,
-          paymentMethod: `Masaya Kaydedildi (${selectedTable.name})`,
-          sale_date: new Date().toLocaleDateString('tr-TR'),
-          sale_time: new Date().toLocaleTimeString('tr-TR'),
-          items: cart,
-          tableName: selectedTable.name,
-          tableType: selectedTable.type,
-          orderNote: orderNote || null
-        };
-        
-        // Fişi direkt yazdır (modal gösterme)
-        if (window.electronAPI && window.electronAPI.printReceipt) {
-          setPrintToast({ status: 'printing', message: 'Fiş yazdırılıyor...' });
-          window.electronAPI.printReceipt(tableReceiptData).then(result => {
-            if (result.success) {
-              setPrintToast({ status: 'success', message: 'Fiş başarıyla yazdırıldı' });
-            } else {
-              setPrintToast({ status: 'error', message: result.error || 'Fiş yazdırılamadı' });
-            }
-          }).catch(err => {
-            console.error('Fiş yazdırılırken hata:', err);
-            setPrintToast({ status: 'error', message: 'Fiş yazdırılamadı: ' + err.message });
-          });
-        }
+        // Kasadan masaya sipariş eklendiğinde kasa yazıcısından fiş yazdırma (sadece adisyon yeterli)
         
         // Sepeti temizle
         setCart([]);
@@ -348,6 +335,50 @@ function App() {
     
     if (result.success) {
       setShowPaymentModal(false);
+      
+      // Kasa yazıcısından satış fişi yazdır (sadece kasa yazıcısına)
+      const receiptData = {
+        sale_id: result.saleId,
+        totalAmount,
+        paymentMethod,
+        sale_date: new Date().toLocaleDateString('tr-TR'),
+        sale_time: new Date().toLocaleTimeString('tr-TR'),
+        items: cart,
+        orderNote: orderNote || null,
+        cashierOnly: true // Sadece kasa yazıcısına yazdır
+      };
+      
+      if (window.electronAPI && window.electronAPI.printReceipt) {
+        setPrintToast({ status: 'printing', message: 'Fiş yazdırılıyor...' });
+        window.electronAPI.printReceipt(receiptData).then(result => {
+          if (result.success) {
+            setPrintToast({ status: 'success', message: 'Fiş başarıyla yazdırıldı' });
+          } else {
+            setPrintToast({ status: 'error', message: result.error || 'Fiş yazdırılamadı' });
+          }
+        }).catch(err => {
+          console.error('Fiş yazdırılırken hata:', err);
+          setPrintToast({ status: 'error', message: 'Fiş yazdırılamadı: ' + err.message });
+        });
+      }
+      
+      // Kategori bazlı yazıcılardan adisyon yazdır
+      const adisyonData = {
+        items: cart,
+        tableName: null, // Hızlı satış için masa yok
+        tableType: null,
+        orderNote: orderNote || null,
+        sale_date: new Date().toLocaleDateString('tr-TR'),
+        sale_time: new Date().toLocaleTimeString('tr-TR')
+      };
+      
+      if (window.electronAPI && window.electronAPI.printAdisyon) {
+        // Arka planda yazdır, hata olsa bile devam et
+        window.electronAPI.printAdisyon(adisyonData).catch(err => {
+          console.error('Adisyon yazdırılırken hata:', err);
+        });
+      }
+      
       // Fiş modal'ını göster
       setReceiptData({
         sale_id: result.saleId,
@@ -402,10 +433,13 @@ function App() {
         orderNote: orderNote || null
       };
       
-      // Fişi direkt yazdır (modal gösterme)
+      // Kasa yazıcısından satış fişi yazdır (sadece kasa yazıcısına)
       if (window.electronAPI && window.electronAPI.printReceipt) {
         setPrintToast({ status: 'printing', message: 'Fiş yazdırılıyor...' });
-        window.electronAPI.printReceipt(receiptData).then(result => {
+        window.electronAPI.printReceipt({
+          ...receiptData,
+          cashierOnly: true // Sadece kasa yazıcısına yazdır
+        }).then(result => {
           if (result.success) {
             setPrintToast({ status: 'success', message: 'Fiş başarıyla yazdırıldı' });
           } else {
@@ -416,6 +450,24 @@ function App() {
           setPrintToast({ status: 'error', message: 'Fiş yazdırılamadı: ' + err.message });
         });
       }
+      
+      // Kategori bazlı yazıcılardan adisyon yazdır
+      const adisyonData = {
+        items: cart,
+        tableName: null, // Hızlı satış için masa yok
+        tableType: null,
+        orderNote: orderNote || null,
+        sale_date: new Date().toLocaleDateString('tr-TR'),
+        sale_time: new Date().toLocaleTimeString('tr-TR')
+      };
+      
+      if (window.electronAPI && window.electronAPI.printAdisyon) {
+        // Arka planda yazdır, hata olsa bile devam et
+        window.electronAPI.printAdisyon(adisyonData).catch(err => {
+          console.error('Adisyon yazdırılırken hata:', err);
+        });
+      }
+      
       clearCart();
       setSaleSuccessInfo({ 
         totalAmount, 
@@ -516,10 +568,58 @@ function App() {
             <CategoryPanel
               categories={categories}
               selectedCategory={selectedCategory}
-              onSelectCategory={setSelectedCategory}
+              onSelectCategory={(category) => {
+                setSelectedCategory(category);
+                setSearchQuery(''); // Kategori değiştiğinde aramayı temizle
+              }}
             />
+            
+            {/* Arama Çubuğu */}
+            <div className="mb-4">
+              <div className="relative">
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onFocus={() => {
+                    // Sanal klavye otomatik olarak focus event'i ile açılacak
+                  }}
+                  placeholder="Ürün ara..."
+                  className="w-full px-4 py-3 pl-12 bg-white/90 backdrop-blur-xl border-2 border-purple-200 rounded-xl shadow-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800 font-medium placeholder-gray-400 transition-all duration-300"
+                />
+                <div className="absolute left-4 top-1/2 transform -translate-y-1/2">
+                  <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                  </svg>
+                </div>
+                {searchQuery && (
+                  <button
+                    onClick={() => {
+                      setSearchQuery('');
+                      if (searchInputRef.current) {
+                        searchInputRef.current.focus();
+                      }
+                    }}
+                    className="absolute right-4 top-1/2 transform -translate-y-1/2 p-1 hover:bg-purple-100 rounded-lg transition-colors"
+                  >
+                    <svg className="w-5 h-5 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+              {searchQuery && (
+                <p className="mt-2 text-sm text-gray-600 font-medium">
+                  {filteredProducts.length > 0 
+                    ? `${filteredProducts.length} ürün bulundu` 
+                    : 'Ürün bulunamadı'}
+                </p>
+              )}
+            </div>
+            
             <ProductGrid
-              products={products}
+              products={filteredProducts}
               onAddToCart={addToCart}
             />
           </div>

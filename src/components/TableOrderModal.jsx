@@ -141,17 +141,17 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                     </p>
                   </div>
                   <div className="flex items-center space-x-4">
-                    <div className="text-right">
-                      {isGift ? (
-                        <div>
-                          <p className="text-xs text-gray-400 line-through">₺{originalTotal.toFixed(2)}</p>
-                          <p className="font-bold text-lg text-green-600">₺0.00</p>
-                        </div>
-                      ) : (
-                        <p className="font-bold text-lg text-purple-600">
-                          ₺{displayTotal.toFixed(2)}
-                        </p>
-                      )}
+                  <div className="text-right">
+                    {isGift ? (
+                      <div>
+                        <p className="text-xs text-gray-400 line-through">₺{originalTotal.toFixed(2)}</p>
+                        <p className="font-bold text-lg text-green-600">₺0.00</p>
+                      </div>
+                    ) : (
+                      <p className="font-bold text-lg text-purple-600">
+                        ₺{displayTotal.toFixed(2)}
+                      </p>
+                    )}
                     </div>
                     <button
                       onClick={() => setSelectedItemDetail(item)}

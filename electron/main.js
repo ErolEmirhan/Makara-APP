@@ -48,6 +48,15 @@ let dbPath;
 let apiServer = null;
 let io = null;
 let serverPort = 3000;
+
+// Saat formatı helper fonksiyonu (saat:dakika:saniye)
+function getFormattedTime(date = new Date()) {
+  return date.toLocaleTimeString('tr-TR', { 
+    hour: '2-digit', 
+    minute: '2-digit', 
+    second: '2-digit' 
+  });
+}
 let db = {
   categories: [],
   products: [],
@@ -320,7 +329,7 @@ ipcMain.handle('create-sale', async (event, saleData) => {
   
   const now = new Date();
   const saleDate = now.toLocaleDateString('tr-TR');
-  const saleTime = now.toLocaleTimeString('tr-TR');
+  const saleTime = getFormattedTime(now);
 
   // Yeni satış ID'si
   const saleId = db.sales.length > 0 
@@ -432,7 +441,7 @@ ipcMain.handle('create-table-order', (event, orderData) => {
   
   const now = new Date();
   const orderDate = now.toLocaleDateString('tr-TR');
-  const orderTime = now.toLocaleTimeString('tr-TR');
+  const orderTime = getFormattedTime(now);
 
   // Mevcut sipariş var mı kontrol et
   const existingOrder = (db.tableOrders || []).find(
@@ -575,7 +584,7 @@ ipcMain.handle('complete-table-order', async (event, orderId) => {
   // Satış geçmişine ekle (nakit olarak)
   const now = new Date();
   const saleDate = now.toLocaleDateString('tr-TR');
-  const saleTime = now.toLocaleTimeString('tr-TR');
+  const saleTime = getFormattedTime(now);
 
   // Yeni satış ID'si
   const saleId = db.sales.length > 0 
@@ -685,7 +694,7 @@ ipcMain.handle('update-table-order-amount', async (event, orderId, paidAmount) =
 ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
   const now = new Date();
   const saleDate = now.toLocaleDateString('tr-TR');
-  const saleTime = now.toLocaleTimeString('tr-TR');
+  const saleTime = getFormattedTime(now);
 
   // Yeni satış ID'si
   const saleId = db.sales.length > 0 
@@ -1718,7 +1727,7 @@ function generateProductionReceiptHTML(items, receiptData) {
         </div>
         <div>
           <span>Saat:</span>
-          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_time || new Date().toLocaleTimeString('tr-TR')}</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_time || getFormattedTime(new Date())}</span>
         </div>
         ${receiptData.sale_id ? `
         <div>
@@ -1954,7 +1963,7 @@ function generateReceiptHTML(receiptData) {
         </div>
         <div>
           <span>Saat:</span>
-          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_time || new Date().toLocaleTimeString('tr-TR')}</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_time || getFormattedTime(new Date())}</span>
         </div>
         ${receiptData.sale_id ? `
         <div>
@@ -2736,6 +2745,9 @@ async function printAdisyonByCategory(items, adisyonData) {
 
 // Modern ve profesyonel adisyon HTML formatı
 function generateAdisyonHTML(items, adisyonData) {
+  // Garson ismini items'dan al (ilk item'dan)
+  const staffName = items.length > 0 && items[0].staff_name ? items[0].staff_name : null;
+  
   // Eğer kategori bilgisi varsa, kategorilere göre grupla
   const hasCategories = adisyonData.categories && adisyonData.categories.length > 0;
   
@@ -2746,8 +2758,8 @@ function generateAdisyonHTML(items, adisyonData) {
     adisyonData.categories.forEach((category, catIndex) => {
       // Kategori başlığı
       itemsHTML += `
-        <div style="margin: ${catIndex > 0 ? '20px' : '0'} 0 12px 0; padding: 8px 12px; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border-radius: 8px; box-shadow: 0 2px 6px rgba(59,130,246,0.3);">
-          <h3 style="margin: 0; font-size: 12px; font-weight: 900; color: white; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;">
+        <div style="margin: ${catIndex > 0 ? '16px' : '0'} 0 10px 0; padding: 6px 10px; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border-radius: 6px; box-shadow: 0 2px 4px rgba(59,130,246,0.3);">
+          <h3 style="margin: 0; font-size: 11px; font-weight: 900; color: white; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;">
             📦 ${category.categoryName}
           </h3>
         </div>
@@ -2756,49 +2768,38 @@ function generateAdisyonHTML(items, adisyonData) {
       // Kategori ürünleri
       category.items.forEach(item => {
         const isGift = item.isGift || false;
-        const staffName = item.staff_name || null;
         
         if (isGift) {
           itemsHTML += `
-          <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #16a34a; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
-                <span style="font-weight: 900; font-size: 13px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
-                <span style="font-size: 8px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 3px 6px; border-radius: 12px; font-weight: 900; box-shadow: 0 2px 4px rgba(22,163,74,0.3);">İKRAM</span>
+          <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 3px solid #16a34a; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+              <div style="display: flex; align-items: center; gap: 4px; flex: 1;">
+                <span style="font-weight: 900; font-size: 12px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
+                <span style="font-size: 7px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 2px 5px; border-radius: 10px; font-weight: 900; box-shadow: 0 1px 3px rgba(22,163,74,0.3);">İKRAM</span>
               </div>
             </div>
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span style="font-size: 11px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 10px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
             </div>
-            ${staffName ? `
-            <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
-              <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
-            </div>
-            ` : ''}
             ${item.extraNote ? `
-            <div style="margin-top: 6px; padding: 6px; background: white; border-radius: 4px; border-left: 3px solid #fbbf24;">
-              <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+            <div style="margin-top: 4px; padding: 4px; background: white; border-radius: 3px; border-left: 2px solid #fbbf24;">
+              <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
             </div>
             ` : ''}
           </div>
         `;
         } else {
           itemsHTML += `
-          <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 4px solid #3b82f6; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <span style="font-weight: 900; font-size: 13px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
-            </div>
+          <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 3px solid #3b82f6; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span style="font-size: 11px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+              <span style="font-weight: 900; font-size: 12px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
             </div>
-            ${staffName ? `
-            <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
-              <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-size: 10px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
             </div>
-            ` : ''}
             ${item.extraNote ? `
-            <div style="margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;">
-              <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+            <div style="margin-top: 4px; padding: 4px; background: #fef3c7; border-radius: 3px; border-left: 2px solid #f59e0b;">
+              <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
             </div>
             ` : ''}
           </div>
@@ -2810,28 +2811,22 @@ function generateAdisyonHTML(items, adisyonData) {
     // Kategori bilgisi yoksa eski format (geriye dönük uyumluluk)
     itemsHTML = items.map(item => {
       const isGift = item.isGift || false;
-      const staffName = item.staff_name || null;
       
       if (isGift) {
         return `
-        <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 4px solid #16a34a; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <div style="display: flex; align-items: center; gap: 6px; flex: 1;">
-              <span style="font-weight: 900; font-size: 13px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
-              <span style="font-size: 8px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 3px 6px; border-radius: 12px; font-weight: 900; box-shadow: 0 2px 4px rgba(22,163,74,0.3);">İKRAM</span>
+        <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 3px solid #16a34a; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
+            <div style="display: flex; align-items: center; gap: 4px; flex: 1;">
+              <span style="font-weight: 900; font-size: 12px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
+              <span style="font-size: 7px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 2px 5px; border-radius: 10px; font-weight: 900; box-shadow: 0 1px 3px rgba(22,163,74,0.3);">İKRAM</span>
             </div>
           </div>
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <span style="font-size: 11px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 10px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
           </div>
-          ${staffName ? `
-          <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
-            <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
-          </div>
-          ` : ''}
           ${item.extraNote ? `
-          <div style="margin-top: 6px; padding: 6px; background: white; border-radius: 4px; border-left: 3px solid #fbbf24;">
-            <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+          <div style="margin-top: 4px; padding: 4px; background: white; border-radius: 3px; border-left: 2px solid #fbbf24;">
+            <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
           </div>
           ` : ''}
         </div>
@@ -2839,21 +2834,16 @@ function generateAdisyonHTML(items, adisyonData) {
       }
       
       return `
-        <div style="margin-bottom: 12px; padding: 10px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 4px solid #3b82f6; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-            <span style="font-weight: 900; font-size: 13px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
-          </div>
+        <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 3px solid #3b82f6; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <span style="font-size: 11px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
+            <span style="font-weight: 900; font-size: 12px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
           </div>
-          ${staffName ? `
-          <div style="margin-top: 4px; padding: 4px 6px; background: rgba(139, 92, 246, 0.1); border-radius: 4px; border-left: 2px solid #8b5cf6;">
-            <p style="font-size: 8px; color: #6d28d9; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">👤 ${staffName}</p>
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-size: 10px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
           </div>
-          ` : ''}
           ${item.extraNote ? `
-          <div style="margin-top: 6px; padding: 6px; background: #fef3c7; border-radius: 4px; border-left: 3px solid #f59e0b;">
-            <p style="font-size: 9px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
+          <div style="margin-top: 4px; padding: 4px; background: #fef3c7; border-radius: 3px; border-left: 2px solid #f59e0b;">
+            <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
           </div>
           ` : ''}
         </div>
@@ -2878,7 +2868,7 @@ function generateAdisyonHTML(items, adisyonData) {
           }
           body {
             margin: 0;
-            padding: 12px 12px 20px 12px;
+            padding: 8px 8px 12px 8px;
             height: auto;
             min-height: 100%;
             color: #000 !important;
@@ -2899,7 +2889,7 @@ function generateAdisyonHTML(items, adisyonData) {
           font-family: 'Montserrat', sans-serif;
           width: 58mm;
           max-width: 58mm;
-          padding: 12px 12px 25px 12px;
+          padding: 8px 8px 15px 8px;
           margin: 0;
           font-size: 12px;
           min-height: 100%;
@@ -2915,43 +2905,18 @@ function generateAdisyonHTML(items, adisyonData) {
           height: auto;
           min-height: 100%;
         }
-        .header {
-          text-align: center;
-          margin-bottom: 16px;
-          padding-bottom: 16px;
-          border-bottom: 3px solid #3b82f6;
-          background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          background-clip: text;
-        }
-        .header h2 {
-          font-size: 20px;
-          font-weight: 900;
-          margin: 8px 0 4px 0;
-          font-family: 'Montserrat', sans-serif;
-          color: #1e293b;
-          text-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .header p {
-          font-size: 11px;
-          font-weight: 700;
-          margin: 0;
-          color: #64748b;
-          font-family: 'Montserrat', sans-serif;
-        }
         .info {
           background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-          border-radius: 12px;
-          padding: 12px;
-          margin: 12px 0;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+          border-radius: 8px;
+          padding: 10px;
+          margin: 0 0 10px 0;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.1);
         }
         .info div {
           display: flex;
           justify-content: space-between;
-          margin: 4px 0;
-          font-size: 10px;
+          margin: 3px 0;
+          font-size: 9px;
           font-weight: 700;
           color: #475569;
           font-family: 'Montserrat', sans-serif;
@@ -2960,8 +2925,46 @@ function generateAdisyonHTML(items, adisyonData) {
           color: #1e293b;
           font-weight: 900;
         }
+        .info .table-row {
+          display: block;
+          margin: 0 0 8px 0;
+          padding: 0;
+        }
+        .info .table-row .table-label {
+          font-size: 9px;
+          font-weight: 700;
+          color: #475569;
+          margin-bottom: 4px;
+        }
+        .info .table-row .table-value {
+          font-size: 18px;
+          font-weight: 900;
+          color: #1e293b;
+          font-family: 'Montserrat', sans-serif;
+          line-height: 1.2;
+        }
+        .info .staff-row {
+          display: block;
+          margin: 6px 0 0 0;
+          padding: 6px 8px;
+          background: rgba(139, 92, 246, 0.1);
+          border-radius: 4px;
+          border-left: 2px solid #8b5cf6;
+        }
+        .info .staff-row .staff-label {
+          font-size: 8px;
+          font-weight: 700;
+          color: #6d28d9;
+          margin-bottom: 2px;
+        }
+        .info .staff-row .staff-value {
+          font-size: 10px;
+          font-weight: 900;
+          color: #6d28d9;
+          font-family: 'Montserrat', sans-serif;
+        }
         .items {
-          margin: 16px 0;
+          margin: 10px 0;
         }
         .footer {
           text-align: center;
@@ -2981,16 +2984,17 @@ function generateAdisyonHTML(items, adisyonData) {
       </style>
     </head>
     <body>
-      <div class="header">
-        <h2>MAKARA</h2>
-        <p>ADİSYON</p>
-      </div>
-      
       <div class="info">
         ${adisyonData.tableName ? `
-        <div>
-          <span>Masa:</span>
-          <span>${adisyonData.tableName}</span>
+        <div class="table-row">
+          <div class="table-label">Masa:</div>
+          <div class="table-value">${adisyonData.tableName}</div>
+        </div>
+        ` : ''}
+        ${staffName ? `
+        <div class="staff-row">
+          <div class="staff-label">👤 Garson:</div>
+          <div class="staff-value">${staffName}</div>
         </div>
         ` : ''}
         <div>
@@ -2999,7 +3003,7 @@ function generateAdisyonHTML(items, adisyonData) {
         </div>
         <div>
           <span>Saat:</span>
-          <span>${adisyonData.sale_time || new Date().toLocaleTimeString('tr-TR')}</span>
+          <span>${adisyonData.sale_time || getFormattedTime(new Date())}</span>
         </div>
       </div>
 
@@ -3008,9 +3012,9 @@ function generateAdisyonHTML(items, adisyonData) {
       </div>
       
       ${adisyonData.orderNote ? `
-      <div style="margin: 16px 0; padding: 12px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 12px; border-left: 4px solid #f59e0b; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <p style="font-size: 10px; font-weight: 900; color: #92400e; margin: 0 0 6px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
-        <p style="font-size: 10px; font-weight: 700; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif;">${adisyonData.orderNote}</p>
+      <div style="margin: 10px 0; padding: 8px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 6px; border-left: 3px solid #f59e0b; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
+        <p style="font-size: 9px; font-weight: 900; color: #92400e; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
+        <p style="font-size: 9px; font-weight: 700; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif;">${adisyonData.orderNote}</p>
       </div>
       ` : ''}
 
@@ -4732,7 +4736,7 @@ function startAPIServer() {
             if (!db.tableOrderItems) db.tableOrderItems = [];
             const now = new Date();
             const addedDate = now.toLocaleDateString('tr-TR');
-            const addedTime = now.toLocaleTimeString('tr-TR');
+            const addedTime = getFormattedTime(now);
             const staff = staffId && db.staff ? db.staff.find(s => s.id === staffId) : null;
             const itemStaffName = staff ? `${staff.name} ${staff.surname}` : null;
             db.tableOrderItems.push({
@@ -4761,7 +4765,7 @@ function startAPIServer() {
         isNewOrder = true;
         const now = new Date();
         const orderDate = now.toLocaleDateString('tr-TR');
-        const orderTime = now.toLocaleTimeString('tr-TR');
+        const orderTime = getFormattedTime(now);
         orderId = (db.tableOrders || []).length > 0 
           ? Math.max(...db.tableOrders.map(o => o.id)) + 1 
           : 1;
@@ -4853,7 +4857,7 @@ function startAPIServer() {
           tableType: tableType,
           orderNote: orderNote || null,
           sale_date: isNewOrder ? new Date().toLocaleDateString('tr-TR') : (db.tableOrders.find(o => o.id === orderId)?.order_date || new Date().toLocaleDateString('tr-TR')),
-          sale_time: isNewOrder ? new Date().toLocaleTimeString('tr-TR') : (db.tableOrders.find(o => o.id === orderId)?.order_time || new Date().toLocaleTimeString('tr-TR'))
+          sale_time: isNewOrder ? getFormattedTime(new Date()) : (db.tableOrders.find(o => o.id === orderId)?.order_time || getFormattedTime(new Date()))
         };
         
         // Kategori bazlı adisyon yazdırma

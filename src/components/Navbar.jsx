@@ -186,7 +186,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
         <div>
           <h1 className="text-3xl font-bold text-pink-500">Makara Satış Sistemi</h1>
-          <p className="text-xs text-gray-500 font-medium">v2.1.2</p>
+          <p className="text-xs text-gray-500 font-medium">v2.1.5</p>
         </div>
       </div>
 

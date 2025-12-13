@@ -18,6 +18,9 @@ let firebaseAddDoc = null;
 let firebaseServerTimestamp = null;
 let firebaseGetDocs = null;
 let firebaseDeleteDoc = null;
+let firebaseDoc = null;
+let firebaseSetDoc = null;
+let firebaseOnSnapshot = null;
 
 try {
   // Firebase modüllerini dinamik olarak yükle
@@ -41,6 +44,9 @@ try {
   firebaseServerTimestamp = firebaseFirestoreModule.serverTimestamp;
   firebaseGetDocs = firebaseFirestoreModule.getDocs;
   firebaseDeleteDoc = firebaseFirestoreModule.deleteDoc;
+  firebaseDoc = firebaseFirestoreModule.doc;
+  firebaseSetDoc = firebaseFirestoreModule.setDoc;
+  firebaseOnSnapshot = firebaseFirestoreModule.onSnapshot;
   console.log('Firebase başarıyla başlatıldı');
 } catch (error) {
   console.error('Firebase başlatılamadı:', error);
@@ -179,6 +185,350 @@ function saveDatabase() {
   }
 }
 
+// Firebase'e kategori kaydetme fonksiyonu
+async function saveCategoryToFirebase(category) {
+  if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
+    return;
+  }
+  
+  try {
+    const categoryRef = firebaseDoc(firestore, 'categories', category.id.toString());
+    await firebaseSetDoc(categoryRef, {
+      id: category.id,
+      name: category.name,
+      order_index: category.order_index || 0
+    }, { merge: true });
+    console.log(`✅ Kategori Firebase'e kaydedildi: ${category.name} (ID: ${category.id})`);
+  } catch (error) {
+    console.error(`❌ Kategori Firebase'e kaydedilemedi (${category.name}):`, error);
+  }
+}
+
+// Firebase'e ürün kaydetme fonksiyonu
+async function saveProductToFirebase(product) {
+  if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
+    return;
+  }
+  
+  try {
+    const productRef = firebaseDoc(firestore, 'products', product.id.toString());
+    await firebaseSetDoc(productRef, {
+      id: product.id,
+      name: product.name,
+      category_id: product.category_id,
+      price: parseFloat(product.price) || 0,
+      image: product.image || null
+    }, { merge: true });
+    console.log(`✅ Ürün Firebase'e kaydedildi: ${product.name} (ID: ${product.id}, Fiyat: ${parseFloat(product.price) || 0})`);
+  } catch (error) {
+    console.error(`❌ Ürün Firebase'e kaydedilemedi (${product.name}):`, error);
+  }
+}
+
+// Tüm kategorileri Firebase'e senkronize et
+async function syncCategoriesToFirebase() {
+  if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
+    console.warn('⚠️ Firebase başlatılamadı, kategoriler senkronize edilemedi');
+    return;
+  }
+  
+  try {
+    console.log('🔄 Kategoriler Firebase\'e senkronize ediliyor...');
+    const categories = db.categories || [];
+    
+    for (const category of categories) {
+      await saveCategoryToFirebase(category);
+    }
+    
+    console.log(`✅ ${categories.length} kategori Firebase'e senkronize edildi`);
+  } catch (error) {
+    console.error('❌ Kategoriler senkronize edilirken hata oluştu:', error);
+  }
+}
+
+// Tüm ürünleri Firebase'e senkronize et
+async function syncProductsToFirebase() {
+  if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
+    console.warn('⚠️ Firebase başlatılamadı, ürünler senkronize edilemedi');
+    return;
+  }
+  
+  try {
+    console.log('🔄 Ürünler Firebase\'e senkronize ediliyor...');
+    const products = db.products || [];
+    
+    for (const product of products) {
+      await saveProductToFirebase(product);
+    }
+    
+    console.log(`✅ ${products.length} ürün Firebase'e senkronize edildi`);
+  } catch (error) {
+    console.error('❌ Ürünler senkronize edilirken hata oluştu:', error);
+  }
+}
+
+// Firebase'den kategorileri çek ve local database'e senkronize et
+async function syncCategoriesFromFirebase() {
+  if (!firestore || !firebaseCollection || !firebaseGetDocs) {
+    console.warn('⚠️ Firebase başlatılamadı, kategoriler çekilemedi');
+    return;
+  }
+  
+  try {
+    console.log('📥 Firebase\'den kategoriler çekiliyor...');
+    const categoriesRef = firebaseCollection(firestore, 'categories');
+    const snapshot = await firebaseGetDocs(categoriesRef);
+    
+    let addedCount = 0;
+    let updatedCount = 0;
+    
+    snapshot.forEach((doc) => {
+      const firebaseCategory = doc.data();
+      const categoryId = typeof firebaseCategory.id === 'string' ? parseInt(firebaseCategory.id) : firebaseCategory.id;
+      
+      // Local database'de bu kategori var mı kontrol et
+      const existingCategoryIndex = db.categories.findIndex(c => c.id === categoryId);
+      
+      if (existingCategoryIndex !== -1) {
+        // Kategori mevcut, güncelle
+        db.categories[existingCategoryIndex] = {
+          id: categoryId,
+          name: firebaseCategory.name || '',
+          order_index: firebaseCategory.order_index || 0
+        };
+        updatedCount++;
+      } else {
+        // Yeni kategori, ekle
+        db.categories.push({
+          id: categoryId,
+          name: firebaseCategory.name || '',
+          order_index: firebaseCategory.order_index || 0
+        });
+        addedCount++;
+      }
+    });
+    
+    // ID'leri sırala ve order_index'e göre sırala
+    db.categories.sort((a, b) => {
+      if (a.order_index !== b.order_index) {
+        return a.order_index - b.order_index;
+      }
+      return a.id - b.id;
+    });
+    
+    saveDatabase();
+    console.log(`✅ Firebase'den ${snapshot.size} kategori çekildi (${addedCount} yeni, ${updatedCount} güncellendi)`);
+  } catch (error) {
+    console.error('❌ Firebase\'den kategori çekme hatası:', error);
+  }
+}
+
+// Firebase'den ürünleri çek ve local database'e senkronize et
+async function syncProductsFromFirebase() {
+  if (!firestore || !firebaseCollection || !firebaseGetDocs) {
+    console.warn('⚠️ Firebase başlatılamadı, ürünler çekilemedi');
+    return;
+  }
+  
+  try {
+    console.log('📥 Firebase\'den ürünler çekiliyor...');
+    const productsRef = firebaseCollection(firestore, 'products');
+    const snapshot = await firebaseGetDocs(productsRef);
+    
+    let addedCount = 0;
+    let updatedCount = 0;
+    
+    snapshot.forEach((doc) => {
+      const firebaseProduct = doc.data();
+      const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id) : firebaseProduct.id;
+      
+      // Local database'de bu ürün var mı kontrol et
+      const existingProductIndex = db.products.findIndex(p => p.id === productId);
+      
+      if (existingProductIndex !== -1) {
+        // Ürün mevcut, güncelle
+        db.products[existingProductIndex] = {
+          id: productId,
+          name: firebaseProduct.name || '',
+          category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id) : firebaseProduct.category_id,
+          price: parseFloat(firebaseProduct.price) || 0,
+          image: firebaseProduct.image || null
+        };
+        updatedCount++;
+      } else {
+        // Yeni ürün, ekle
+        db.products.push({
+          id: productId,
+          name: firebaseProduct.name || '',
+          category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id) : firebaseProduct.category_id,
+          price: parseFloat(firebaseProduct.price) || 0,
+          image: firebaseProduct.image || null
+        });
+        addedCount++;
+      }
+    });
+    
+    saveDatabase();
+    console.log(`✅ Firebase'den ${snapshot.size} ürün çekildi (${addedCount} yeni, ${updatedCount} güncellendi)`);
+  } catch (error) {
+    console.error('❌ Firebase\'den ürün çekme hatası:', error);
+  }
+}
+
+// Firebase'den gerçek zamanlı kategori dinleme
+function setupCategoriesRealtimeListener() {
+  if (!firestore || !firebaseCollection || !firebaseOnSnapshot) {
+    console.warn('⚠️ Firebase başlatılamadı, kategori listener kurulamadı');
+    return null;
+  }
+  
+  try {
+    console.log('👂 Kategoriler için gerçek zamanlı listener başlatılıyor...');
+    const categoriesRef = firebaseCollection(firestore, 'categories');
+    
+    const unsubscribe = firebaseOnSnapshot(categoriesRef, (snapshot) => {
+      console.log('🔄 Firebase\'den kategori güncellemesi alındı');
+      
+      snapshot.docChanges().forEach((change) => {
+        const firebaseCategory = change.doc.data();
+        const categoryId = typeof firebaseCategory.id === 'string' ? parseInt(firebaseCategory.id) : firebaseCategory.id;
+        
+        if (change.type === 'added' || change.type === 'modified') {
+          // Kategori eklendi veya güncellendi
+          const existingCategoryIndex = db.categories.findIndex(c => c.id === categoryId);
+          
+          const categoryData = {
+            id: categoryId,
+            name: firebaseCategory.name || '',
+            order_index: firebaseCategory.order_index || 0
+          };
+          
+          if (existingCategoryIndex !== -1) {
+            // Güncelle
+            db.categories[existingCategoryIndex] = categoryData;
+            console.log(`✅ Kategori güncellendi: ${categoryData.name} (ID: ${categoryId})`);
+          } else {
+            // Yeni ekle
+            db.categories.push(categoryData);
+            console.log(`✅ Yeni kategori eklendi: ${categoryData.name} (ID: ${categoryId})`);
+          }
+          
+          // ID'leri sırala ve order_index'e göre sırala
+          db.categories.sort((a, b) => {
+            if (a.order_index !== b.order_index) {
+              return a.order_index - b.order_index;
+            }
+            return a.id - b.id;
+          });
+          
+          saveDatabase();
+          
+          // Renderer process'e bildir
+          if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('categories-updated', db.categories);
+          }
+        } else if (change.type === 'removed') {
+          // Kategori silindi
+          const categoryIndex = db.categories.findIndex(c => c.id === categoryId);
+          if (categoryIndex !== -1) {
+            const deletedCategory = db.categories[categoryIndex];
+            db.categories.splice(categoryIndex, 1);
+            saveDatabase();
+            console.log(`✅ Kategori silindi: ${deletedCategory.name} (ID: ${categoryId})`);
+            
+            // Renderer process'e bildir
+            if (mainWindow && mainWindow.webContents) {
+              mainWindow.webContents.send('categories-updated', db.categories);
+            }
+          }
+        }
+      });
+    }, (error) => {
+      console.error('❌ Kategori listener hatası:', error);
+    });
+    
+    console.log('✅ Kategoriler için gerçek zamanlı listener aktif');
+    return unsubscribe;
+  } catch (error) {
+    console.error('❌ Kategori listener kurulum hatası:', error);
+    return null;
+  }
+}
+
+// Firebase'den gerçek zamanlı ürün dinleme
+function setupProductsRealtimeListener() {
+  if (!firestore || !firebaseCollection || !firebaseOnSnapshot) {
+    console.warn('⚠️ Firebase başlatılamadı, ürün listener kurulamadı');
+    return null;
+  }
+  
+  try {
+    console.log('👂 Ürünler için gerçek zamanlı listener başlatılıyor...');
+    const productsRef = firebaseCollection(firestore, 'products');
+    
+    const unsubscribe = firebaseOnSnapshot(productsRef, (snapshot) => {
+      console.log('🔄 Firebase\'den ürün güncellemesi alındı');
+      
+      snapshot.docChanges().forEach((change) => {
+        const firebaseProduct = change.doc.data();
+        const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id) : firebaseProduct.id;
+        
+        if (change.type === 'added' || change.type === 'modified') {
+          // Ürün eklendi veya güncellendi
+          const existingProductIndex = db.products.findIndex(p => p.id === productId);
+          
+          const productData = {
+            id: productId,
+            name: firebaseProduct.name || '',
+            category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id) : firebaseProduct.category_id,
+            price: parseFloat(firebaseProduct.price) || 0,
+            image: firebaseProduct.image || null
+          };
+          
+          if (existingProductIndex !== -1) {
+            // Güncelle
+            db.products[existingProductIndex] = productData;
+            console.log(`✅ Ürün güncellendi: ${productData.name} (ID: ${productId})`);
+          } else {
+            // Yeni ekle
+            db.products.push(productData);
+            console.log(`✅ Yeni ürün eklendi: ${productData.name} (ID: ${productId})`);
+          }
+          
+          saveDatabase();
+          
+          // Renderer process'e bildir
+          if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('products-updated', db.products);
+          }
+        } else if (change.type === 'removed') {
+          // Ürün silindi
+          const productIndex = db.products.findIndex(p => p.id === productId);
+          if (productIndex !== -1) {
+            const deletedProduct = db.products[productIndex];
+            db.products.splice(productIndex, 1);
+            saveDatabase();
+            console.log(`✅ Ürün silindi: ${deletedProduct.name} (ID: ${productId})`);
+            
+            // Renderer process'e bildir
+            if (mainWindow && mainWindow.webContents) {
+              mainWindow.webContents.send('products-updated', db.products);
+            }
+          }
+        }
+      });
+    }, (error) => {
+      console.error('❌ Ürün listener hatası:', error);
+    });
+    
+    console.log('✅ Ürünler için gerçek zamanlı listener aktif');
+    return unsubscribe;
+  } catch (error) {
+    console.error('❌ Ürün listener kurulum hatası:', error);
+    return null;
+  }
+}
+
 function createWindow() {
   // Menü çubuğunu kaldır
   Menu.setApplicationMenu(null);
@@ -259,11 +609,17 @@ ipcMain.handle('create-category', (event, categoryData) => {
   
   db.categories.push(newCategory);
   saveDatabase();
+  
+  // Firebase'e kaydet
+  saveCategoryToFirebase(newCategory).catch(err => {
+    console.error('Firebase kategori kaydetme hatası:', err);
+  });
+  
   return { success: true, category: newCategory };
 });
 
 // Kategori silme handler'ı
-ipcMain.handle('delete-category', (event, categoryId) => {
+ipcMain.handle('delete-category', async (event, categoryId) => {
   const category = db.categories.find(c => c.id === categoryId);
   
   if (!category) {
@@ -301,6 +657,28 @@ ipcMain.handle('delete-category', (event, categoryId) => {
         }
       });
     });
+    
+    // Firebase'den tüm ürünleri sil
+    if (firestore && firebaseDoc && firebaseDeleteDoc) {
+      try {
+        for (const product of productsInCategory) {
+          try {
+            const productRef = firebaseDoc(firestore, 'products', product.id.toString());
+            await firebaseDeleteDoc(productRef);
+            console.log(`✅ Ürün Firebase'den silindi: ${product.name} (ID: ${product.id})`);
+          } catch (productError) {
+            console.error(`❌ Ürün Firebase'den silinirken hata (ID: ${product.id}):`, productError.message);
+            // Bir ürün silinemediyse diğerlerini denemeye devam et
+          }
+        }
+        console.log(`✅ ${productsInCategory.length} ürün Firebase'den silindi`);
+      } catch (error) {
+        console.error('❌ Firebase\'den ürün silme hatası:', error);
+        console.error('Hata detayları:', error.message, error.code);
+      }
+    } else {
+      console.warn('⚠️ Firebase başlatılamadı, ürünler sadece local database\'den silindi');
+    }
   }
   
   // Kategoriye atanmış yazıcı var mı kontrol et
@@ -315,6 +693,22 @@ ipcMain.handle('delete-category', (event, categoryId) => {
   if (categoryIndex !== -1) {
     db.categories.splice(categoryIndex, 1);
     saveDatabase();
+    
+    // Firebase'den kategoriyi sil
+    if (firestore && firebaseDoc && firebaseDeleteDoc) {
+      try {
+        const categoryRef = firebaseDoc(firestore, 'categories', categoryId.toString());
+        await firebaseDeleteDoc(categoryRef);
+        console.log(`✅ Kategori Firebase'den silindi: ${category.name} (ID: ${categoryId})`);
+      } catch (error) {
+        console.error('❌ Firebase\'den kategori silme hatası:', error);
+        console.error('Hata detayları:', error.message, error.code);
+        // Hata olsa bile local'den silindi, devam et
+      }
+    } else {
+      console.warn('⚠️ Firebase başlatılamadı, kategori sadece local database\'den silindi');
+    }
+    
     return { success: true, deletedProducts: productsInCategory.length };
   }
   
@@ -1054,6 +1448,12 @@ ipcMain.handle('create-product', (event, productData) => {
   
   db.products.push(newProduct);
   saveDatabase();
+  
+  // Firebase'e kaydet
+  saveProductToFirebase(newProduct).catch(err => {
+    console.error('Firebase ürün kaydetme hatası:', err);
+  });
+  
   return { success: true, product: newProduct };
 });
 
@@ -1074,14 +1474,22 @@ ipcMain.handle('update-product', (event, productData) => {
   };
   
   saveDatabase();
+  
+  // Firebase'e kaydet
+  saveProductToFirebase(db.products[productIndex]).catch(err => {
+    console.error('Firebase ürün güncelleme hatası:', err);
+  });
+  
   return { success: true, product: db.products[productIndex] };
 });
 
-ipcMain.handle('delete-product', (event, productId) => {
+ipcMain.handle('delete-product', async (event, productId) => {
   const productIndex = db.products.findIndex(p => p.id === productId);
   if (productIndex === -1) {
     return { success: false, error: 'Ürün bulunamadı' };
   }
+  
+  const product = db.products[productIndex];
   
   // Check if product is used in any sale
   const isUsedInSale = db.saleItems.some(si => si.product_id === productId);
@@ -1091,6 +1499,22 @@ ipcMain.handle('delete-product', (event, productId) => {
   
   db.products.splice(productIndex, 1);
   saveDatabase();
+  
+  // Firebase'den ürünü sil
+  if (firestore && firebaseDoc && firebaseDeleteDoc) {
+    try {
+      const productRef = firebaseDoc(firestore, 'products', productId.toString());
+      await firebaseDeleteDoc(productRef);
+      console.log(`✅ Ürün Firebase'den silindi: ${product.name} (ID: ${productId})`);
+    } catch (error) {
+      console.error('❌ Firebase\'den ürün silme hatası:', error);
+      console.error('Hata detayları:', error.message, error.code);
+      // Hata olsa bile local'den silindi, devam et
+    }
+  } else {
+    console.warn('⚠️ Firebase başlatılamadı, ürün sadece local database\'den silindi');
+  }
+  
   return { success: true };
 });
 
@@ -2248,6 +2672,25 @@ app.whenReady().then(() => {
   initDatabase();
   createWindow();
   startAPIServer();
+
+  // Firebase senkronizasyonu: Önce Firebase'den çek, sonra local'den Firebase'e gönder
+  setTimeout(async () => {
+    console.log('🔄 Firebase senkronizasyonu başlatılıyor...');
+    
+    // 1. Önce Firebase'den kategorileri ve ürünleri çek
+    await syncCategoriesFromFirebase();
+    await syncProductsFromFirebase();
+    
+    // 2. Sonra local database'deki verileri Firebase'e gönder (iki yönlü senkronizasyon)
+    await syncCategoriesToFirebase();
+    await syncProductsToFirebase();
+    
+    // 3. Gerçek zamanlı listener'ları başlat (anında güncellemeler için)
+    setupCategoriesRealtimeListener();
+    setupProductsRealtimeListener();
+    
+    console.log('✅ Firebase senkronizasyonu tamamlandı ve gerçek zamanlı listener\'lar aktif');
+  }, 2000); // 2 saniye bekle, Firebase tam yüklensin
 
   // Uygulama paketlenmişse güncelleme kontrolü yap
   if (app.isPackaged) {

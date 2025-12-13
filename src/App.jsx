@@ -13,15 +13,7 @@ import PrintToast from './components/PrintToast';
 import SplashScreen from './components/SplashScreen';
 import ExitSplash from './components/ExitSplash';
 import UpdateModal from './components/UpdateModal';
-import VirtualKeyboard from './components/VirtualKeyboard';
-import { useVirtualKeyboard } from './hooks/useVirtualKeyboard';
-
 function App() {
-  const virtualKeyboardHook = useVirtualKeyboard();
-  const activeInput = virtualKeyboardHook?.activeInput || null;
-  const keyboardVisible = virtualKeyboardHook?.keyboardVisible || false;
-  const closeKeyboard = virtualKeyboardHook?.closeKeyboard || (() => {});
-  const handleInput = virtualKeyboardHook?.handleInput || (() => {});
   const [showSplash, setShowSplash] = useState(true);
   const [currentView, setCurrentView] = useState('pos'); // 'pos', 'sales', or 'tables'
   const [categories, setCategories] = useState([]);
@@ -582,9 +574,6 @@ function App() {
                   type="text"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  onFocus={() => {
-                    // Sanal klavye otomatik olarak focus event'i ile açılacak
-                  }}
                   placeholder="Ürün ara..."
                   className="w-full px-4 py-3 pl-12 bg-white/90 backdrop-blur-xl border-2 border-purple-200 rounded-xl shadow-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800 font-medium placeholder-gray-400 transition-all duration-300"
                 />
@@ -695,15 +684,6 @@ function App() {
             setUpdateInfo(null);
             setUpdateDownloadProgress(null);
           }}
-        />
-      )}
-
-      {/* Virtual Keyboard */}
-      {keyboardVisible && (
-        <VirtualKeyboard
-          targetInput={activeInput}
-          onClose={closeKeyboard}
-          onInput={handleInput}
         />
       )}
       </div>

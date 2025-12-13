@@ -639,40 +639,141 @@ const SalesHistory = () => {
       ? sales.filter(sale => sale.sale_date === selectedDate)
       : sales;
 
-    // Personel bazlı istatistikleri hesapla
+    // Personel bazlı istatistikleri hesapla - Gerçek verilerle (item bazlı personel bilgileri)
     const staffStats = {};
     
     reportSales.forEach(sale => {
-      if (!sale.staff_name) return; // Staff bilgisi yoksa atla
-      
-      if (!staffStats[sale.staff_name]) {
-        staffStats[sale.staff_name] = {
-          name: sale.staff_name,
-          totalRevenue: 0,
-          totalSales: 0,
-          products: {},
-          averageSale: 0
-        };
-      }
-      
-      staffStats[sale.staff_name].totalRevenue += parseFloat(sale.total_amount);
-      staffStats[sale.staff_name].totalSales += 1;
-      
-      // Ürün istatistikleri
-      if (sale.items) {
-        const items = sale.items.split(', ');
-        items.forEach(item => {
-          const match = item.match(/(.+) x(\d+)/);
-          if (match) {
-            const [, productName] = match;
-            const cleanProductName = productName.replace(' (İKRAM)', '');
-            
-            if (!staffStats[sale.staff_name].products[cleanProductName]) {
-              staffStats[sale.staff_name].products[cleanProductName] = 0;
-            }
-            staffStats[sale.staff_name].products[cleanProductName] += parseInt(match[2]);
+      // Item bazlı personel bilgilerini kullan (items_array'de staff_name var)
+      if (sale.items_array && Array.isArray(sale.items_array) && sale.items_array.length > 0) {
+        // Bu satışta hangi personeller var (satış sayısı için)
+        const staffInThisSale = new Set();
+        
+        // Her item için personel bilgisini kontrol et
+        sale.items_array.forEach(item => {
+          // Her item için personel bilgisi varsa o personelin satışı olarak say
+          const itemStaffName = item.staff_name || sale.staff_name;
+          
+          if (!itemStaffName) return; // Personel bilgisi yoksa atla
+          
+          // Bu personeli bu satışta işaretle
+          staffInThisSale.add(itemStaffName);
+          
+          if (!staffStats[itemStaffName]) {
+            staffStats[itemStaffName] = {
+              name: itemStaffName,
+              totalRevenue: 0,
+              totalSales: 0,
+              products: {}, // { productName: { count: number, revenue: number } }
+              averageSale: 0,
+              totalItemsSold: 0,
+              totalGiftItems: 0
+            };
+          }
+          
+          const productName = item.product_name;
+          const quantity = item.quantity || 0;
+          const price = parseFloat(item.price || 0);
+          const isGift = item.isGift || false;
+          
+          // Bu item'ın gelirini hesapla (ikram değilse)
+          if (!isGift) {
+            staffStats[itemStaffName].totalRevenue += (price * quantity);
+          }
+          
+          // Ürün istatistikleri
+          if (!staffStats[itemStaffName].products[productName]) {
+            staffStats[itemStaffName].products[productName] = {
+              count: 0,
+              revenue: 0
+            };
+          }
+          
+          staffStats[itemStaffName].products[productName].count += quantity;
+          if (!isGift) {
+            staffStats[itemStaffName].products[productName].revenue += (price * quantity);
+          }
+          
+          staffStats[itemStaffName].totalItemsSold += quantity;
+          if (isGift) {
+            staffStats[itemStaffName].totalGiftItems += quantity;
           }
         });
+        
+        // Satış sayısını hesapla (her personel için en az bir item varsa bir satış sayılır)
+        staffInThisSale.forEach(staffName => {
+          if (staffStats[staffName]) {
+            // Her personel için o personelin ürün sattığı her satış bir satış sayılır
+            staffStats[staffName].totalSales += 1;
+          }
+        });
+      } else if (sale.staff_name) {
+        // Fallback: Satış seviyesinde personel bilgisi varsa (eski format)
+        if (!staffStats[sale.staff_name]) {
+          staffStats[sale.staff_name] = {
+            name: sale.staff_name,
+            totalRevenue: 0,
+            totalSales: 0,
+            products: {},
+            averageSale: 0,
+            totalItemsSold: 0,
+            totalGiftItems: 0
+          };
+        }
+        
+        staffStats[sale.staff_name].totalRevenue += parseFloat(sale.total_amount);
+        staffStats[sale.staff_name].totalSales += 1;
+        
+        // Gerçek item verilerini kullan (items_array varsa)
+        if (sale.items_array && Array.isArray(sale.items_array) && sale.items_array.length > 0) {
+          sale.items_array.forEach(item => {
+            const productName = item.product_name;
+            const quantity = item.quantity || 0;
+            const price = parseFloat(item.price || 0);
+            const isGift = item.isGift || false;
+            
+            if (!staffStats[sale.staff_name].products[productName]) {
+              staffStats[sale.staff_name].products[productName] = {
+                count: 0,
+                revenue: 0
+              };
+            }
+            
+            staffStats[sale.staff_name].products[productName].count += quantity;
+            if (!isGift) {
+              staffStats[sale.staff_name].products[productName].revenue += (price * quantity);
+            }
+            
+            staffStats[sale.staff_name].totalItemsSold += quantity;
+            if (isGift) {
+              staffStats[sale.staff_name].totalGiftItems += quantity;
+            }
+          });
+        } else if (sale.items) {
+          // Fallback: Eski string formatı (uyumluluk için)
+          const items = sale.items.split(', ');
+          items.forEach(item => {
+            const match = item.match(/(.+) x(\d+)/);
+            if (match) {
+              const [, productName] = match;
+              const cleanProductName = productName.replace(' (İKRAM)', '');
+              const quantity = parseInt(match[2]);
+              const isGift = item.includes('(İKRAM)');
+              
+              if (!staffStats[sale.staff_name].products[cleanProductName]) {
+                staffStats[sale.staff_name].products[cleanProductName] = {
+                  count: 0,
+                  revenue: 0
+                };
+              }
+              
+              staffStats[sale.staff_name].products[cleanProductName].count += quantity;
+              staffStats[sale.staff_name].totalItemsSold += quantity;
+              if (isGift) {
+                staffStats[sale.staff_name].totalGiftItems += quantity;
+              }
+            }
+          });
+        }
       }
     });
     
@@ -737,10 +838,20 @@ const SalesHistory = () => {
         {/* Personel Kartları */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {sortedStaff.map((staff, index) => {
-            // En çok satılan ürünü bul
-            const topProducts = Object.entries(staff.products)
+            // En çok satılan ürünleri bul (adet bazlı)
+            const topProductsByCount = Object.entries(staff.products)
+              .map(([name, data]) => [name, typeof data === 'object' ? data.count : data])
               .sort(([, a], [, b]) => b - a)
               .slice(0, 3);
+            
+            // En çok kazandıran ürünleri bul (gelir bazlı)
+            const topProductsByRevenue = Object.entries(staff.products)
+              .map(([name, data]) => [name, typeof data === 'object' ? data.revenue : 0])
+              .filter(([, revenue]) => revenue > 0)
+              .sort(([, a], [, b]) => b - a)
+              .slice(0, 3);
+            
+            const topProducts = topProductsByCount;
             
             return (
               <div
@@ -781,6 +892,23 @@ const SalesHistory = () => {
                       ₺{staff.averageSale.toFixed(2)}
                     </p>
                   </div>
+                  <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
+                    <p className="text-xs font-semibold text-gray-600 mb-1">Toplam Satış</p>
+                    <p className="text-2xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">
+                      {staff.totalSales}
+                    </p>
+                  </div>
+                  <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-xl p-4 border border-orange-200">
+                    <p className="text-xs font-semibold text-gray-600 mb-1">Toplam Ürün</p>
+                    <p className="text-2xl font-bold bg-gradient-to-r from-orange-500 to-amber-500 bg-clip-text text-transparent">
+                      {staff.totalItemsSold || 0}
+                    </p>
+                    {staff.totalGiftItems > 0 && (
+                      <p className="text-xs text-gray-500 mt-1">
+                        ({staff.totalGiftItems} ikram)
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 {/* En Çok Satılan Ürünler */}
@@ -793,20 +921,31 @@ const SalesHistory = () => {
                       <span>En Çok Sattığı Ürünler</span>
                     </h4>
                     <div className="space-y-2">
-                      {topProducts.map(([productName, count], idx) => (
-                        <div
-                          key={productName}
-                          className="flex items-center justify-between p-3 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg"
-                        >
-                          <div className="flex items-center space-x-3">
-                            <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center text-white font-bold text-sm">
-                              {idx + 1}
+                      {topProducts.map(([productName, countOrData], idx) => {
+                        const productData = typeof countOrData === 'object' ? countOrData : { count: countOrData, revenue: 0 };
+                        const count = productData.count || 0;
+                        const revenue = productData.revenue || 0;
+                        
+                        return (
+                          <div
+                            key={productName}
+                            className="flex items-center justify-between p-3 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg"
+                          >
+                            <div className="flex items-center space-x-3 flex-1 min-w-0">
+                              <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                                {idx + 1}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <span className="font-medium text-gray-900 block truncate">{productName}</span>
+                                {revenue > 0 && (
+                                  <span className="text-xs text-gray-600">₺{revenue.toFixed(2)} kazandırdı</span>
+                                )}
+                              </div>
                             </div>
-                            <span className="font-medium text-gray-900">{productName}</span>
+                            <span className="text-sm font-semibold text-purple-600 ml-2 flex-shrink-0">{count} adet</span>
                           </div>
-                          <span className="text-sm font-semibold text-purple-600">{count} adet</span>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}

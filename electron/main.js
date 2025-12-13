@@ -410,17 +410,31 @@ ipcMain.handle('create-sale', async (event, saleData) => {
 ipcMain.handle('get-sales', () => {
   // Satışları ve itemları birleştir
   const salesWithItems = db.sales.map(sale => {
-    const items = db.saleItems
-      .filter(si => si.sale_id === sale.id)
+    const saleItems = db.saleItems.filter(si => si.sale_id === sale.id);
+    
+    // Items string'i (eski format için uyumluluk)
+    const items = saleItems
       .map(si => {
         const giftText = si.isGift ? ' (İKRAM)' : '';
         return `${si.product_name} x${si.quantity}${giftText}`;
       })
       .join(', ');
     
+    // Items array (gerçek veriler için - personel bilgisi dahil)
+    const itemsArray = saleItems.map(si => ({
+      product_id: si.product_id,
+      product_name: si.product_name,
+      quantity: si.quantity,
+      price: si.price,
+      isGift: si.isGift || false,
+      staff_id: si.staff_id || null,
+      staff_name: si.staff_name || null // Her item için personel bilgisi
+    }));
+    
     return {
       ...sale,
-      items: items || 'Ürün bulunamadı'
+      items: items || 'Ürün bulunamadı',
+      items_array: itemsArray // Gerçek item detayları (personel bilgisi dahil)
     };
   });
   
@@ -594,6 +608,22 @@ ipcMain.handle('complete-table-order', async (event, orderId) => {
   // Satış itemlarını al
   const orderItems = db.tableOrderItems.filter(oi => oi.order_id === orderId);
 
+  // Staff bilgilerini topla (varsa) - En çok ürün ekleyen personel ana personel olarak kaydedilir
+  const staffCounts = {};
+  orderItems.forEach(item => {
+    if (item.staff_name) {
+      if (!staffCounts[item.staff_name]) {
+        staffCounts[item.staff_name] = 0;
+      }
+      staffCounts[item.staff_name] += item.quantity;
+    }
+  });
+  
+  // En çok ürün ekleyen personel ana personel
+  const mainStaffName = Object.keys(staffCounts).length > 0
+    ? Object.keys(staffCounts).reduce((a, b) => staffCounts[a] > staffCounts[b] ? a : b)
+    : null;
+
   // Satış ekle
   db.sales.push({
     id: saleId,
@@ -602,10 +632,11 @@ ipcMain.handle('complete-table-order', async (event, orderId) => {
     sale_date: saleDate,
     sale_time: saleTime,
     table_name: order.table_name,
-    table_type: order.table_type
+    table_type: order.table_type,
+    staff_name: mainStaffName // Ana personel bilgisi
   });
 
-  // Satış itemlarını ekle
+  // Satış itemlarını ekle - Her item için personel bilgisini de kaydet
   orderItems.forEach(item => {
     const itemId = db.saleItems.length > 0 
       ? Math.max(...db.saleItems.map(si => si.id)) + 1 
@@ -618,7 +649,9 @@ ipcMain.handle('complete-table-order', async (event, orderId) => {
       product_name: item.product_name,
       quantity: item.quantity,
       price: item.price,
-      isGift: item.isGift || false
+      isGift: item.isGift || false,
+      staff_id: item.staff_id || null, // Her ürün için personel bilgisi
+      staff_name: item.staff_name || null
     });
   });
 
@@ -654,7 +687,9 @@ ipcMain.handle('complete-table-order', async (event, orderId) => {
           product_name: item.product_name,
           quantity: item.quantity,
           price: item.price,
-          isGift: item.isGift || false
+          isGift: item.isGift || false,
+          staff_id: item.staff_id || null,
+          staff_name: item.staff_name || null // Her item için personel bilgisi
         })),
         created_at: firebaseServerTimestamp()
       });
@@ -704,6 +739,22 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
   // Satış itemlarını al (kısmi ödeme için tüm ürünleri göster, sadece ödeme yöntemi farklı)
   const orderItems = db.tableOrderItems.filter(oi => oi.order_id === saleData.orderId);
 
+  // Staff bilgilerini topla (varsa) - En çok ürün ekleyen personel ana personel olarak kaydedilir
+  const staffCounts = {};
+  orderItems.forEach(item => {
+    if (item.staff_name) {
+      if (!staffCounts[item.staff_name]) {
+        staffCounts[item.staff_name] = 0;
+      }
+      staffCounts[item.staff_name] += item.quantity;
+    }
+  });
+  
+  // En çok ürün ekleyen personel ana personel
+  const mainStaffName = Object.keys(staffCounts).length > 0
+    ? Object.keys(staffCounts).reduce((a, b) => staffCounts[a] > staffCounts[b] ? a : b)
+    : null;
+
   // Satış ekle
   db.sales.push({
     id: saleId,
@@ -712,10 +763,11 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
     sale_date: saleDate,
     sale_time: saleTime,
     table_name: saleData.tableName,
-    table_type: saleData.tableType
+    table_type: saleData.tableType,
+    staff_name: mainStaffName // Ana personel bilgisi
   });
 
-  // Satış itemlarını ekle
+  // Satış itemlarını ekle - Her item için personel bilgisini de kaydet
   orderItems.forEach(item => {
     const itemId = db.saleItems.length > 0 
       ? Math.max(...db.saleItems.map(si => si.id)) + 1 
@@ -728,7 +780,9 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
       product_name: item.product_name,
       quantity: item.quantity,
       price: item.price,
-      isGift: item.isGift || false
+      isGift: item.isGift || false,
+      staff_id: item.staff_id || null, // Her ürün için personel bilgisi
+      staff_name: item.staff_name || null
     });
   });
 
@@ -764,7 +818,9 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
           product_name: item.product_name,
           quantity: item.quantity,
           price: item.price,
-          isGift: item.isGift || false
+          isGift: item.isGift || false,
+          staff_id: item.staff_id || null,
+          staff_name: item.staff_name || null // Her item için personel bilgisi
         })),
         created_at: firebaseServerTimestamp()
       });
@@ -3976,6 +4032,141 @@ function generateMobileHTML(serverURL) {
         width: 100%;
       }
     }
+    /* Mevcut Siparişler Bölümü */
+    .existing-orders {
+      margin-bottom: 20px;
+      padding: 0 0 15px 0;
+    }
+    .existing-orders-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1f2937;
+      margin-bottom: 12px;
+      padding: 0 5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .existing-orders-title::before {
+      content: '📋';
+      font-size: 18px;
+    }
+    .order-card {
+      background: white;
+      border: 2px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 12px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      transition: all 0.3s;
+    }
+    .order-card:hover {
+      border-color: #a855f7;
+      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.15);
+    }
+    .order-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      padding-bottom: 12px;
+      border-bottom: 2px solid #f3f4f6;
+    }
+    .order-staff-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #6b7280;
+      font-weight: 600;
+    }
+    .order-staff-info::before {
+      content: '👤';
+      font-size: 16px;
+    }
+    .order-time {
+      font-size: 12px;
+      color: #9ca3af;
+      font-weight: 500;
+    }
+    .order-items {
+      margin-top: 12px;
+    }
+    .order-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #f3f4f6;
+    }
+    .order-item:last-child {
+      border-bottom: none;
+    }
+    .order-item-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #1f2937;
+      flex: 1;
+    }
+    .order-item-name.gift {
+      color: #10b981;
+    }
+    .order-item-name.gift::after {
+      content: ' (İKRAM)';
+      font-size: 11px;
+      color: #10b981;
+      font-weight: 500;
+    }
+    .order-item-details {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      color: #6b7280;
+    }
+    .order-item-qty {
+      background: #f3f4f6;
+      padding: 4px 10px;
+      border-radius: 8px;
+      font-weight: 700;
+      color: #1f2937;
+    }
+    .order-item-price {
+      font-weight: 700;
+      color: #a855f7;
+      min-width: 70px;
+      text-align: right;
+    }
+    .order-total {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 2px solid #e5e7eb;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .order-total-label {
+      font-size: 15px;
+      font-weight: 700;
+      color: #1f2937;
+    }
+    .order-total-amount {
+      font-size: 18px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+    .no-orders {
+      text-align: center;
+      padding: 30px 20px;
+      color: #9ca3af;
+      font-size: 14px;
+      background: #f9fafb;
+      border-radius: 12px;
+      border: 2px dashed #e5e7eb;
+    }
   </style>
 </head>
 <body>
@@ -4064,6 +4255,12 @@ function generateMobileHTML(serverURL) {
         <!-- Masa Bilgisi - Minimal -->
         <div style="text-align: center; margin-bottom: 16px; padding: 8px 12px; background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border-radius: 10px; border: 1px solid #e5e7eb;">
           <span style="font-size: 13px; font-weight: 600; color: #6b7280;" id="selectedTableInfo"></span>
+        </div>
+        
+        <!-- Mevcut Siparişler -->
+        <div class="existing-orders" id="existingOrders" style="display: none;">
+          <div class="existing-orders-title">Mevcut Siparişler</div>
+          <div id="existingOrdersList"></div>
         </div>
         
         <!-- Ürünler -->
@@ -4260,6 +4457,10 @@ function generateMobileHTML(serverURL) {
                 }
               }
             }
+            // Eğer seçili masa varsa siparişleri yenile
+            if (selectedTable && selectedTable.id === data.tableId) {
+              await loadExistingOrders(selectedTable.id);
+            }
           } catch (error) {
             console.error('Masa güncelleme hatası:', error);
             // Hata durumunda sadece mevcut veriyi güncelle
@@ -4270,6 +4471,13 @@ function generateMobileHTML(serverURL) {
                 renderTables();
               }
             }
+          }
+        });
+        socket.on('new-order', async (data) => {
+          console.log('📦 Yeni sipariş alındı:', data);
+          // Eğer seçili masa varsa siparişleri yenile
+          if (selectedTable && selectedTable.id === data.tableId) {
+            await loadExistingOrders(selectedTable.id);
           }
         });
         socket.on('staff-deleted', (data) => {
@@ -4336,7 +4544,7 @@ function generateMobileHTML(serverURL) {
       }).join('');
     }
     
-    function selectTable(id, name, type) {
+    async function selectTable(id, name, type) {
       selectedTable = { id, name, type };
       renderTables();
       document.getElementById('tableSelection').style.display = 'none';
@@ -4351,7 +4559,74 @@ function generateMobileHTML(serverURL) {
       document.getElementById('selectedTableInfo').textContent = name + ' için sipariş oluşturuluyor';
       // Arama çubuğunu temizle
       document.getElementById('searchInput').value = '';
+      // Mevcut siparişleri yükle
+      await loadExistingOrders(id);
       if (categories.length > 0) selectCategory(categories[0].id);
+    }
+    
+    async function loadExistingOrders(tableId) {
+      try {
+        const response = await fetch(API_URL + '/table-orders?tableId=' + encodeURIComponent(tableId));
+        if (!response.ok) {
+          throw new Error('Siparişler yüklenemedi');
+        }
+        const orders = await response.json();
+        renderExistingOrders(orders);
+      } catch (error) {
+        console.error('Sipariş yükleme hatası:', error);
+        document.getElementById('existingOrders').style.display = 'none';
+      }
+    }
+    
+    function renderExistingOrders(orders) {
+      const ordersContainer = document.getElementById('existingOrders');
+      const ordersList = document.getElementById('existingOrdersList');
+      
+      if (!orders || orders.length === 0) {
+        ordersContainer.style.display = 'none';
+        return;
+      }
+      
+      ordersContainer.style.display = 'block';
+      
+      ordersList.innerHTML = orders.map(order => {
+        const orderDate = order.order_date || '';
+        const orderTime = order.order_time || '';
+        const staffName = order.staff_name || 'Bilinmiyor';
+        const orderNote = order.order_note ? '<div style="margin-top: 12px; padding: 10px; background: #fef3c7; border-radius: 8px; border-left: 3px solid #f59e0b;"><div style="font-size: 12px; font-weight: 600; color: #92400e; margin-bottom: 4px;">Not:</div><div style="font-size: 13px; color: #78350f;">' + order.order_note.replace(/\\n/g, '<br>') + '</div></div>' : '';
+        
+        const itemsHtml = order.items.map(item => {
+          const itemTotal = (item.price * item.quantity).toFixed(2);
+          const giftClass = item.isGift ? ' gift' : '';
+          const itemStaffName = item.staff_name || 'Bilinmiyor';
+          return '<div class="order-item">' +
+            '<div class="order-item-name' + giftClass + '">' + item.product_name + '</div>' +
+            '<div class="order-item-details">' +
+              '<span class="order-item-qty">×' + item.quantity + '</span>' +
+              '<span class="order-item-price">' + itemTotal + ' ₺</span>' +
+            '</div>' +
+          '</div>' +
+          '<div style="font-size: 11px; color: #9ca3af; margin-top: 4px; margin-bottom: 8px; padding-left: 4px;">👤 ' + itemStaffName + ' • ' + (item.added_date || '') + ' ' + (item.added_time || '') + '</div>';
+        }).join('');
+        
+        const totalAmount = order.items.reduce((sum, item) => {
+          if (item.isGift) return sum;
+          return sum + (item.price * item.quantity);
+        }, 0).toFixed(2);
+        
+        return '<div class="order-card">' +
+          '<div class="order-header">' +
+            '<div class="order-staff-info">' + staffName + '</div>' +
+            '<div class="order-time">' + orderDate + ' ' + orderTime + '</div>' +
+          '</div>' +
+          '<div class="order-items">' + itemsHtml + '</div>' +
+          orderNote +
+          '<div class="order-total">' +
+            '<span class="order-total-label">Toplam:</span>' +
+            '<span class="order-total-amount">' + totalAmount + ' ₺</span>' +
+          '</div>' +
+        '</div>';
+      }).join('');
     }
     
     function goBackToTables() {
@@ -4598,18 +4873,15 @@ function generateMobileHTML(serverURL) {
           
           showToast('success', 'Sipariş Başarılı', message);
           
+          // Sepeti temizle ama masada kal
+          const currentTableId = selectedTable.id;
           cart = []; 
-          selectedTable = null; 
           updateCart();
-          document.getElementById('tableSelection').style.display = 'block';
-          document.getElementById('orderSection').style.display = 'none';
-          const cartEl = document.getElementById('cart');
-          if (cartEl) {
-            cartEl.style.display = 'none';
-            cartEl.classList.remove('open');
-          }
           document.getElementById('searchInput').value = '';
           searchQuery = '';
+          
+          // Siparişleri yenile
+          await loadExistingOrders(currentTableId);
           loadData();
         } else {
           showToast('error', 'Hata', result.error || 'Sipariş gönderilemedi');
@@ -4721,6 +4993,31 @@ function startAPIServer() {
       });
     }
     res.json(tables);
+  });
+
+  // Masa siparişlerini getir
+  appExpress.get('/api/table-orders', (req, res) => {
+    const { tableId } = req.query;
+    if (!tableId) {
+      return res.status(400).json({ error: 'tableId gerekli' });
+    }
+    
+    const orders = (db.tableOrders || []).filter(
+      o => o.table_id === tableId && o.status === 'pending'
+    );
+    
+    // Her sipariş için itemları ekle
+    const ordersWithItems = orders.map(order => {
+      const items = (db.tableOrderItems || []).filter(
+        item => item.order_id === order.id
+      );
+      return {
+        ...order,
+        items: items
+      };
+    });
+    
+    res.json(ordersWithItems);
   });
 
   appExpress.get('/mobile', (req, res) => {

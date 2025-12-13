@@ -197,9 +197,10 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       items: adisyonItems,
       tableName: selectedOrder.table_name,
       tableType: selectedOrder.table_type,
-      orderNote: null, // Order'da order_note yoksa null
+      orderNote: selectedOrder.order_note || null,
       sale_date: selectedOrder.order_date || new Date().toLocaleDateString('tr-TR'),
-      sale_time: selectedOrder.order_time || new Date().toLocaleTimeString('tr-TR')
+      sale_time: selectedOrder.order_time || new Date().toLocaleTimeString('tr-TR'),
+      cashierOnly: true // Sadece kasa yazıcısından fiyatlı fiş
     };
 
     try {
@@ -392,6 +393,24 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           }}
           onCompleteTable={handleCompleteTable}
           onPartialPayment={handlePartialPayment}
+          onItemCancelled={async () => {
+            // Ürün iptal edildiğinde sipariş detaylarını yenile
+            if (selectedOrder && window.electronAPI && window.electronAPI.getTableOrderItems) {
+              try {
+                const updatedItems = await window.electronAPI.getTableOrderItems(selectedOrder.id);
+                setOrderItems(updatedItems || []);
+                // Sipariş bilgisini de güncelle
+                const updatedOrders = await window.electronAPI.getTableOrders();
+                const updatedOrder = updatedOrders.find(o => o.id === selectedOrder.id);
+                if (updatedOrder) {
+                  setSelectedOrder(updatedOrder);
+                }
+                loadTableOrders(); // Tüm siparişleri yenile
+              } catch (error) {
+                console.error('Sipariş detayları yenilenemedi:', error);
+              }
+            }
+          }}
           onRequestAdisyon={handleRequestAdisyon}
           onAddItems={handleAddItems}
         />

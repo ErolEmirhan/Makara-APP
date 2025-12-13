@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 
-const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems }) => {
+const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled }) => {
   const [sessionDuration, setSessionDuration] = useState('');
   const [selectedItemDetail, setSelectedItemDetail] = useState(null);
+  const [cancellingItemId, setCancellingItemId] = useState(null);
+  const [cancelConfirmItem, setCancelConfirmItem] = useState(null);
 
   if (!order) return null;
 
@@ -48,6 +50,39 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   const remainingAmount = order.total_amount || 0;
   // Ödenen kısmi ödeme tutarı
   const paidAmount = originalTotalAmount - remainingAmount;
+
+  // Ürün iptal etme fonksiyonu
+  const handleCancelItem = (item) => {
+    if (!window.electronAPI || !window.electronAPI.cancelTableOrderItem) {
+      alert('İptal işlemi şu anda kullanılamıyor');
+      return;
+    }
+    setCancelConfirmItem(item);
+  };
+
+  // İptal onayı
+  const confirmCancelItem = async () => {
+    if (!cancelConfirmItem) return;
+
+    setCancellingItemId(cancelConfirmItem.id);
+    try {
+      const result = await window.electronAPI.cancelTableOrderItem(cancelConfirmItem.id);
+      if (result.success) {
+        // Başarılı - parent component'e bildir
+        setCancelConfirmItem(null);
+        if (onItemCancelled) {
+          onItemCancelled();
+        }
+      } else {
+        alert(result.error || 'Ürün iptal edilemedi');
+      }
+    } catch (error) {
+      console.error('Ürün iptal hatası:', error);
+      alert('Ürün iptal edilirken bir hata oluştu');
+    } finally {
+      setCancellingItemId(null);
+    }
+  };
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
@@ -162,6 +197,24 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
                     </button>
+                    {order.status === 'pending' && (
+                      <button
+                        onClick={() => handleCancelItem(item)}
+                        disabled={cancellingItemId === item.id}
+                        className="p-2 hover:bg-red-100 rounded-lg transition-colors text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Ürünü İptal Et"
+                      >
+                        {cancellingItemId === item.id ? (
+                          <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                          </svg>
+                        ) : (
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        )}
+                      </button>
+                    )}
                   </div>
                 </div>
               )})}
@@ -267,6 +320,86 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
           )}
         </div>
       </div>
+
+      {/* İptal Onay Modal */}
+      {cancelConfirmItem && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] animate-fade-in">
+          <div className="bg-white backdrop-blur-xl border border-red-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 mx-auto mb-4 bg-gradient-to-br from-red-100 to-pink-100 rounded-full flex items-center justify-center">
+                <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-900 mb-2">Ürün İptali</h3>
+              <p className="text-gray-600 text-sm">Bu ürünü iptal etmek istediğinize emin misiniz?</p>
+            </div>
+
+            <div className="bg-gradient-to-r from-red-50 to-pink-50 rounded-2xl p-6 mb-6 border border-red-100">
+              <div className="space-y-3">
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 mb-1">Ürün Adı</p>
+                  <p className="text-lg font-bold text-gray-900">{cancelConfirmItem.product_name}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 mb-1">Adet</p>
+                    <p className="text-base font-bold text-gray-900">{cancelConfirmItem.quantity} adet</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-gray-500 mb-1">Toplam Tutar</p>
+                    <p className="text-base font-bold text-red-600">
+                      ₺{(cancelConfirmItem.price * cancelConfirmItem.quantity).toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6">
+              <div className="flex items-start space-x-3">
+                <svg className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-xs text-amber-800 font-medium">
+                  İptal edildiğinde bu ürünün kategorisine atanan yazıcıdan iptal fişi yazdırılacaktır.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-center gap-4">
+              <button
+                onClick={() => setCancelConfirmItem(null)}
+                disabled={cancellingItemId === cancelConfirmItem.id}
+                className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                İptal Et
+              </button>
+              <button
+                onClick={confirmCancelItem}
+                disabled={cancellingItemId === cancelConfirmItem.id}
+                className="px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white font-bold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                {cancellingItemId === cancelConfirmItem.id ? (
+                  <>
+                    <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span>İptal Ediliyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span>Evet, İptal Et</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Ürün Detay Modal */}
       {selectedItemDetail && (

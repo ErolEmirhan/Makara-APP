@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createTableOrder: (orderData) => ipcRenderer.invoke('create-table-order', orderData),
   getTableOrders: (tableId) => ipcRenderer.invoke('get-table-orders', tableId),
   getTableOrderItems: (orderId) => ipcRenderer.invoke('get-table-order-items', orderId),
+  cancelTableOrderItem: (itemId) => ipcRenderer.invoke('cancel-table-order-item', itemId),
   completeTableOrder: (orderId) => ipcRenderer.invoke('complete-table-order', orderId),
   // Settings API
   changePassword: (currentPin, newPin) => ipcRenderer.invoke('change-password', currentPin, newPin),
@@ -50,6 +51,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Admin Dashboard API
   // Staff Management API
   createStaff: (staffData) => ipcRenderer.invoke('create-staff', staffData),
+  updateStaffPassword: (staffId, newPassword) => ipcRenderer.invoke('update-staff-password', staffId, newPassword),
   deleteStaff: (staffId) => ipcRenderer.invoke('delete-staff', staffId),
   getStaff: () => ipcRenderer.invoke('get-staff'),
   verifyStaffPin: (password) => ipcRenderer.invoke('verify-staff-pin', password),

@@ -191,7 +191,8 @@ function App() {
       tableType: selectedTable.type,
       orderNote: orderNote || null,
       sale_date: new Date().toLocaleDateString('tr-TR'),
-      sale_time: new Date().toLocaleTimeString('tr-TR')
+      sale_time: new Date().toLocaleTimeString('tr-TR'),
+      cashierOnly: true // Sadece kasa yazıcısından fiyatlı fiş
     };
 
     try {

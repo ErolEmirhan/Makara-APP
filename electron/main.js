@@ -582,6 +582,98 @@ ipcMain.handle('get-table-order-items', (event, orderId) => {
   return db.tableOrderItems.filter(oi => oi.order_id === orderId);
 });
 
+// Masa siparişinden ürün iptal etme
+ipcMain.handle('cancel-table-order-item', async (event, itemId) => {
+  const item = db.tableOrderItems.find(oi => oi.id === itemId);
+  if (!item) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+
+  const order = db.tableOrders.find(o => o.id === item.order_id);
+  if (!order) {
+    return { success: false, error: 'Sipariş bulunamadı' };
+  }
+
+  if (order.status !== 'pending') {
+    return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
+  }
+
+  // Ürün bilgilerini al (kategori ve yazıcı için)
+  const product = db.products.find(p => p.id === item.product_id);
+  if (!product) {
+    return { success: false, error: 'Ürün bilgisi bulunamadı' };
+  }
+
+  // Kategori bilgisini al
+  const category = db.categories.find(c => c.id === product.category_id);
+  const categoryName = category ? category.name : 'Diğer';
+
+  // Bu kategoriye atanmış yazıcıyı bul
+  const assignment = db.printerAssignments.find(a => {
+    const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+    return assignmentCategoryId === product.category_id;
+  });
+
+  if (!assignment) {
+    return { success: false, error: 'Bu ürünün kategorisine yazıcı atanmamış' };
+  }
+
+  // İptal fişi yazdır
+  try {
+    const now = new Date();
+    const cancelDate = now.toLocaleDateString('tr-TR');
+    const cancelTime = getFormattedTime(now);
+
+    const cancelReceiptData = {
+      tableName: order.table_name,
+      tableType: order.table_type,
+      productName: item.product_name,
+      quantity: item.quantity,
+      price: item.price,
+      cancelDate: cancelDate,
+      cancelTime: cancelTime,
+      categoryName: categoryName
+    };
+
+    await printCancelReceipt(assignment.printerName, assignment.printerType, cancelReceiptData);
+  } catch (error) {
+    console.error('İptal fişi yazdırma hatası:', error);
+    // Yazdırma hatası olsa bile iptal işlemini devam ettir
+  }
+
+  // Ürünün tutarını hesapla (ikram değilse)
+  const itemAmount = item.isGift ? 0 : (item.price * item.quantity);
+
+  // Masa siparişinin toplam tutarını güncelle
+  order.total_amount = Math.max(0, order.total_amount - itemAmount);
+
+  // Ürünü siparişten sil
+  const itemIndex = db.tableOrderItems.findIndex(oi => oi.id === itemId);
+  if (itemIndex !== -1) {
+    db.tableOrderItems.splice(itemIndex, 1);
+  }
+
+  saveDatabase();
+
+  // Electron renderer process'e güncelleme gönder
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', { 
+      orderId: order.id,
+      tableId: order.table_id
+    });
+  }
+
+  // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
+  if (io) {
+    io.emit('table-update', {
+      tableId: order.table_id,
+      hasOrder: order.total_amount > 0
+    });
+  }
+
+  return { success: true, remainingAmount: order.total_amount };
+});
+
 ipcMain.handle('complete-table-order', async (event, orderId) => {
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
@@ -2448,7 +2540,47 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
     const items = adisyonData.items || [];
     console.log(`   Toplam ${items.length} ürün bulundu`);
     
-    // Kategori bazlı adisyon yazdırma
+    // Eğer cashierOnly flag'i true ise, sadece kasa yazıcısından fiyatlı fiş yazdır
+    if (adisyonData.cashierOnly === true) {
+      console.log('   💰 Sadece kasa yazıcısından fiyatlı fiş yazdırılıyor...');
+      
+      const cashierPrinter = db.settings.cashierPrinter;
+      if (!cashierPrinter || !cashierPrinter.printerName) {
+        console.error('   ❌ Kasa yazıcısı ayarlanmamış');
+        return { success: false, error: 'Kasa yazıcısı ayarlanmamış' };
+      }
+      
+      // Receipt formatında fiyatlı fiş oluştur
+      const receiptData = {
+        sale_id: null,
+        totalAmount: items.reduce((sum, item) => {
+          if (item.isGift) return sum;
+          return sum + (item.price * item.quantity);
+        }, 0),
+        paymentMethod: 'Adisyon',
+        sale_date: adisyonData.sale_date || new Date().toLocaleDateString('tr-TR'),
+        sale_time: adisyonData.sale_time || getFormattedTime(new Date()),
+        items: items,
+        orderNote: adisyonData.orderNote || null,
+        tableName: adisyonData.tableName || null,
+        tableType: adisyonData.tableType || null,
+        cashierOnly: true
+      };
+      
+      // Kasa yazıcısından fiyatlı fiş yazdır
+      await printToPrinter(
+        cashierPrinter.printerName,
+        cashierPrinter.printerType,
+        receiptData,
+        false,
+        null
+      );
+      
+      console.log(`\n=== KASA YAZICISINDAN FİYATLI FİŞ YAZDIRMA TAMAMLANDI ===`);
+      return { success: true, error: null };
+    }
+    
+    // Normal kategori bazlı adisyon yazdırma
     await printAdisyonByCategory(items, adisyonData);
     
     console.log(`\n=== ADİSYON YAZDIRMA İŞLEMİ TAMAMLANDI ===`);
@@ -3098,6 +3230,230 @@ function generateAdisyonHTML(items, adisyonData) {
 }
 
 // Mobil HTML oluştur
+// İptal fişi HTML formatı
+function generateCancelReceiptHTML(cancelData) {
+  const tableTypeText = cancelData.tableType === 'inside' ? 'İç Masa' : 'Dış Masa';
+  
+  return `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&display=swap" rel="stylesheet">
+      <style>
+        @media print {
+          @page {
+            size: 58mm auto;
+            margin: 0;
+            min-height: 100%;
+          }
+          body {
+            margin: 0;
+            padding: 8px 8px 12px 8px;
+            height: auto;
+            min-height: 100%;
+            color: #000 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+          * {
+            color: #000 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+          }
+        }
+        body {
+          font-family: 'Montserrat', sans-serif;
+          background: white;
+          color: #000;
+          margin: 0;
+          padding: 8px;
+          font-size: 10px;
+          line-height: 1.4;
+        }
+      </style>
+    </head>
+    <body>
+      <div style="text-align: center; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 2px dashed #dc2626;">
+        <h1 style="margin: 0; font-size: 14px; font-weight: 900; color: #dc2626; text-transform: uppercase; letter-spacing: 1px;">
+          ❌ İPTAL
+        </h1>
+      </div>
+      
+      <div style="margin-bottom: 10px; padding: 8px; background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border-left: 3px solid #dc2626; border-radius: 6px;">
+        <div style="margin-bottom: 6px;">
+          <p style="margin: 0; font-size: 9px; color: #991b1b; font-weight: 700; text-transform: uppercase;">Masa</p>
+          <p style="margin: 4px 0 0 0; font-size: 13px; font-weight: 900; color: #1e293b;">${tableTypeText} ${cancelData.tableName}</p>
+        </div>
+      </div>
+      
+      <div style="margin-bottom: 10px; padding: 10px; background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); border-left: 3px solid #f59e0b; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <div style="margin-bottom: 6px;">
+          <p style="margin: 0; font-size: 9px; color: #92400e; font-weight: 700; text-transform: uppercase;">Ürün</p>
+          <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 900; color: #1e293b;">${cancelData.productName}</p>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #f59e0b;">
+          <div>
+            <p style="margin: 0; font-size: 8px; color: #92400e; font-weight: 700;">Adet</p>
+            <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #1e293b;">${cancelData.quantity} adet</p>
+          </div>
+          <div style="text-align: right;">
+            <p style="margin: 0; font-size: 8px; color: #92400e; font-weight: 700;">Birim Fiyat</p>
+            <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #1e293b;">₺${cancelData.price.toFixed(2)}</p>
+          </div>
+        </div>
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 2px solid #f59e0b;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <p style="margin: 0; font-size: 9px; color: #92400e; font-weight: 700; text-transform: uppercase;">Toplam</p>
+            <p style="margin: 0; font-size: 14px; font-weight: 900; color: #dc2626;">₺${(cancelData.price * cancelData.quantity).toFixed(2)}</p>
+          </div>
+        </div>
+      </div>
+      
+      <div style="margin-top: 12px; padding-top: 8px; border-top: 2px dashed #d1d5db; text-align: center;">
+        <p style="margin: 0; font-size: 8px; color: #6b7280; font-weight: 700;">
+          ${cancelData.cancelDate} ${cancelData.cancelTime}
+        </p>
+        <p style="margin: 4px 0 0 0; font-size: 7px; color: #9ca3af; font-weight: 600;">
+          Kategori: ${cancelData.categoryName}
+        </p>
+      </div>
+    </body>
+    </html>
+  `;
+}
+
+// İptal fişi yazdırma fonksiyonu
+async function printCancelReceipt(printerName, printerType, cancelData) {
+  let printWindow = null;
+  
+  try {
+    console.log(`   [printCancelReceipt] İptal fişi yazdırılıyor: "${printerName || 'Varsayılan'}"`);
+    
+    // İptal fişi HTML içeriğini oluştur
+    const cancelHTML = generateCancelReceiptHTML(cancelData);
+
+    // Gizli bir pencere oluştur ve içeriği yükle
+    printWindow = new BrowserWindow({
+      show: false,
+      width: 220, // 58mm ≈ 220px (72 DPI'da)
+      height: 3000,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+
+    let printResolve, printReject;
+    const printPromise = new Promise((resolve, reject) => {
+      printResolve = resolve;
+      printReject = reject;
+    });
+
+    let targetPrinterName = printerName;
+    let printStarted = false;
+    
+    const startPrint = () => {
+      if (printStarted) return;
+      printStarted = true;
+      
+      setTimeout(async () => {
+        // Yazıcı kontrolü
+        if (targetPrinterName) {
+          try {
+            const powershellCmd = `Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json`;
+            const result = execSync(`powershell -Command "${powershellCmd}"`, { 
+              encoding: 'utf-8',
+              timeout: 5000 
+            });
+            
+            const printersData = JSON.parse(result);
+            const printersArray = Array.isArray(printersData) ? printersData : [printersData];
+            const availablePrinters = printersArray.map(p => p.Name || '').filter(n => n);
+            
+            const exactMatch = availablePrinters.find(p => p === targetPrinterName);
+            const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
+            
+            if (exactMatch) {
+              targetPrinterName = exactMatch;
+            } else if (partialMatch) {
+              targetPrinterName = partialMatch;
+            } else {
+              targetPrinterName = null;
+            }
+          } catch (error) {
+            console.error(`   ❌ Yazıcı kontrolü hatası:`, error.message);
+          }
+        }
+        
+        const printOptions = {
+          silent: true,
+          printBackground: true,
+          margins: { marginType: 'none' },
+          landscape: false,
+          scaleFactor: 100,
+          pagesPerSheet: 1,
+          collate: false,
+          color: false,
+          copies: 1,
+          duplex: 'none'
+        };
+        
+        if (targetPrinterName) {
+          printOptions.deviceName = targetPrinterName;
+        }
+
+        printWindow.webContents.print(printOptions, (success, errorType) => {
+          if (!success) {
+            printReject(new Error(errorType || 'İptal fişi yazdırma başarısız'));
+          } else {
+            console.log(`      ✅ İptal fişi yazdırma başarılı!`);
+            printResolve(true);
+          }
+          
+          setTimeout(() => {
+            if (printWindow && !printWindow.isDestroyed()) {
+              printWindow.close();
+              printWindow = null;
+            }
+          }, 1000);
+        });
+      }, 2000);
+    };
+
+    printWindow.webContents.once('did-finish-load', () => {
+      startPrint();
+    });
+
+    printWindow.webContents.once('dom-ready', () => {
+      startPrint();
+    });
+
+    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(cancelHTML)}`);
+
+    setTimeout(() => {
+      startPrint();
+    }, 3000);
+
+    await Promise.race([
+      printPromise,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('İptal fişi yazdırma timeout')), 10000))
+    ]);
+
+    return { success: true, printerName: targetPrinterName || 'Varsayılan' };
+  } catch (error) {
+    console.error(`   [printCancelReceipt] Hata:`, error.message);
+    
+    if (printWindow && !printWindow.isDestroyed()) {
+      printWindow.close();
+    }
+    
+    throw error;
+  }
+}
+
 function generateMobileHTML(serverURL) {
   return `<!DOCTYPE html>
 <html lang="tr">
@@ -5304,6 +5660,63 @@ ipcMain.handle('delete-staff', (event, staffId) => {
   }
   
   return { success: true };
+});
+
+ipcMain.handle('update-staff-password', (event, staffId, newPassword) => {
+  try {
+    console.log('🔐 Şifre güncelleme isteği:', { staffId, newPasswordLength: newPassword?.length });
+    
+    if (!staffId) {
+      console.error('❌ Personel ID eksik');
+      return { success: false, error: 'Personel ID gerekli' };
+    }
+    
+    if (!newPassword || newPassword.toString().trim() === '') {
+      console.error('❌ Yeni şifre eksik veya boş');
+      return { success: false, error: 'Yeni şifre gerekli' };
+    }
+
+    if (!db.staff) {
+      console.error('❌ db.staff dizisi mevcut değil, oluşturuluyor...');
+      db.staff = [];
+      saveDatabase();
+    }
+
+    // ID'yi sayıya çevir (string olarak gelmiş olabilir)
+    const staffIdNum = typeof staffId === 'string' ? parseInt(staffId) : staffId;
+    
+    const staff = db.staff.find(s => {
+      const sId = typeof s.id === 'string' ? parseInt(s.id) : s.id;
+      return sId === staffIdNum;
+    });
+    
+    if (!staff) {
+      console.error('❌ Personel bulunamadı. Mevcut personeller:', db.staff.map(s => ({ id: s.id, name: s.name })));
+      return { success: false, error: `Personel bulunamadı (ID: ${staffId})` };
+    }
+
+    console.log('✅ Personel bulundu:', { id: staff.id, name: staff.name, surname: staff.surname });
+
+    // Şifreyi güncelle
+    staff.password = newPassword.toString();
+    saveDatabase();
+
+    console.log('✅ Şifre güncellendi ve veritabanına kaydedildi');
+
+    // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
+    if (io) {
+      io.emit('staff-password-updated', {
+        staffId: staffIdNum,
+        message: 'Şifreniz güncellendi'
+      });
+      console.log('📡 Mobil arayüze bildirim gönderildi');
+    }
+
+    return { success: true, staff: { id: staff.id, name: staff.name, surname: staff.surname } };
+  } catch (error) {
+    console.error('❌ Şifre güncelleme hatası:', error);
+    return { success: false, error: error.message || 'Şifre güncellenirken bir hata oluştu' };
+  }
 });
 
 ipcMain.handle('get-staff', () => {

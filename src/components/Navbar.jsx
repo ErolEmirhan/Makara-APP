@@ -17,6 +17,8 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [newStaff, setNewStaff] = useState({ name: '', surname: '', password: '' });
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  const [editingStaff, setEditingStaff] = useState(null);
+  const [newPassword, setNewPassword] = useState('');
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const menuRef = useRef(null);
@@ -128,6 +130,43 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     }
   };
 
+  const handleUpdatePassword = async () => {
+    if (!editingStaff) {
+      alert('Personel seçilmedi');
+      return;
+    }
+
+    if (!newPassword || newPassword.trim().length < 4) {
+      alert('Şifre en az 4 karakter olmalıdır');
+      return;
+    }
+
+    try {
+      console.log('Şifre güncelleme isteği gönderiliyor:', { staffId: editingStaff.id, passwordLength: newPassword.length });
+      
+      const result = await window.electronAPI.updateStaffPassword(editingStaff.id, newPassword.trim());
+      
+      console.log('Şifre güncelleme sonucu:', result);
+      
+      if (result && result.success) {
+        const staffName = `${editingStaff.name} ${editingStaff.surname}`;
+        setEditingStaff(null);
+        setNewPassword('');
+        setSuccessMessage(`${staffName} şifresi başarıyla güncellendi`);
+        setShowSuccessToast(true);
+        setTimeout(() => setShowSuccessToast(false), 3000);
+        loadStaff();
+      } else {
+        const errorMsg = result?.error || 'Bilinmeyen hata';
+        console.error('Şifre güncelleme başarısız:', errorMsg);
+        alert('Şifre güncellenemedi: ' + errorMsg);
+      }
+    } catch (error) {
+      console.error('Şifre güncelleme hatası:', error);
+      alert('Şifre güncellenemedi: ' + (error.message || 'Bilinmeyen hata'));
+    }
+  };
+
 
   return (
     <nav className="h-20 bg-white/90 backdrop-blur-xl border-b border-purple-200 px-8 flex items-center justify-between shadow-lg relative z-50">
@@ -147,7 +186,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
         <div>
           <h1 className="text-3xl font-bold text-pink-500">Makara Satış Sistemi</h1>
-          <p className="text-xs text-gray-500 font-medium">v2.0.6</p>
+          <p className="text-xs text-gray-500 font-medium">v2.0.7</p>
         </div>
       </div>
 
@@ -446,12 +485,23 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                           <p className="font-medium text-gray-800">{staff.name} {staff.surname}</p>
                           <p className="text-xs text-gray-500">ID: {staff.id}</p>
                         </div>
-                        <button
-                          onClick={() => setDeleteConfirm(staff.id)}
-                          className="px-3 py-1 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-all"
-                        >
-                          Sil
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => {
+                              setEditingStaff(staff);
+                              setNewPassword('');
+                            }}
+                            className="px-3 py-1 bg-blue-500 text-white rounded-lg text-sm hover:bg-blue-600 transition-all"
+                          >
+                            Şifre Değiştir
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirm(staff.id)}
+                            className="px-3 py-1 bg-red-500 text-white rounded-lg text-sm hover:bg-red-600 transition-all"
+                          >
+                            Sil
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -496,6 +546,60 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                         setNewStaff({ name: '', surname: '', password: '' });
                       }}
                       className="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg font-medium hover:bg-gray-400 transition-all"
+                    >
+                      İptal
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Şifre Değiştirme Modal */}
+              {editingStaff && (
+                <div className="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-xl p-6 space-y-4 border border-blue-200 mt-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <h4 className="font-semibold text-gray-700">Şifre Değiştir</h4>
+                    <button
+                      onClick={() => {
+                        setEditingStaff(null);
+                        setNewPassword('');
+                      }}
+                      className="text-gray-500 hover:text-gray-700 transition-colors"
+                    >
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-600 mb-2">
+                      <span className="font-semibold">{editingStaff.name} {editingStaff.surname}</span> için yeni şifre
+                    </p>
+                    <input
+                      type="password"
+                      placeholder="Yeni şifre (min. 4 karakter)"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      className="w-full px-4 py-2 border border-blue-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          handleUpdatePassword();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleUpdatePassword}
+                      className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-lg font-medium hover:shadow-lg transition-all"
+                    >
+                      Kaydet
+                    </button>
+                    <button
+                      onClick={() => {
+                        setEditingStaff(null);
+                        setNewPassword('');
+                      }}
+                      className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg font-medium hover:bg-gray-300 transition-all"
                     >
                       İptal
                     </button>

@@ -1136,6 +1136,56 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity) 
   return { success: true, remainingAmount: order.total_amount };
 });
 
+// İptal fişi önizleme
+ipcMain.handle('preview-cancel-receipt', async (event, itemId, cancelQuantity) => {
+  const item = db.tableOrderItems.find(oi => oi.id === itemId);
+  if (!item) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+
+  const order = db.tableOrders.find(o => o.id === item.order_id);
+  if (!order) {
+    return { success: false, error: 'Sipariş bulunamadı' };
+  }
+
+  // İptal edilecek miktarı belirle
+  const quantityToCancel = cancelQuantity || item.quantity;
+  if (quantityToCancel <= 0 || quantityToCancel > item.quantity) {
+    return { success: false, error: 'Geçersiz iptal miktarı' };
+  }
+
+  // Ürün bilgilerini al (kategori için)
+  const product = db.products.find(p => p.id === item.product_id);
+  if (!product) {
+    return { success: false, error: 'Ürün bilgisi bulunamadı' };
+  }
+
+  // Kategori bilgisini al
+  const category = db.categories.find(c => c.id === product.category_id);
+  const categoryName = category ? category.name : 'Diğer';
+
+  // İptal fişi verilerini hazırla
+  const now = new Date();
+  const cancelDate = now.toLocaleDateString('tr-TR');
+  const cancelTime = getFormattedTime(now);
+
+  const cancelReceiptData = {
+    tableName: order.table_name,
+    tableType: order.table_type,
+    productName: item.product_name,
+    quantity: quantityToCancel,
+    price: item.price,
+    cancelDate: cancelDate,
+    cancelTime: cancelTime,
+    categoryName: categoryName
+  };
+
+  // İptal fişi HTML'ini oluştur
+  const cancelHTML = generateCancelReceiptHTML(cancelReceiptData);
+
+  return { success: true, html: cancelHTML, receiptData: cancelReceiptData };
+});
+
 ipcMain.handle('complete-table-order', async (event, orderId) => {
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
@@ -1254,6 +1304,116 @@ ipcMain.handle('complete-table-order', async (event, orderId) => {
   }
 
   return { success: true, saleId };
+});
+
+// Masa aktar - Kaynak masadaki tüm pending siparişleri hedef masaya aktar
+ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableId) => {
+  // Kaynak masayı kontrol et
+  const sourceOrders = (db.tableOrders || []).filter(
+    o => o.table_id === sourceTableId && o.status === 'pending'
+  );
+
+  if (sourceOrders.length === 0) {
+    return { success: false, error: 'Kaynak masada aktarılacak sipariş bulunamadı' };
+  }
+
+  // Hedef masayı kontrol et - boş olmalı
+  const targetOrders = (db.tableOrders || []).filter(
+    o => o.table_id === targetTableId && o.status === 'pending'
+  );
+
+  if (targetOrders.length > 0) {
+    return { success: false, error: 'Hedef masada zaten aktif sipariş var' };
+  }
+
+  // Hedef masa bilgilerini oluştur
+  let targetTableName, targetTableType;
+  
+  // Masa ID formatından bilgileri çıkar (örn: "inside-1" veya "outside-5")
+  if (targetTableId.startsWith('inside-')) {
+    const tableNumber = targetTableId.replace('inside-', '');
+    targetTableName = `İçeri ${tableNumber}`;
+    targetTableType = 'inside';
+  } else if (targetTableId.startsWith('outside-')) {
+    const tableNumber = targetTableId.replace('outside-', '');
+    targetTableName = `Dışarı ${tableNumber}`;
+    targetTableType = 'outside';
+  } else {
+    return { success: false, error: 'Geçersiz hedef masa ID formatı' };
+  }
+
+  // Tüm pending siparişleri ve itemlarını aktar
+  const transferredOrders = [];
+  const transferredItems = [];
+
+  sourceOrders.forEach(order => {
+    // Eski masa bilgilerini sakla
+    const oldTableName = order.table_name;
+    const oldTableType = order.table_type;
+    
+    // Sipariş bilgilerini güncelle
+    order.table_id = targetTableId;
+    order.table_name = targetTableName;
+    order.table_type = targetTableType;
+    
+    transferredOrders.push({
+      orderId: order.id,
+      oldTableName: oldTableName,
+      newTableName: targetTableName
+    });
+
+    // Bu siparişe ait tüm itemları bul ve güncelle
+    const orderItems = (db.tableOrderItems || []).filter(
+      oi => oi.order_id === order.id
+    );
+
+    orderItems.forEach(item => {
+      transferredItems.push({
+        itemId: item.id,
+        productName: item.product_name,
+        quantity: item.quantity
+      });
+    });
+  });
+
+  saveDatabase();
+
+  // Electron renderer process'e güncelleme gönder
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-transferred', {
+      sourceTableId,
+      targetTableId,
+      transferredOrdersCount: transferredOrders.length,
+      transferredItemsCount: transferredItems.length
+    });
+  }
+
+  // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
+  if (io) {
+    // Kaynak masa artık boş
+    io.emit('table-update', {
+      tableId: sourceTableId,
+      hasOrder: false
+    });
+    // Hedef masa artık dolu
+    io.emit('table-update', {
+      tableId: targetTableId,
+      hasOrder: true
+    });
+  }
+
+  console.log(`✅ Masa aktarımı tamamlandı: ${sourceTableId} -> ${targetTableId}`);
+  console.log(`   Aktarılan sipariş sayısı: ${transferredOrders.length}`);
+  console.log(`   Aktarılan ürün sayısı: ${transferredItems.length}`);
+
+  return {
+    success: true,
+    transferredOrders: transferredOrders.length,
+    transferredItems: transferredItems.length,
+    sourceTableId,
+    targetTableId,
+    targetTableName
+  };
 });
 
 // Kısmi ödeme için masa siparişi tutarını güncelle ve satış kaydı oluştur
@@ -2407,7 +2567,7 @@ function generateProductionReceiptHTML(items, receiptData) {
       
       ${receiptData.orderNote ? `
       <div style="margin: 10px 0; padding: 8px; background-color: #fef3c7; border: 1px solid #fbbf24; border-radius: 4px;">
-        <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #d97706; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
+        <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #d97706; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu${receiptData.staff_name ? ' (' + receiptData.staff_name + ')' : ''}:</p>
         <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #92400e; margin: 0; font-family: 'Montserrat', sans-serif;">${receiptData.orderNote}</p>
       </div>
       ` : ''}
@@ -2643,7 +2803,7 @@ function generateReceiptHTML(receiptData) {
       
       ${receiptData.orderNote ? `
       <div style="margin: 10px 0; padding: 8px; background-color: #fef3c7; border: 1px solid #fbbf24; border-radius: 4px;">
-        <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #d97706; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
+        <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #d97706; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu${receiptData.staff_name ? ' (' + receiptData.staff_name + ')' : ''}:</p>
         <p style="font-size: 10px; font-weight: 900; font-style: italic; color: #92400e; margin: 0; font-family: 'Montserrat', sans-serif;">${receiptData.orderNote}</p>
       </div>
       ` : ''}
@@ -3793,7 +3953,7 @@ function generateAdisyonHTML(items, adisyonData) {
       
       ${adisyonData.orderNote ? `
       <div style="margin: 10px 0; padding: 8px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 6px; border-left: 3px solid #f59e0b; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-        <p style="font-size: 9px; font-weight: 900; color: #92400e; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
+        <p style="font-size: 9px; font-weight: 900; color: #92400e; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu${adisyonData.staff_name ? ' (' + adisyonData.staff_name + ')' : ''}:</p>
         <p style="font-size: 9px; font-weight: 700; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif;">${adisyonData.orderNote}</p>
       </div>
       ` : ''}
@@ -3850,47 +4010,47 @@ function generateCancelReceiptHTML(cancelData) {
       </style>
     </head>
     <body>
-      <div style="text-align: center; margin-bottom: 16px; padding: 12px 8px; background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border: 3px solid #dc2626; border-radius: 8px; box-shadow: 0 4px 8px rgba(220, 38, 38, 0.3);">
-        <h1 style="margin: 0; font-size: 24px; font-weight: 900; color: #dc2626; text-transform: uppercase; letter-spacing: 2px; text-shadow: 2px 2px 4px rgba(0,0,0,0.2);">
+      <div style="text-align: center; margin-bottom: 16px; padding: 12px 8px; background: #ffffff; border: 3px solid #000000; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.3);">
+        <h1 style="margin: 0; font-size: 24px; font-weight: 900; color: #000000; text-transform: uppercase; letter-spacing: 2px;">
           İPTAL
         </h1>
       </div>
       
-      <div style="margin-bottom: 10px; padding: 8px; background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%); border-left: 3px solid #dc2626; border-radius: 6px;">
+      <div style="margin-bottom: 10px; padding: 8px; background: #f5f5f5; border-left: 3px solid #000000; border-radius: 6px;">
         <div style="margin-bottom: 6px;">
-          <p style="margin: 0; font-size: 9px; color: #991b1b; font-weight: 700; text-transform: uppercase;">Masa</p>
-          <p style="margin: 4px 0 0 0; font-size: 13px; font-weight: 900; color: #1e293b;">${tableTypeText} ${cancelData.tableName}</p>
+          <p style="margin: 0; font-size: 9px; color: #000000; font-weight: 700; text-transform: uppercase;">Masa</p>
+          <p style="margin: 4px 0 0 0; font-size: 13px; font-weight: 900; color: #000000;">${tableTypeText} ${cancelData.tableName}</p>
         </div>
       </div>
       
-      <div style="margin-bottom: 10px; padding: 10px; background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%); border-left: 3px solid #f59e0b; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+      <div style="margin-bottom: 10px; padding: 10px; background: #ffffff; border-left: 3px solid #000000; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,0.2);">
         <div style="margin-bottom: 6px;">
-          <p style="margin: 0; font-size: 9px; color: #92400e; font-weight: 700; text-transform: uppercase;">Ürün</p>
-          <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 900; color: #1e293b; text-decoration: line-through; text-decoration-thickness: 2px; text-decoration-color: #dc2626;">${cancelData.productName}</p>
+          <p style="margin: 0; font-size: 9px; color: #000000; font-weight: 700; text-transform: uppercase;">Ürün</p>
+          <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 900; color: #000000; text-decoration: line-through; text-decoration-thickness: 2px; text-decoration-color: #000000;">${cancelData.productName}</p>
         </div>
-        <div style="display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #f59e0b;">
+        <div style="display: flex; justify-content: space-between; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #000000;">
           <div>
-            <p style="margin: 0; font-size: 8px; color: #92400e; font-weight: 700;">Adet</p>
-            <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #1e293b;">${cancelData.quantity} adet</p>
+            <p style="margin: 0; font-size: 8px; color: #000000; font-weight: 700;">Adet</p>
+            <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #000000;">${cancelData.quantity} adet</p>
           </div>
           <div style="text-align: right;">
-            <p style="margin: 0; font-size: 8px; color: #92400e; font-weight: 700;">Birim Fiyat</p>
-            <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #1e293b;">₺${cancelData.price.toFixed(2)}</p>
+            <p style="margin: 0; font-size: 8px; color: #000000; font-weight: 700;">Birim Fiyat</p>
+            <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #000000;">₺${cancelData.price.toFixed(2)}</p>
           </div>
         </div>
-        <div style="margin-top: 8px; padding-top: 8px; border-top: 2px solid #f59e0b;">
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 2px solid #000000;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
-            <p style="margin: 0; font-size: 9px; color: #92400e; font-weight: 700; text-transform: uppercase;">Toplam</p>
-            <p style="margin: 0; font-size: 14px; font-weight: 900; color: #dc2626;">₺${(cancelData.price * cancelData.quantity).toFixed(2)}</p>
+            <p style="margin: 0; font-size: 9px; color: #000000; font-weight: 700; text-transform: uppercase;">Toplam</p>
+            <p style="margin: 0; font-size: 14px; font-weight: 900; color: #000000;">₺${(cancelData.price * cancelData.quantity).toFixed(2)}</p>
           </div>
         </div>
       </div>
       
-      <div style="margin-top: 12px; padding-top: 8px; border-top: 2px dashed #d1d5db; text-align: center;">
-        <p style="margin: 0; font-size: 8px; color: #6b7280; font-weight: 700;">
+      <div style="margin-top: 12px; padding-top: 8px; border-top: 2px dashed #000000; text-align: center;">
+        <p style="margin: 0; font-size: 8px; color: #000000; font-weight: 700;">
           ${cancelData.cancelDate} ${cancelData.cancelTime}
         </p>
-        <p style="margin: 4px 0 0 0; font-size: 7px; color: #9ca3af; font-weight: 600;">
+        <p style="margin: 4px 0 0 0; font-size: 7px; color: #000000; font-weight: 600;">
           Kategori: ${cancelData.categoryName}
         </p>
       </div>
@@ -5145,6 +5305,18 @@ function generateMobileHTML(serverURL) {
       </div>
       
       <div id="tableSelection">
+        <!-- Masa Aktar Butonu -->
+        <div style="margin-bottom: 15px;">
+          <button onclick="showTransferModal()" style="width: 100%; padding: 14px; background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%); color: white; border: none; border-radius: 14px; font-size: 16px; font-weight: 700; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3); cursor: pointer; transition: all 0.3s;">
+            <span style="display: inline-flex; align-items: center; justify-content: center; gap: 8px;">
+              <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+              </svg>
+              Masa Aktar
+            </span>
+          </button>
+        </div>
+        
         <!-- İç/Dış Tab'leri -->
         <div class="table-type-tabs">
           <button class="table-type-tab active" onclick="selectTableType('inside')">🏠 İç</button>
@@ -5218,7 +5390,16 @@ function generateMobileHTML(serverURL) {
     </div>
     <div class="cart-content">
       <div class="cart-items" id="cartItems"></div>
-      <button class="send-btn" onclick="sendOrder()" style="margin-top: 20px;">
+      
+      <!-- Not Butonu -->
+      <button onclick="showOrderNoteModal()" style="width: 100%; padding: 14px; margin-top: 15px; background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3); transition: all 0.3s; display: flex; align-items: center; justify-content: center; gap: 8px;">
+        <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/>
+        </svg>
+        <span id="orderNoteButtonText">Sipariş Notu Ekle</span>
+      </button>
+      
+      <button class="send-btn" onclick="sendOrder()" style="margin-top: 15px;">
         <span style="display: inline-flex; align-items: center; gap: 8px;">
           <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/>
@@ -5239,6 +5420,24 @@ function generateMobileHTML(serverURL) {
     <button class="toast-close" onclick="hideToast()">×</button>
   </div>
   
+  <!-- Sipariş Notu Modal -->
+  <div id="orderNoteModal" class="logout-modal" style="display: none;" onclick="if(event.target === this) hideOrderNoteModal()">
+    <div class="logout-modal-content" style="max-width: 450px;">
+      <div class="logout-modal-icon" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">📝</div>
+      <h3 class="logout-modal-title">Sipariş Notu</h3>
+      <p class="logout-modal-message">Sipariş ile ilgili bir not ekleyebilirsiniz. Bu not fişte görünecektir.</p>
+      
+      <div style="margin-top: 20px;">
+        <textarea id="orderNoteInput" placeholder="Örn: Az baharatlı olsun, hızlı hazırlansın..." style="width: 100%; min-height: 120px; padding: 14px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 15px; font-family: inherit; resize: vertical; transition: all 0.3s;" onfocus="this.style.borderColor='#f59e0b'; this.style.outline='none';" onblur="this.style.borderColor='#e5e7eb';"></textarea>
+      </div>
+      
+      <div class="logout-modal-buttons" style="margin-top: 20px;">
+        <button class="logout-modal-btn logout-modal-btn-cancel" onclick="hideOrderNoteModal()">İptal</button>
+        <button class="logout-modal-btn logout-modal-btn-confirm" onclick="saveOrderNote()" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">Kaydet</button>
+      </div>
+    </div>
+  </div>
+  
   <!-- Çıkış Yap Onay Modal -->
   <div id="logoutModal" class="logout-modal" style="display: none;" onclick="if(event.target === this) hideLogoutModal()">
     <div class="logout-modal-content">
@@ -5250,6 +5449,49 @@ function generateMobileHTML(serverURL) {
       <div class="logout-modal-buttons">
         <button class="logout-modal-btn logout-modal-btn-cancel" onclick="hideLogoutModal()">İptal</button>
         <button class="logout-modal-btn logout-modal-btn-confirm" onclick="confirmLogout()">Evet, Çıkış Yap</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Masa Aktar Modal -->
+  <div id="transferModal" class="logout-modal" style="display: none;" onclick="if(event.target === this) hideTransferModal()">
+    <div class="logout-modal-content" style="max-width: 500px; max-height: 90vh; overflow-y: auto;">
+      <div class="logout-modal-icon" style="background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);">🔄</div>
+      <h3 class="logout-modal-title">Masa Aktar</h3>
+      <p class="logout-modal-message">Kaynak masadaki tüm siparişleri hedef masaya aktarın</p>
+      
+      <div style="margin-top: 20px;">
+        <!-- Kaynak Masa -->
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 14px; font-weight: 700; color: #1f2937; margin-bottom: 10px;">
+            <span style="color: #10b981;">✓</span> Kaynak Masa (Dolu)
+          </label>
+          <div id="sourceTablesGrid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; max-height: 200px; overflow-y: auto; padding: 10px; background: #f9fafb; border-radius: 12px;"></div>
+          <div id="selectedSourceTable" style="margin-top: 8px; font-size: 13px; color: #10b981; font-weight: 600;"></div>
+        </div>
+        
+        <!-- Ok İşareti -->
+        <div style="text-align: center; margin: 15px 0;">
+          <div style="display: inline-block; width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%); display: flex; align-items: center; justify-content: center;">
+            <svg width="20" height="20" fill="none" stroke="white" viewBox="0 0 24 24" stroke-width="3">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </div>
+        </div>
+        
+        <!-- Hedef Masa -->
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; font-size: 14px; font-weight: 700; color: #1f2937; margin-bottom: 10px;">
+            <span style="color: #3b82f6;">+</span> Hedef Masa (Boş)
+          </label>
+          <div id="targetTablesGrid" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; max-height: 200px; overflow-y: auto; padding: 10px; background: #f9fafb; border-radius: 12px;"></div>
+          <div id="selectedTargetTable" style="margin-top: 8px; font-size: 13px; color: #3b82f6; font-weight: 600;"></div>
+        </div>
+      </div>
+      
+      <div class="logout-modal-buttons" style="margin-top: 20px;">
+        <button class="logout-modal-btn logout-modal-btn-cancel" onclick="hideTransferModal()">İptal</button>
+        <button class="logout-modal-btn logout-modal-btn-confirm" onclick="confirmTransfer()" id="confirmTransferBtn" style="background: linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%);" disabled>Masayı Aktar</button>
       </div>
     </div>
   </div>
@@ -5267,6 +5509,10 @@ function generateMobileHTML(serverURL) {
     let socket = null;
     let tables = [];
     let currentTableType = 'inside';
+    let transferSourceTable = null;
+    let transferTargetTable = null;
+    let transferring = false;
+    let orderNote = '';
     
     // PIN oturum yönetimi (1 saat)
     const SESSION_DURATION = 60 * 60 * 1000;
@@ -5768,6 +6014,199 @@ function generateMobileHTML(serverURL) {
       showToast('success', 'Çıkış Yapıldı', 'Başarıyla çıkış yaptınız. Tekrar giriş yapabilirsiniz.');
     }
     
+    // Masa Aktar Fonksiyonları
+    async function showTransferModal() {
+      transferSourceTable = null;
+      transferTargetTable = null;
+      // Masaları yeniden yükle (güncel durumu almak için)
+      if (tables.length === 0) {
+        await loadData();
+      }
+      renderTransferTables();
+      document.getElementById('transferModal').style.display = 'flex';
+    }
+    
+    function hideTransferModal() {
+      document.getElementById('transferModal').style.display = 'none';
+      transferSourceTable = null;
+      transferTargetTable = null;
+    }
+    
+    function renderTransferTables() {
+      // Dolu masaları al (hem iç hem dış)
+      const occupiedTables = tables.filter(t => t.hasOrder);
+      // Boş masaları al (hem iç hem dış)
+      const emptyTables = tables.filter(t => !t.hasOrder);
+      
+      // Kaynak masaları render et
+      const sourceGrid = document.getElementById('sourceTablesGrid');
+      if (occupiedTables.length === 0) {
+        sourceGrid.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 20px; color: #9ca3af; font-size: 14px;">Dolu masa bulunamadı</div>';
+      } else {
+        sourceGrid.innerHTML = occupiedTables.map(table => {
+          const isSelected = transferSourceTable && transferSourceTable.id === table.id;
+          const tableTypeIcon = table.type === 'inside' ? '🏠' : '🌳';
+          const tableIdEscaped = table.id.replace(/'/g, "\\'");
+          return '<button onclick="selectSourceTable(\\'' + tableIdEscaped + '\\')" style="padding: 12px 8px; border: 2px solid ' + (isSelected ? '#10b981' : '#e5e7eb') + '; border-radius: 10px; background: ' + (isSelected ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'white') + '; color: ' + (isSelected ? 'white' : '#1f2937') + '; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s; box-shadow: ' + (isSelected ? '0 4px 12px rgba(16, 185, 129, 0.3)' : 'none') + ';">' +
+            '<div style="font-size: 10px; margin-bottom: 4px; opacity: 0.8;">' + tableTypeIcon + ' ' + (table.type === 'inside' ? 'İç' : 'Dış') + '</div>' +
+            '<div>' + table.name + '</div>' +
+          '</button>';
+        }).join('');
+      }
+      
+      // Hedef masaları render et
+      const targetGrid = document.getElementById('targetTablesGrid');
+      if (emptyTables.length === 0) {
+        targetGrid.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 20px; color: #9ca3af; font-size: 14px;">Boş masa bulunamadı</div>';
+      } else {
+        targetGrid.innerHTML = emptyTables.map(table => {
+          const isSelected = transferTargetTable && transferTargetTable.id === table.id;
+          const tableTypeIcon = table.type === 'inside' ? '🏠' : '🌳';
+          const tableIdEscaped = table.id.replace(/'/g, "\\'");
+          return '<button onclick="selectTargetTable(\\'' + tableIdEscaped + '\\')" style="padding: 12px 8px; border: 2px solid ' + (isSelected ? '#3b82f6' : '#e5e7eb') + '; border-radius: 10px; background: ' + (isSelected ? 'linear-gradient(135deg, #3b82f6 0%, #06b6d4 100%)' : 'white') + '; color: ' + (isSelected ? 'white' : '#1f2937') + '; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s; box-shadow: ' + (isSelected ? '0 4px 12px rgba(59, 130, 246, 0.3)' : 'none') + ';">' +
+            '<div style="font-size: 10px; margin-bottom: 4px; opacity: 0.8;">' + tableTypeIcon + ' ' + (table.type === 'inside' ? 'İç' : 'Dış') + '</div>' +
+            '<div>' + table.name + '</div>' +
+            '<div style="font-size: 10px; margin-top: 4px; opacity: 0.7;">Boş</div>' +
+          '</button>';
+        }).join('');
+      }
+      
+      // Seçili masaları göster
+      const selectedSource = document.getElementById('selectedSourceTable');
+      const selectedTarget = document.getElementById('selectedTargetTable');
+      const confirmBtn = document.getElementById('confirmTransferBtn');
+      
+      if (transferSourceTable) {
+        selectedSource.textContent = '✓ Seçili: ' + transferSourceTable.name;
+      } else {
+        selectedSource.textContent = '';
+      }
+      
+      if (transferTargetTable) {
+        selectedTarget.textContent = '✓ Seçili: ' + transferTargetTable.name;
+      } else {
+        selectedTarget.textContent = '';
+      }
+      
+      // Aktar butonunu aktif/pasif yap
+      if (confirmBtn) {
+        confirmBtn.disabled = !transferSourceTable || !transferTargetTable || transferring;
+      }
+    }
+    
+    function selectSourceTable(tableId) {
+      console.log('selectSourceTable çağrıldı, tableId:', tableId);
+      console.log('Mevcut tables:', tables);
+      const table = tables.find(t => t.id === tableId);
+      console.log('Bulunan table:', table);
+      if (table) {
+        transferSourceTable = table;
+        renderTransferTables();
+      } else {
+        console.error('Table bulunamadı, tableId:', tableId);
+      }
+    }
+    
+    function selectTargetTable(tableId) {
+      console.log('selectTargetTable çağrıldı, tableId:', tableId);
+      console.log('Mevcut tables:', tables);
+      const table = tables.find(t => t.id === tableId);
+      console.log('Bulunan table:', table);
+      if (table) {
+        transferTargetTable = table;
+        renderTransferTables();
+      } else {
+        console.error('Table bulunamadı, tableId:', tableId);
+      }
+    }
+    
+    async function confirmTransfer() {
+      if (!transferSourceTable || !transferTargetTable) {
+        showToast('error', 'Eksik Bilgi', 'Lütfen kaynak ve hedef masayı seçin');
+        return;
+      }
+      
+      if (transferSourceTable.id === transferTargetTable.id) {
+        showToast('error', 'Hata', 'Kaynak ve hedef masa aynı olamaz');
+        return;
+      }
+      
+      transferring = true;
+      const confirmBtn = document.getElementById('confirmTransferBtn');
+      if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Aktarılıyor...';
+      }
+      
+      try {
+        const response = await fetch(API_URL + '/transfer-table', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourceTableId: transferSourceTable.id,
+            targetTableId: transferTargetTable.id
+          })
+        });
+        
+        const result = await response.json();
+        
+        if (result.success) {
+          showToast('success', 'Başarılı', 
+            'Masa başarıyla aktarıldı!\\n' +
+            'Kaynak: ' + transferSourceTable.name + '\\n' +
+            'Hedef: ' + transferTargetTable.name + '\\n' +
+            'Aktarılan sipariş: ' + result.transferredOrders + '\\n' +
+            'Aktarılan ürün: ' + result.transferredItems
+          );
+          
+          hideTransferModal();
+          await loadData(); // Masaları yenile
+        } else {
+          showToast('error', 'Hata', result.error || 'Masa aktarılamadı');
+        }
+      } catch (error) {
+        console.error('Masa aktarım hatası:', error);
+        showToast('error', 'Bağlantı Hatası', 'Sunucuya bağlanılamadı. Lütfen tekrar deneyin.');
+      } finally {
+        transferring = false;
+        if (confirmBtn) {
+          confirmBtn.disabled = false;
+          confirmBtn.textContent = 'Masayı Aktar';
+        }
+      }
+    }
+    
+    // Sipariş Notu Fonksiyonları
+    function showOrderNoteModal() {
+      const noteInput = document.getElementById('orderNoteInput');
+      if (noteInput) {
+        noteInput.value = orderNote;
+      }
+      document.getElementById('orderNoteModal').style.display = 'flex';
+    }
+    
+    function hideOrderNoteModal() {
+      document.getElementById('orderNoteModal').style.display = 'none';
+    }
+    
+    function saveOrderNote() {
+      const noteInput = document.getElementById('orderNoteInput');
+      if (noteInput) {
+        orderNote = noteInput.value.trim();
+        const buttonText = document.getElementById('orderNoteButtonText');
+        if (buttonText) {
+          if (orderNote) {
+            buttonText.textContent = 'Not: ' + (orderNote.length > 30 ? orderNote.substring(0, 30) + '...' : orderNote);
+            buttonText.style.color = 'white';
+          } else {
+            buttonText.textContent = 'Sipariş Notu Ekle';
+            buttonText.style.color = 'white';
+          }
+        }
+        hideOrderNoteModal();
+      }
+    }
+    
     async function sendOrder() {
       if (!selectedTable || cart.length === 0) { 
         showToast('error', 'Eksik Bilgi', 'Lütfen masa seçin ve ürün ekleyin');
@@ -5790,7 +6229,8 @@ function generateMobileHTML(serverURL) {
             tableId: selectedTable.id, 
             tableName: selectedTable.name, 
             tableType: selectedTable.type,
-            staffId: currentStaff.id
+            staffId: currentStaff.id,
+            orderNote: orderNote || null
           })
         });
         
@@ -5803,10 +6243,15 @@ function generateMobileHTML(serverURL) {
           
           showToast('success', 'Sipariş Başarılı', message);
           
-          // Sepeti temizle ama masada kal
+          // Sepeti ve notu temizle ama masada kal
           const currentTableId = selectedTable.id;
           cart = []; 
+          orderNote = '';
           updateCart();
+          const buttonText = document.getElementById('orderNoteButtonText');
+          if (buttonText) {
+            buttonText.textContent = 'Sipariş Notu Ekle';
+          }
           document.getElementById('searchInput').value = '';
           searchQuery = '';
           
@@ -5952,6 +6397,104 @@ function startAPIServer() {
 
   appExpress.get('/mobile', (req, res) => {
     res.send(generateMobileHTML(serverURL));
+  });
+
+  // Masa aktar API endpoint
+  appExpress.post('/api/transfer-table', async (req, res) => {
+    try {
+      const { sourceTableId, targetTableId } = req.body;
+      
+      if (!sourceTableId || !targetTableId) {
+        return res.status(400).json({ success: false, error: 'Kaynak ve hedef masa ID\'si gerekli' });
+      }
+
+      // IPC handler'ı çağır (main process'te çalışan handler)
+      // Bu bir workaround - normalde IPC sadece Electron renderer process'ler arasında çalışır
+      // Ama burada Express server içindeyiz, bu yüzden doğrudan veritabanı işlemlerini yapacağız
+      
+      const sourceOrders = (db.tableOrders || []).filter(
+        o => o.table_id === sourceTableId && o.status === 'pending'
+      );
+
+      if (sourceOrders.length === 0) {
+        return res.status(400).json({ success: false, error: 'Kaynak masada aktarılacak sipariş bulunamadı' });
+      }
+
+      const targetOrders = (db.tableOrders || []).filter(
+        o => o.table_id === targetTableId && o.status === 'pending'
+      );
+
+      if (targetOrders.length > 0) {
+        return res.status(400).json({ success: false, error: 'Hedef masada zaten aktif sipariş var' });
+      }
+
+      let targetTableName, targetTableType;
+      
+      if (targetTableId.startsWith('inside-')) {
+        const tableNumber = targetTableId.replace('inside-', '');
+        targetTableName = `İçeri ${tableNumber}`;
+        targetTableType = 'inside';
+      } else if (targetTableId.startsWith('outside-')) {
+        const tableNumber = targetTableId.replace('outside-', '');
+        targetTableName = `Dışarı ${tableNumber}`;
+        targetTableType = 'outside';
+      } else {
+        return res.status(400).json({ success: false, error: 'Geçersiz hedef masa ID formatı' });
+      }
+
+      const transferredOrders = [];
+      const transferredItems = [];
+
+      sourceOrders.forEach(order => {
+        const oldTableName = order.table_name;
+        order.table_id = targetTableId;
+        order.table_name = targetTableName;
+        order.table_type = targetTableType;
+        
+        transferredOrders.push({
+          orderId: order.id,
+          oldTableName: oldTableName,
+          newTableName: targetTableName
+        });
+
+        const orderItems = (db.tableOrderItems || []).filter(
+          oi => oi.order_id === order.id
+        );
+
+        orderItems.forEach(item => {
+          transferredItems.push({
+            itemId: item.id,
+            productName: item.product_name,
+            quantity: item.quantity
+          });
+        });
+      });
+
+      saveDatabase();
+
+      if (io) {
+        io.emit('table-update', {
+          tableId: sourceTableId,
+          hasOrder: false
+        });
+        io.emit('table-update', {
+          tableId: targetTableId,
+          hasOrder: true
+        });
+      }
+
+      res.json({
+        success: true,
+        transferredOrders: transferredOrders.length,
+        transferredItems: transferredItems.length,
+        sourceTableId,
+        targetTableId,
+        targetTableName
+      });
+    } catch (error) {
+      console.error('Masa aktarım hatası:', error);
+      res.status(500).json({ success: false, error: error.message });
+    }
   });
 
   appExpress.post('/api/orders', async (req, res) => {

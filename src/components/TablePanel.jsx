@@ -10,6 +10,10 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [showModal, setShowModal] = useState(false);
   const [showPartialPaymentModal, setShowPartialPaymentModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
+  const [transferSourceTable, setTransferSourceTable] = useState(null);
+  const [transferTargetTable, setTransferTargetTable] = useState(null);
+  const [transferring, setTransferring] = useState(false);
 
   const insideTables = Array.from({ length: 20 }, (_, i) => ({
     id: `inside-${i + 1}`,
@@ -300,9 +304,81 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
   };
 
+  // Masa aktar işlemi
+  const handleTransferTable = async () => {
+    if (!transferSourceTable || !transferTargetTable) {
+      alert('Lütfen kaynak ve hedef masayı seçin');
+      return;
+    }
+
+    if (transferSourceTable.id === transferTargetTable.id) {
+      alert('Kaynak ve hedef masa aynı olamaz');
+      return;
+    }
+
+    if (!window.electronAPI || !window.electronAPI.transferTableOrder) {
+      alert('Masa aktarımı API\'si mevcut değil');
+      return;
+    }
+
+    setTransferring(true);
+    try {
+      const result = await window.electronAPI.transferTableOrder(
+        transferSourceTable.id,
+        transferTargetTable.id
+      );
+
+      if (result.success) {
+        // Başarı mesajı göster
+        alert(`✅ Masa başarıyla aktarıldı!\n\nKaynak: ${transferSourceTable.name}\nHedef: ${transferTargetTable.name}\n\nAktarılan sipariş sayısı: ${result.transferredOrders}\nAktarılan ürün sayısı: ${result.transferredItems}`);
+        
+        // Modal'ı kapat ve siparişleri yenile
+        setShowTransferModal(false);
+        setTransferSourceTable(null);
+        setTransferTargetTable(null);
+        await loadTableOrders();
+      } else {
+        alert('Masa aktarılamadı: ' + (result.error || 'Bilinmeyen hata'));
+      }
+    } catch (error) {
+      console.error('Masa aktarımı hatası:', error);
+      alert('Masa aktarılamadı: ' + error.message);
+    } finally {
+      setTransferring(false);
+    }
+  };
+
+  // Tüm masaları al (hem iç hem dış)
+  const getAllTables = () => {
+    return [...insideTables, ...outsideTables];
+  };
+
+  // Dolu masaları al (tüm masalar içinden)
+  const getOccupiedTables = () => {
+    const allTables = getAllTables();
+    return allTables.filter(table => getTableOrder(table.id));
+  };
+
+  // Boş masaları al (tüm masalar içinden)
+  const getEmptyTables = () => {
+    const allTables = getAllTables();
+    return allTables.filter(table => !getTableOrder(table.id));
+  };
+
   return (
     <div className="mb-4">
-      <h2 className="text-xl font-bold mb-2 gradient-text">Masalar</h2>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-xl font-bold gradient-text">Masalar</h2>
+        <button
+          onClick={() => setShowTransferModal(true)}
+          className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-xl font-medium hover:shadow-lg transition-all duration-300 flex items-center space-x-2"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+          </svg>
+          <span>Masa Aktar</span>
+        </button>
+      </div>
       
       {/* Masa Tipi Seçimi - Büyük ve Ortalanmış */}
       <div className="flex justify-center gap-4 mb-4">
@@ -441,6 +517,166 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                 </svg>
               </div>
               <p className="text-xl font-bold text-gray-900">Masa başarıyla sonlandırıldı</p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Masa Aktar Modal */}
+      {showTransferModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[1500] animate-fade-in">
+          <div className="bg-white/95 backdrop-blur-xl border-2 border-blue-200 rounded-3xl p-8 max-w-2xl w-full mx-4 shadow-2xl animate-scale-in max-h-[90vh] overflow-y-auto">
+            <div className="text-center mb-6">
+              <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                </svg>
+              </div>
+              <h3 className="text-2xl font-bold text-gray-800 mb-2">Masa Aktar</h3>
+              <p className="text-gray-600">Kaynak masadaki tüm siparişleri hedef masaya aktarın</p>
+            </div>
+
+            <div className="space-y-6">
+              {/* Kaynak Masa Seçimi */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-3">
+                  <span className="flex items-center space-x-2">
+                    <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span>Kaynak Masa (Dolu Masalar)</span>
+                  </span>
+                </label>
+                <div className="grid grid-cols-5 gap-2 max-h-48 overflow-y-auto p-2 bg-gray-50 rounded-xl">
+                  {getOccupiedTables().length === 0 ? (
+                    <div className="col-span-5 text-center py-8 text-gray-500">
+                      <p>Dolu masa bulunamadı</p>
+                    </div>
+                  ) : (
+                    getOccupiedTables().map((table) => {
+                      const order = getTableOrder(table.id);
+                      const isInside = table.type === 'inside';
+                      return (
+                        <button
+                          key={table.id}
+                          onClick={() => setTransferSourceTable(table)}
+                          className={`p-3 rounded-xl border-2 transition-all duration-300 ${
+                            transferSourceTable?.id === table.id
+                              ? 'bg-gradient-to-br from-green-500 to-emerald-500 text-white border-green-600 shadow-lg transform scale-105'
+                              : 'bg-white border-gray-300 hover:border-green-400 hover:bg-green-50'
+                          }`}
+                        >
+                          <div className="text-xs mb-1 opacity-75">
+                            {isInside ? '🏠 İç' : '🌳 Dış'}
+                          </div>
+                          <div className="text-sm font-bold">{table.name}</div>
+                          {order && (
+                            <div className="text-xs mt-1 opacity-75">
+                              ₺{order.total_amount?.toFixed(2) || '0.00'}
+                            </div>
+                          )}
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+                {transferSourceTable && (
+                  <div className="mt-2 text-sm text-green-600 font-medium">
+                    ✓ Seçili: {transferSourceTable.name}
+                  </div>
+                )}
+              </div>
+
+              {/* Ok İşareti */}
+              <div className="flex justify-center">
+                <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-500 to-cyan-500 flex items-center justify-center">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+
+              {/* Hedef Masa Seçimi */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-3">
+                  <span className="flex items-center space-x-2">
+                    <svg className="w-5 h-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    <span>Hedef Masa (Boş Masalar)</span>
+                  </span>
+                </label>
+                <div className="grid grid-cols-5 gap-2 max-h-48 overflow-y-auto p-2 bg-gray-50 rounded-xl">
+                  {getEmptyTables().length === 0 ? (
+                    <div className="col-span-5 text-center py-8 text-gray-500">
+                      <p>Boş masa bulunamadı</p>
+                    </div>
+                  ) : (
+                    getEmptyTables().map((table) => {
+                      const isInside = table.type === 'inside';
+                      return (
+                        <button
+                          key={table.id}
+                          onClick={() => setTransferTargetTable(table)}
+                          className={`p-3 rounded-xl border-2 transition-all duration-300 ${
+                            transferTargetTable?.id === table.id
+                              ? 'bg-gradient-to-br from-blue-500 to-cyan-500 text-white border-blue-600 shadow-lg transform scale-105'
+                              : 'bg-white border-gray-300 hover:border-blue-400 hover:bg-blue-50'
+                          }`}
+                        >
+                          <div className="text-xs mb-1 opacity-75">
+                            {isInside ? '🏠 İç' : '🌳 Dış'}
+                          </div>
+                          <div className="text-sm font-bold">{table.name}</div>
+                          <div className="text-xs mt-1 opacity-75">Boş</div>
+                        </button>
+                      );
+                    })
+                  )}
+                </div>
+                {transferTargetTable && (
+                  <div className="mt-2 text-sm text-blue-600 font-medium">
+                    ✓ Seçili: {transferTargetTable.name}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Butonlar */}
+            <div className="flex space-x-4 mt-8">
+              <button
+                onClick={() => {
+                  setShowTransferModal(false);
+                  setTransferSourceTable(null);
+                  setTransferTargetTable(null);
+                }}
+                disabled={transferring}
+                className="flex-1 py-4 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-600 hover:text-gray-800 font-semibold text-lg transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                İptal
+              </button>
+              <button
+                onClick={handleTransferTable}
+                disabled={!transferSourceTable || !transferTargetTable || transferring}
+                className="flex-1 py-4 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 flex items-center justify-center space-x-2"
+              >
+                {transferring ? (
+                  <>
+                    <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    <span>Aktarılıyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span>Masayı Aktar</span>
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>

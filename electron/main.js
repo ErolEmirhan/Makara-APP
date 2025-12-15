@@ -4317,6 +4317,18 @@ function generateMobileHTML(serverURL) {
     .table-btn:active {
       transform: scale(0.95);
     }
+    .table-btn:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+    }
+    .package-table-btn:hover {
+      transform: translateY(-3px) scale(1.02);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+    }
+    .package-table-btn:hover .table-number {
+      transform: scale(1.1);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+    }
     .table-btn.selected {
       border-color: #a855f7;
       background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
@@ -5157,6 +5169,16 @@ function generateMobileHTML(serverURL) {
         width: 100%;
       }
     }
+    @keyframes pulse {
+      0%, 100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      50% {
+        opacity: 0.7;
+        transform: scale(1.1);
+      }
+    }
     /* Mevcut Siparişler Bölümü */
     .existing-orders {
       margin-bottom: 20px;
@@ -5656,17 +5678,71 @@ function generateMobileHTML(serverURL) {
     function renderTables() {
       const grid = document.getElementById('tablesGrid');
       const filteredTables = tables.filter(t => t.type === currentTableType);
-      grid.innerHTML = filteredTables.map(table => {
-        const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
-        const nameStr = table.name.replace(/'/g, "\\'");
-        const typeStr = table.type.replace(/'/g, "\\'");
-        const hasOrderClass = table.hasOrder ? ' has-order' : '';
-        const selectedClass = selectedTable && selectedTable.id === table.id ? ' selected' : '';
-        return '<button class="table-btn' + hasOrderClass + selectedClass + '" onclick="selectTable(' + tableIdStr + ', \\'' + nameStr + '\\', \\'' + typeStr + '\\')">' +
-          '<div class="table-number">' + table.number + '</div>' +
-          '<div class="table-label">Masa</div>' +
-        '</button>';
-      }).join('');
+      
+      // Normal masalar (paket olmayanlar)
+      const normalTables = filteredTables.filter(t => !t.id.startsWith('package-'));
+      // Paket masaları
+      const packageTables = filteredTables.filter(t => t.id.startsWith('package-'));
+      
+      let html = '';
+      
+      // Normal masalar - tek grid içinde
+      if (normalTables.length > 0) {
+        html += normalTables.map(table => {
+          const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
+          const nameStr = table.name.replace(/'/g, "\\'");
+          const typeStr = table.type.replace(/'/g, "\\'");
+          const hasOrderClass = table.hasOrder ? ' has-order' : '';
+          const selectedClass = selectedTable && selectedTable.id === table.id ? ' selected' : '';
+          return '<button class="table-btn' + hasOrderClass + selectedClass + '" onclick="selectTable(' + tableIdStr + ', \\'' + nameStr + '\\', \\'' + typeStr + '\\')">' +
+            '<div class="table-number">' + table.number + '</div>' +
+            '<div class="table-label">Masa</div>' +
+          '</button>';
+        }).join('');
+      }
+      
+      // PAKET Başlığı - Premium ve Modern
+      if (packageTables.length > 0) {
+        html += '<div style="grid-column: 1 / -1; margin-top: 16px; margin-bottom: 12px; display: flex; align-items: center; justify-content: center;">';
+        html += '<div style="display: flex; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, #f97316 0%, #fb923c 30%, #fbbf24 70%, #fcd34d 100%); border-radius: 16px; box-shadow: 0 4px 16px rgba(249, 115, 22, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.2) inset; position: relative; overflow: hidden;">';
+        html += '<div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: linear-gradient(135deg, rgba(255,255,255,0.2) 0%, transparent 100%); pointer-events: none;"></div>';
+        html += '<svg width="20" height="20" fill="none" stroke="white" viewBox="0 0 24 24" stroke-width="2.5" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.2)); position: relative; z-index: 1;"><path stroke-linecap="round" stroke-linejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>';
+        html += '<h3 style="font-size: 17px; font-weight: 900; color: white; margin: 0; letter-spacing: 1.2px; text-shadow: 0 2px 6px rgba(0,0,0,0.3); position: relative; z-index: 1;">PAKET</h3>';
+        html += '</div>';
+        html += '</div>';
+        
+        // Paket masaları - Premium Tasarım
+        html += packageTables.map(table => {
+          const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
+          const nameStr = table.name.replace(/'/g, "\\'");
+          const typeStr = table.type.replace(/'/g, "\\'");
+          const hasOrderClass = table.hasOrder ? ' has-order' : '';
+          const selectedClass = selectedTable && selectedTable.id === table.id ? ' selected' : '';
+          
+          // Dolu için yeşil, boş için turuncu premium renkler
+          const bgGradient = table.hasOrder 
+            ? 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 50%, #6ee7b7 100%)' 
+            : 'linear-gradient(135deg, #fff7ed 0%, #ffedd5 50%, #fed7aa 100%)';
+          const borderColor = table.hasOrder ? '#10b981' : '#f97316';
+          const numberBg = table.hasOrder 
+            ? 'linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%)' 
+            : 'linear-gradient(135deg, #f97316 0%, #fb923c 50%, #fd7e14 100%)';
+          const iconColor = table.hasOrder ? '#10b981' : '#f97316';
+          
+          return '<button class="table-btn package-table-btn' + hasOrderClass + selectedClass + '" onclick="selectTable(' + tableIdStr + ', \\'' + nameStr + '\\', \\'' + typeStr + '\\')" style="background: ' + bgGradient + '; border: 3px solid ' + borderColor + '; box-shadow: 0 4px 16px ' + (table.hasOrder ? 'rgba(16, 185, 129, 0.35)' : 'rgba(249, 115, 22, 0.35)') + ', 0 0 0 1px rgba(255, 255, 255, 0.4) inset; position: relative; overflow: hidden; transform: scale(1); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);">' +
+            '<div style="position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: ' + (table.hasOrder ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.15) 0%, transparent 100%)' : 'linear-gradient(135deg, rgba(249, 115, 22, 0.15) 0%, transparent 100%)') + '; pointer-events: none; opacity: 0.8;"></div>' +
+            '<div style="position: absolute; top: -50%; left: -50%; width: 200%; height: 200%; background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%); pointer-events: none; transform: rotate(45deg);"></div>' +
+            '<div class="table-number" style="background: ' + numberBg + '; width: 50px; height: 50px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: 900; color: white; box-shadow: 0 4px 16px ' + (table.hasOrder ? 'rgba(16, 185, 129, 0.5)' : 'rgba(249, 115, 22, 0.5)') + ', 0 0 0 3px rgba(255, 255, 255, 0.4) inset; margin-bottom: 8px; position: relative; z-index: 2; transition: all 0.3s;">' + table.number + '</div>' +
+            '<div style="position: relative; z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 5px;">' +
+            '<div class="table-label" style="font-size: 12px; font-weight: 900; color: ' + (table.hasOrder ? '#047857' : '#9a3412') + '; letter-spacing: 0.8px; text-shadow: 0 1px 2px rgba(255, 255, 255, 0.5);">' + table.name + '</div>' +
+            (table.hasOrder ? '<div style="width: 8px; height: 8px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 50%; box-shadow: 0 0 12px rgba(16, 185, 129, 0.8), 0 0 6px rgba(16, 185, 129, 0.6); animation: pulse 2s infinite;"></div>' : '<div style="width: 6px; height: 6px; background: linear-gradient(135deg, #f97316 0%, #fb923c 100%); border-radius: 50%; opacity: 0.6;"></div>') +
+            '</div>' +
+            (table.hasOrder ? '<div style="position: absolute; top: 6px; right: 6px; width: 12px; height: 12px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); border-radius: 50%; box-shadow: 0 0 12px rgba(16, 185, 129, 0.9), 0 0 6px rgba(16, 185, 129, 0.7); animation: pulse 2s infinite; z-index: 3;"></div>' : '') +
+          '</button>';
+        }).join('');
+      }
+      
+      grid.innerHTML = html;
     }
     
     async function selectTable(id, name, type) {
@@ -6114,6 +6190,34 @@ function startAPIServer() {
         number: i,
         type: 'outside',
         name: `Dışarı ${i}`,
+        hasOrder: hasPendingOrder
+      });
+    }
+    // Paket masaları - İçeri
+    for (let i = 1; i <= 5; i++) {
+      const tableId = `package-inside-${i}`;
+      const hasPendingOrder = (db.tableOrders || []).some(
+        o => o.table_id === tableId && o.status === 'pending'
+      );
+      tables.push({
+        id: tableId,
+        number: i,
+        type: 'inside',
+        name: `Paket ${i}`,
+        hasOrder: hasPendingOrder
+      });
+    }
+    // Paket masaları - Dışarı
+    for (let i = 1; i <= 5; i++) {
+      const tableId = `package-outside-${i}`;
+      const hasPendingOrder = (db.tableOrders || []).some(
+        o => o.table_id === tableId && o.status === 'pending'
+      );
+      tables.push({
+        id: tableId,
+        number: i,
+        type: 'outside',
+        name: `Paket ${i}`,
         hasOrder: hasPendingOrder
       });
     }

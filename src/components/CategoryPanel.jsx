@@ -12,8 +12,8 @@ const CategoryPanel = ({ categories, selectedCategory, onSelectCategory }) => {
             </svg>
           </div>
           <h2 className="text-lg font-bold bg-gradient-to-r from-purple-600 via-pink-600 to-purple-600 bg-clip-text text-transparent">
-            Kategoriler
-          </h2>
+              Kategoriler
+            </h2>
         </div>
       </div>
       <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 2xl:grid-cols-10 gap-2">

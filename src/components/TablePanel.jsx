@@ -25,7 +25,13 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     name: `Dışarı ${i + 1}`
   }));
 
-  const tables = selectedType === 'inside' ? insideTables : outsideTables;
+  // Paket masaları (hem içeri hem dışarı için)
+  const packageTables = Array.from({ length: 5 }, (_, i) => ({
+    id: `package-${selectedType}-${i + 1}`,
+    number: i + 1,
+    type: selectedType,
+    name: `Paket ${i + 1}`
+  }));
 
   // Masa siparişlerini yükle
   useEffect(() => {
@@ -339,9 +345,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         </button>
       </div>
 
-      {/* Masa Grid - 10 sütun x 2 satır = 20 masa (geniş ama düşük) */}
-      <div className="grid grid-cols-10 gap-1">
-        {tables.map((table) => {
+      {/* Normal Masalar */}
+      <div className="grid grid-cols-10 gap-1 mb-6">
+        {(selectedType === 'inside' ? insideTables : outsideTables).map((table) => {
           const hasOrder = getTableOrder(table.id);
           return (
             <button
@@ -378,6 +384,59 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             </button>
           );
         })}
+      </div>
+
+      {/* PAKET Başlığı */}
+      <div className="mb-6 mt-8">
+        <div className="flex items-center justify-center mb-4">
+          <div className="flex items-center space-x-3 px-8 py-3 bg-gradient-to-r from-orange-500 via-amber-500 to-yellow-500 rounded-2xl shadow-xl transform hover:scale-105 transition-all duration-300">
+            <svg className="w-7 h-7 text-white drop-shadow-lg" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+            <h3 className="text-2xl font-black text-white tracking-wider drop-shadow-lg">PAKET</h3>
+          </div>
+        </div>
+
+        {/* Paket Masaları Grid */}
+        <div className="grid grid-cols-5 gap-2">
+          {packageTables.map((table) => {
+            const hasOrder = getTableOrder(table.id);
+            return (
+              <button
+                key={table.id}
+                onClick={() => handleTableClick(table)}
+                className={`table-btn group relative overflow-hidden rounded-lg p-2 border-2 transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 ${
+                  hasOrder
+                    ? 'bg-gradient-to-br from-green-50 to-emerald-50 border-green-400 hover:border-green-500'
+                    : 'bg-gradient-to-br from-white to-orange-50 border-orange-300 hover:border-orange-400'
+                }`}
+              >
+                <div className="flex flex-col items-center justify-center space-y-1.5 h-full">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow ${
+                    hasOrder
+                      ? 'bg-gradient-to-br from-green-400 to-emerald-500'
+                      : 'bg-gradient-to-br from-orange-400 to-yellow-400'
+                  }`}>
+                    {hasOrder ? (
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                      </svg>
+                    )}
+                  </div>
+                  <span className="font-extrabold text-sm text-gray-800 leading-tight">{table.name}</span>
+                  {hasOrder && (
+                    <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Masa Sipariş Detay Modal */}

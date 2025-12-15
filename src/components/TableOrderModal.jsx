@@ -6,6 +6,8 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   const [cancellingItemId, setCancellingItemId] = useState(null);
   const [cancelConfirmItem, setCancelConfirmItem] = useState(null);
   const [cancelQuantity, setCancelQuantity] = useState(1);
+  const [showCancelReceiptPreview, setShowCancelReceiptPreview] = useState(false);
+  const [cancelReceiptHTML, setCancelReceiptHTML] = useState(null);
 
   if (!order) return null;
 
@@ -60,6 +62,31 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     }
     setCancelConfirmItem(item);
     setCancelQuantity(item.quantity > 1 ? 1 : item.quantity); // Varsayılan olarak 1 veya tümü
+    setShowCancelReceiptPreview(false);
+    setCancelReceiptHTML(null);
+  };
+
+  // İptal fişi önizleme
+  const handlePreviewCancelReceipt = async () => {
+    if (!cancelConfirmItem) return;
+
+    if (!window.electronAPI || !window.electronAPI.previewCancelReceipt) {
+      alert('Fiş önizleme özelliği şu anda kullanılamıyor');
+      return;
+    }
+
+    try {
+      const result = await window.electronAPI.previewCancelReceipt(cancelConfirmItem.id, cancelQuantity);
+      if (result.success) {
+        setCancelReceiptHTML(result.html);
+        setShowCancelReceiptPreview(true);
+      } else {
+        alert(result.error || 'Fiş önizlemesi oluşturulamadı');
+      }
+    } catch (error) {
+      console.error('Fiş önizleme hatası:', error);
+      alert('Fiş önizlemesi oluşturulurken bir hata oluştu');
+    }
   };
 
   // İptal onayı
@@ -78,6 +105,8 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
         // Başarılı - parent component'e bildir
         setCancelConfirmItem(null);
         setCancelQuantity(1);
+        setShowCancelReceiptPreview(false);
+        setCancelReceiptHTML(null);
         if (onItemCancelled) {
           onItemCancelled();
         }
@@ -421,13 +450,28 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               </div>
             </div>
 
-            <div className="flex items-center justify-center gap-4">
+            <div className="flex items-center justify-center gap-4 flex-wrap">
               <button
-                onClick={() => setCancelConfirmItem(null)}
+                onClick={() => {
+                  setCancelConfirmItem(null);
+                  setShowCancelReceiptPreview(false);
+                  setCancelReceiptHTML(null);
+                }}
                 disabled={cancellingItemId === cancelConfirmItem.id}
                 className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 İptal Et
+              </button>
+              <button
+                onClick={handlePreviewCancelReceipt}
+                disabled={cancellingItemId === cancelConfirmItem.id}
+                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-bold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                </svg>
+                <span>Fişi Önizle</span>
               </button>
               <button
                 onClick={confirmCancelItem}
@@ -449,6 +493,55 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                     <span>Evet, İptal Et</span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* İptal Fişi Önizleme Modal */}
+      {showCancelReceiptPreview && cancelReceiptHTML && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[70] animate-fade-in">
+          <div className="bg-white backdrop-blur-xl border-2 border-blue-200 rounded-3xl p-8 max-w-2xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-2xl font-bold text-gray-800">İptal Fişi Önizleme</h3>
+              <button
+                onClick={() => {
+                  setShowCancelReceiptPreview(false);
+                  setCancelReceiptHTML(null);
+                }}
+                className="text-gray-500 hover:text-gray-700 transition-colors p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 mb-6">
+              <div className="text-sm text-gray-600 mb-2">
+                <p className="font-semibold">Bu fiş yazdırıldığında şu şekilde görünecektir:</p>
+              </div>
+            </div>
+
+            <div className="bg-white border-2 border-gray-300 rounded-lg p-4 overflow-x-auto" style={{ maxWidth: '220px', margin: '0 auto' }}>
+              <iframe
+                srcDoc={cancelReceiptHTML}
+                className="w-full border-0"
+                style={{ minHeight: '400px', width: '220px' }}
+                title="İptal Fişi Önizleme"
+              />
+            </div>
+
+            <div className="mt-6 flex items-center justify-center gap-4">
+              <button
+                onClick={() => {
+                  setShowCancelReceiptPreview(false);
+                  setCancelReceiptHTML(null);
+                }}
+                className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all duration-200"
+              >
+                Kapat
               </button>
             </div>
           </div>

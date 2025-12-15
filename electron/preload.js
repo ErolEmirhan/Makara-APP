@@ -14,7 +14,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTableOrders: (tableId) => ipcRenderer.invoke('get-table-orders', tableId),
   getTableOrderItems: (orderId) => ipcRenderer.invoke('get-table-order-items', orderId),
   cancelTableOrderItem: (itemId, cancelQuantity) => ipcRenderer.invoke('cancel-table-order-item', itemId, cancelQuantity),
+  previewCancelReceipt: (itemId, cancelQuantity) => ipcRenderer.invoke('preview-cancel-receipt', itemId, cancelQuantity),
   completeTableOrder: (orderId) => ipcRenderer.invoke('complete-table-order', orderId),
+  transferTableOrder: (sourceTableId, targetTableId) => ipcRenderer.invoke('transfer-table-order', sourceTableId, targetTableId),
   // Settings API
   changePassword: (currentPin, newPin) => ipcRenderer.invoke('change-password', currentPin, newPin),
   getAdminPin: () => ipcRenderer.invoke('get-admin-pin'),

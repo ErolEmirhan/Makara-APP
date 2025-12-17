@@ -1041,6 +1041,71 @@ ipcMain.handle('delete-all-sales', async (event) => {
   }
 });
 
+// Kategorileri yeniden sıralama (order_index güncelleme)
+ipcMain.handle('reorder-categories', async (event, orderedCategoryIds) => {
+  try {
+    if (!Array.isArray(orderedCategoryIds) || orderedCategoryIds.length === 0) {
+      return { success: false, error: 'Geçersiz kategori sırası' };
+    }
+
+    // ID'leri number'a çevir
+    const normalizedIds = orderedCategoryIds.map(id =>
+      typeof id === 'string' ? parseInt(id) : id
+    );
+
+    // Tüm kategorilerin mevcut olduğunu doğrula
+    const allExist = normalizedIds.every(id =>
+      db.categories.some(c => c.id === id)
+    );
+    if (!allExist) {
+      return { success: false, error: 'Mevcut olmayan kategori ID\'si gönderildi' };
+    }
+
+    // Yeni order_index değerlerini ata
+    normalizedIds.forEach((id, index) => {
+      const cat = db.categories.find(c => c.id === id);
+      if (cat) {
+        cat.order_index = index;
+      }
+    });
+
+    // Güvenlik için diğer kategorileri de sona ekle (eğer varsa)
+    const remaining = db.categories
+      .filter(c => !normalizedIds.includes(c.id))
+      .sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+    remaining.forEach((cat, offset) => {
+      cat.order_index = normalizedIds.length + offset;
+    });
+
+    // Veritabanını kaydet
+    saveDatabase();
+
+    // Firebase'e güncel sırayı yansıt
+    try {
+      for (const category of db.categories) {
+        await saveCategoryToFirebase(category);
+      }
+    } catch (err) {
+      console.error('Firebase kategori sıralama güncelleme hatası:', err);
+      // Firebase hatası olsa bile local sıralama kaydedildi, uyarı ver
+      return {
+        success: false,
+        error:
+          'Sıralama localde kaydedildi ancak Firebase güncellenemedi. İnternet bağlantınızı kontrol edin.'
+      };
+    }
+
+    const sorted = [...db.categories].sort(
+      (a, b) => a.order_index - b.order_index
+    );
+
+    return { success: true, categories: sorted };
+  } catch (error) {
+    console.error('Kategori sıralama hatası:', error);
+    return { success: false, error: error.message };
+  }
+});
+
 // Table Order IPC Handlers
 ipcMain.handle('create-table-order', (event, orderData) => {
   const { items, totalAmount, tableId, tableName, tableType, orderNote } = orderData;
@@ -5001,7 +5066,7 @@ function generateMobileHTML(serverURL) {
     }
     .product-card {
       padding: 16px;
-      border: 2px solid rgba(255, 255, 255, 0.2);
+      border: 2px solid rgba(189, 68, 128, 0.99); /* pembe stroke çerçeve */
       border-radius: 14px;
       background: #1f2937;
       background-size: cover;
@@ -5024,7 +5089,8 @@ function generateMobileHTML(serverURL) {
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0, 0, 0, 0.8);
+      /* Düz, sade pembe overlay (gradyansız), %50 opaklık */
+      background: rgba(220, 67, 144, 0.8);
       z-index: 1;
     }
     .product-card:hover {
@@ -5823,7 +5889,7 @@ function generateMobileHTML(serverURL) {
       }
       50% {
         opacity: 0.7;
-        transform: scale(1.1);
+        transform: scale(1.08);
       }
     }
     /* Mevcut Siparişler Bölümü */
@@ -5832,9 +5898,9 @@ function generateMobileHTML(serverURL) {
       padding: 0 0 15px 0;
     }
     .existing-orders-title {
-      font-size: 16px;
-      font-weight: 700;
-      color: #1f2937;
+      font-size: 15px;
+      font-weight: 800;
+      color: #7f1d1d;
       margin-bottom: 8px;
       padding: 0 5px;
       display: flex;
@@ -5842,26 +5908,76 @@ function generateMobileHTML(serverURL) {
       justify-content: space-between;
       gap: 8px;
       cursor: pointer;
-      background: #f9fafb;
-      border-radius: 10px;
-      border: 1px solid #e5e7eb;
-      padding: 10px 12px;
+      background: linear-gradient(135deg, #fee2e2 0%, #fecaca 45%, #fee2e2 100%);
+      border-radius: 999px;
+      border: 1px solid #fecaca;
+      padding: 10px 14px;
+      box-shadow: 0 4px 12px rgba(248, 113, 113, 0.45);
     }
     .existing-orders-title-left {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 10px;
     }
     .existing-orders-title-left::before {
-      content: '📋';
-      font-size: 18px;
+      content: '';
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: radial-gradient(circle at 30% 30%, #fee2e2 0%, #ef4444 45%, #7f1d1d 100%);
+      box-shadow: 0 0 0 4px rgba(248, 113, 113, 0.45);
+      animation: pulse 1.6s infinite;
     }
     .existing-orders-toggle-icon {
-      font-size: 14px;
-      color: #6b7280;
+      font-size: 16px;
+      color: #b91c1c;
+      font-weight: 800;
     }
     .existing-orders-content {
-      margin-top: 4px;
+      margin-top: 6px;
+    }
+    .existing-orders-actions {
+      display: flex;
+      justify-content: flex-end;
+      padding: 4px 5px 10px 5px;
+    }
+    .existing-orders-actions .adisyon-btn {
+      padding: 10px 18px;
+      border-radius: 999px;
+      border: none;
+      font-size: 13px;
+      font-weight: 800;
+      color: #78350f;
+      background: linear-gradient(135deg, #fef9c3 0%, #fde68a 45%, #fbbf24 100%);
+      box-shadow: 0 4px 12px rgba(250, 204, 21, 0.5);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+      letter-spacing: 0.02em;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+    }
+    .existing-orders-actions .adisyon-btn:hover {
+      transform: translateY(-1px) scale(1.02);
+      box-shadow: 0 6px 16px rgba(250, 204, 21, 0.65);
+      filter: brightness(1.02);
+    }
+    .existing-orders-actions .adisyon-btn:active {
+      transform: translateY(0) scale(0.97);
+      box-shadow: 0 2px 8px rgba(250, 204, 21, 0.4);
+      filter: brightness(0.99);
+    }
+    .adisyon-btn-icon {
+      width: 20px;
+      height: 20px;
+      border-radius: 999px;
+      background: linear-gradient(135deg, #f97316 0%, #ea580c 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.45);
+      color: #fff;
+      font-size: 13px;
     }
     .order-card {
       background: white;
@@ -6124,6 +6240,19 @@ function generateMobileHTML(serverURL) {
             <span class="existing-orders-toggle-icon" id="existingOrdersToggleIcon">▼</span>
           </button>
           <div class="existing-orders-content" id="existingOrdersContent" style="display: none;">
+            <div class="existing-orders-actions">
+              <button type="button" class="adisyon-btn" onclick="requestTableAdisyon()">
+                <span class="adisyon-btn-icon">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="4" y="3" width="16" height="18" rx="2" ry="2"></rect>
+                    <line x1="8" y1="7" x2="16" y2="7"></line>
+                    <line x1="8" y1="11" x2="16" y2="11"></line>
+                    <line x1="8" y1="15" x2="12" y2="15"></line>
+                  </svg>
+                </span>
+                <span>Adisyon İste</span>
+              </button>
+            </div>
             <div id="existingOrdersList"></div>
           </div>
         </div>
@@ -6308,6 +6437,7 @@ function generateMobileHTML(serverURL) {
     let currentTableType = 'inside';
     let orderNote = '';
     let existingOrdersExpanded = false;
+    let isRequestingTableAdisyon = false;
     
     // PIN oturum yönetimi (1 saat)
     const SESSION_DURATION = 60 * 60 * 1000;
@@ -6750,6 +6880,44 @@ function generateMobileHTML(serverURL) {
           '</div>' +
         '</div>';
       }).join('');
+    }
+    
+    async function requestTableAdisyon() {
+      if (!selectedTable) {
+        showToast('error', 'Adisyon Yazdırılamadı', 'Lütfen önce bir masa seçin.');
+        return;
+      }
+      if (isRequestingTableAdisyon) {
+        return;
+      }
+      
+      const confirmResult = confirm(selectedTable.name + ' için kasa yazıcısından adisyon fişi yazdırılsın mı?');
+      if (!confirmResult) {
+        return;
+      }
+      
+      try {
+        isRequestingTableAdisyon = true;
+        
+        const response = await fetch(API_URL + '/request-table-adisyon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tableId: selectedTable.id })
+        });
+        
+        const result = await response.json().catch(() => ({}));
+        
+        if (response.ok && result.success) {
+          showToast('success', 'Adisyon Gönderildi', 'Kasa yazıcısına adisyon fişi gönderildi.');
+        } else {
+          showToast('error', 'Adisyon Yazdırılamadı', (result && result.error) || 'Adisyon fişi yazdırılırken bir hata oluştu.');
+        }
+      } catch (error) {
+        console.error('Adisyon isteği hatası:', error);
+        showToast('error', 'Adisyon Yazdırılamadı', 'Sunucuya ulaşılamadı. Lütfen tekrar deneyin.');
+      } finally {
+        isRequestingTableAdisyon = false;
+      }
     }
     
     function goBackToTables() {
@@ -8001,6 +8169,93 @@ function startAPIServer() {
     });
     
     res.json(ordersWithItems);
+  });
+
+  // Masa için kasa yazıcısından adisyon fişi iste
+  appExpress.post('/api/request-table-adisyon', async (req, res) => {
+    try {
+      const { tableId } = req.body || {};
+      
+      if (!tableId) {
+        return res.status(400).json({ success: false, error: 'tableId gerekli' });
+      }
+      
+      const pendingOrders = (db.tableOrders || []).filter(
+        o => o.table_id === tableId && o.status === 'pending'
+      );
+      
+      if (!pendingOrders || pendingOrders.length === 0) {
+        return res.status(404).json({ success: false, error: 'Bu masaya ait aktif sipariş bulunamadı.' });
+      }
+      
+      const allItems = [];
+      pendingOrders.forEach(order => {
+        const items = (db.tableOrderItems || []).filter(
+          item => item.order_id === order.id
+        );
+        items.forEach(item => {
+          allItems.push({
+            id: item.product_id,
+            name: item.product_name,
+            price: item.price,
+            quantity: item.quantity,
+            isGift: item.isGift || false
+          });
+        });
+      });
+      
+      if (allItems.length === 0) {
+        return res.status(400).json({ success: false, error: 'Bu masanın siparişinde ürün bulunamadı.' });
+      }
+      
+      const cashierPrinter = db.settings && db.settings.cashierPrinter;
+      if (!cashierPrinter || !cashierPrinter.printerName) {
+        return res.status(400).json({ success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen masaüstü uygulamadan kasa yazıcısı seçin.' });
+      }
+      
+      const firstOrder = pendingOrders[0];
+      const now = new Date();
+      
+      const receiptData = {
+        sale_id: null,
+        items: allItems,
+        paymentMethod: 'Adisyon',
+        sale_date: now.toLocaleDateString('tr-TR'),
+        sale_time: getFormattedTime(now),
+        orderNote: firstOrder.order_note || null,
+        tableName: firstOrder.table_name || null,
+        tableType: firstOrder.table_type || null,
+        cashierOnly: true
+      };
+      
+      // Toplam tutarı hesapla (ikramlar hariç)
+      const totalAmount = allItems.reduce((sum, item) => {
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
+      
+      const cashierReceiptData = {
+        ...receiptData,
+        totalAmount
+      };
+      
+      const result = await printToPrinter(
+        cashierPrinter.printerName,
+        cashierPrinter.printerType,
+        cashierReceiptData,
+        false,
+        null
+      );
+      
+      if (result && result.success) {
+        return res.json({ success: true });
+      } else {
+        return res.status(500).json({ success: false, error: (result && result.error) || 'Adisyon fişi yazdırılamadı.' });
+      }
+    } catch (error) {
+      console.error('Mobil adisyon yazdırma hatası:', error);
+      return res.status(500).json({ success: false, error: 'Adisyon yazdırma sırasında bir hata oluştu.' });
+    }
   });
 
   // Mobil personel arayüzü için static dosyalar

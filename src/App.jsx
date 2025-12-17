@@ -623,7 +623,7 @@ function App() {
               }}
             />
             
-            {/* Arama Çubuğu ve Masraf Ekle Butonu */}
+            {/* Arama Çubuğu ve (sadece Admin için) Masraf Ekle Butonu */}
             <div className="mb-3 flex gap-2">
               <div className="flex-1 relative">
                 <input
@@ -655,15 +655,17 @@ function App() {
                   </button>
                 )}
               </div>
-              <button
-                onClick={() => setShowExpenseModal(true)}
-                className="px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 whitespace-nowrap"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-                <span>Masraf Ekle</span>
-              </button>
+              {userType === 'Admin' && (
+                <button
+                  onClick={() => setShowExpenseModal(true)}
+                  className="px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 whitespace-nowrap"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  </svg>
+                  <span>Masraf Ekle</span>
+                </button>
+              )}
             </div>
             {searchQuery && (
               <p className="mb-3 text-xs text-gray-600 font-medium">

@@ -631,6 +631,62 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
     ? products.filter(p => p.category_id === selectedCategory.id)
     : products;
 
+  const handleMoveCategory = async (categoryId, direction) => {
+    if (!categories || categories.length === 0) return;
+
+    const currentIndex = categories.findIndex(c => c.id === categoryId);
+    if (currentIndex === -1) return;
+
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= categories.length) {
+      return; // En üstte/en altta ise hareket etmesin
+    }
+
+    const newCategories = [...categories];
+    const temp = newCategories[currentIndex];
+    newCategories[currentIndex] = newCategories[targetIndex];
+    newCategories[targetIndex] = temp;
+
+    setCategories(newCategories);
+
+    // Backend'e yeni sıralamayı gönder
+    try {
+      if (!window.electronAPI || typeof window.electronAPI.reorderCategories !== 'function') {
+        alert('Kategori sıralama özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+        return;
+      }
+
+      const orderedIds = newCategories.map(c => c.id);
+      const result = await window.electronAPI.reorderCategories(orderedIds);
+
+      if (!result || !result.success) {
+        console.error('Kategori sıralama hatası:', result);
+        alert(result?.error || 'Kategori sıralaması kaydedilemedi');
+        return;
+      }
+
+      // Backend’den dönen sıralamayı kaydet (güvenli olması için)
+      if (Array.isArray(result.categories)) {
+        setCategories(result.categories);
+        // Seçili kategori referansını güncelle
+        if (selectedCategory) {
+          const updatedSelected = result.categories.find(c => c.id === selectedCategory.id);
+          if (updatedSelected) {
+            setSelectedCategory(updatedSelected);
+          }
+        }
+      }
+
+      // Ana uygulamadaki kategori/pano görünümünü yenile (masaüstü POS + mobil)
+      if (onProductsUpdated) {
+        onProductsUpdated();
+      }
+    } catch (error) {
+      console.error('Kategori sıralama API hatası:', error);
+      alert('Kategori sıralaması kaydedilemedi: ' + error.message);
+    }
+  };
+
   return createPortal(
     <div className="fixed inset-0 bg-black/80 backdrop-blur-lg flex items-center justify-center z-[999] animate-fade-in px-4">
       <div className="bg-white rounded-3xl p-8 w-full max-w-6xl max-h-[90vh] shadow-2xl transform animate-scale-in relative overflow-hidden flex flex-col">
@@ -1018,6 +1074,32 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                             </div>
                           </button>
                           <div className="absolute -top-1 -right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 z-10">
+                            {/* Yukarı taşı */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleMoveCategory(cat.id, 'up');
+                              }}
+                              className="w-6 h-6 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-full flex items-center justify-center shadow-lg transition-all"
+                              title="Yukarı Taşı"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
+                              </svg>
+                            </button>
+                            {/* Aşağı taşı */}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleMoveCategory(cat.id, 'down');
+                              }}
+                              className="w-6 h-6 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-full flex items-center justify-center shadow-lg transition-all"
+                              title="Aşağı Taşı"
+                            >
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </button>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();

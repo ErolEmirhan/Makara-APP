@@ -1946,6 +1946,18 @@ ipcMain.handle('create-product', (event, productData) => {
     console.error('Firebase ürün kaydetme hatası:', err);
   });
   
+  // Eğer görsel varsa ve temp görsel ise (path'te temp_ varsa), görsel kaydını güncelle
+  if (image && image.includes('r2.dev') && image.includes('temp_')) {
+    updateTempImageRecordInFirebase(image, newProduct.id, newProduct.name, newProduct.category_id, newProduct.price).catch(err => {
+      console.error('Firebase temp görsel kaydı güncelleme hatası:', err);
+    });
+  } else if (image && (image.includes('r2.dev') || image.includes('r2.cloudflarestorage.com'))) {
+    // Normal görsel ise de kaydı güncelle/oluştur
+    updateImageRecordInFirebase(newProduct.id, image, newProduct.name, newProduct.category_id, newProduct.price).catch(err => {
+      console.error('Firebase görsel kaydı güncelleme hatası:', err);
+    });
+  }
+  
   return { success: true, product: newProduct };
 });
 
@@ -1980,11 +1992,18 @@ ipcMain.handle('update-product', async (event, productData) => {
     console.error('Firebase ürün güncelleme hatası:', err);
   });
   
-  // Eğer görsel değiştiyse ve yeni görsel R2'de ise, images koleksiyonunu güncelle
+  // Eğer görsel varsa ve R2'de ise, images koleksiyonunu güncelle
   if (image && (image.includes('r2.dev') || image.includes('r2.cloudflarestorage.com'))) {
-    updateImageRecordInFirebase(id, image, name, category_id, parseFloat(price)).catch(err => {
-      console.error('Firebase görsel kaydı güncelleme hatası:', err);
-    });
+    // Temp görsel ise (path'te temp_ varsa) özel işlem yap
+    if (image.includes('temp_')) {
+      updateTempImageRecordInFirebase(image, id, name, category_id, parseFloat(price)).catch(err => {
+        console.error('Firebase temp görsel kaydı güncelleme hatası:', err);
+      });
+    } else {
+      updateImageRecordInFirebase(id, image, name, category_id, parseFloat(price)).catch(err => {
+        console.error('Firebase görsel kaydı güncelleme hatası:', err);
+      });
+    }
   }
   
   return { success: true, product: db.products[productIndex] };
@@ -2183,11 +2202,12 @@ async function updateImageRecordInFirebase(productId, imageUrl, productName, cat
     const imagesRef = firebaseCollection(firestore, 'images');
     const snapshot = await firebaseGetDocs(imagesRef);
     
-    // Bu ürün için görsel kaydı var mı kontrol et
+    // Bu URL için görsel kaydı var mı kontrol et (product_id veya URL ile)
     let imageDocFound = null;
     snapshot.forEach((doc) => {
       const imageData = doc.data();
-      if (imageData.product_id === productId && imageData.url === imageUrl) {
+      // URL eşleşiyorsa veya aynı ürün için başka bir görsel varsa
+      if (imageData.url === imageUrl || (imageData.product_id === productId && imageData.url !== imageUrl)) {
         imageDocFound = { docId: doc.id, data: imageData };
       }
     });
@@ -2197,14 +2217,16 @@ async function updateImageRecordInFirebase(productId, imageUrl, productName, cat
       const imageDocRef = firebaseDoc(firestore, 'images', imageDocFound.docId);
       await firebaseSetDoc(imageDocRef, {
         ...imageDocFound.data,
+        product_id: productId,
         category_id: categoryId,
         product_name: productName,
         product_price: productPrice,
+        url: imageUrl,
         updated_at: firebaseServerTimestamp()
       }, { merge: true });
       console.log(`✅ Görsel kaydı Firebase'de güncellendi - Ürün: ${productName}`);
     } else {
-      // Kayıt yoksa yeni kayıt ekle (ürün güncellendiğinde görsel değişmiş olabilir)
+      // Kayıt yoksa yeni kayıt ekle
       // URL'den path'i çıkar
       let filePath = '';
       if (imageUrl.includes('/images/')) {
@@ -2234,6 +2256,71 @@ async function updateImageRecordInFirebase(productId, imageUrl, productName, cat
     }
   } catch (firebaseError) {
     console.warn('⚠️ Firebase görsel kaydı güncelleme hatası (devam ediliyor):', firebaseError.message);
+  }
+}
+
+// Temp görsel kaydını güncelle (ürün oluşturulduğunda temp görseli gerçek ürün görseline dönüştür)
+async function updateTempImageRecordInFirebase(imageUrl, productId, productName, categoryId, productPrice) {
+  if (!firestore || !firebaseCollection || !firebaseGetDocs || !firebaseDoc || !firebaseSetDoc) {
+    return;
+  }
+  
+  try {
+    const imagesRef = firebaseCollection(firestore, 'images');
+    const snapshot = await firebaseGetDocs(imagesRef);
+    
+    // Bu URL için temp görsel kaydı var mı kontrol et
+    let tempImageDocFound = null;
+    snapshot.forEach((doc) => {
+      const imageData = doc.data();
+      // URL eşleşiyorsa ve product_id null ise (temp görsel)
+      if (imageData.url === imageUrl && (imageData.product_id === null || imageData.path.includes('temp_'))) {
+        tempImageDocFound = { docId: doc.id, data: imageData };
+      }
+    });
+    
+    if (tempImageDocFound) {
+      // Temp görsel kaydını güncelle
+      const imageDocRef = firebaseDoc(firestore, 'images', tempImageDocFound.docId);
+      await firebaseSetDoc(imageDocRef, {
+        ...tempImageDocFound.data,
+        product_id: productId,
+        category_id: categoryId,
+        product_name: productName,
+        product_price: productPrice,
+        updated_at: firebaseServerTimestamp()
+      }, { merge: true });
+      console.log(`✅ Temp görsel kaydı Firebase'de güncellendi - Ürün: ${productName} (ID: ${productId})`);
+    } else {
+      // Temp görsel kaydı bulunamadıysa yeni kayıt oluştur
+      let filePath = '';
+      if (imageUrl.includes('/images/')) {
+        const urlParts = imageUrl.split('/images/');
+        if (urlParts.length > 1) {
+          filePath = `images/${urlParts[1]}`;
+        }
+      } else {
+        const urlModule = require('url');
+        const urlObj = new urlModule.URL(imageUrl);
+        filePath = urlObj.pathname.substring(1);
+      }
+      
+      if (filePath) {
+        await firebaseAddDoc(imagesRef, {
+          product_id: productId,
+          category_id: categoryId,
+          product_name: productName,
+          product_price: productPrice,
+          url: imageUrl,
+          path: filePath,
+          uploaded_at: firebaseServerTimestamp(),
+          created_at: new Date().toISOString()
+        });
+        console.log(`✅ Görsel kaydı Firebase'e eklendi - Ürün: ${productName} (ID: ${productId})`);
+      }
+    }
+  } catch (firebaseError) {
+    console.warn('⚠️ Firebase temp görsel kaydı güncelleme hatası (devam ediliyor):', firebaseError.message);
   }
 }
 

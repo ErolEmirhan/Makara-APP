@@ -1979,6 +1979,13 @@ ipcMain.handle('update-product', async (event, productData) => {
     console.error('Firebase ürün güncelleme hatası:', err);
   });
   
+  // Eğer görsel değiştiyse ve yeni görsel R2'de ise, images koleksiyonunu güncelle
+  if (image && (image.includes('r2.dev') || image.includes('r2.cloudflarestorage.com'))) {
+    updateImageRecordInFirebase(id, image, name, category_id, parseFloat(price)).catch(err => {
+      console.error('Firebase görsel kaydı güncelleme hatası:', err);
+    });
+  }
+  
   return { success: true, product: db.products[productIndex] };
 });
 
@@ -2098,18 +2105,58 @@ async function uploadImageToR2(filePath, productId = null) {
     
     console.log(`✅ Görsel URL oluşturuldu: ${publicUrl}`);
     
-    // Firebase Firestore'a images koleksiyonuna kaydet
-    if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
+    // Firebase Firestore'a images koleksiyonuna kaydet (ürün bilgileriyle birlikte)
+    if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp && productId) {
+      try {
+        // Ürün bilgilerini local database'den al
+        const product = db.products.find(p => p.id === productId);
+        
+        if (product) {
+          const imagesRef = firebaseCollection(firestore, 'images');
+          await firebaseAddDoc(imagesRef, {
+            product_id: productId,
+            category_id: product.category_id || null,
+            product_name: product.name || null,
+            product_price: product.price || null,
+            url: publicUrl,
+            path: uniqueFileName,
+            uploaded_at: firebaseServerTimestamp(),
+            created_at: new Date().toISOString()
+          });
+          console.log(`✅ Görsel URL Firebase database'e kaydedildi (images koleksiyonu) - Ürün: ${product.name}`);
+        } else {
+          // Ürün bulunamadıysa sadece temel bilgileri kaydet
+          const imagesRef = firebaseCollection(firestore, 'images');
+          await firebaseAddDoc(imagesRef, {
+            product_id: productId,
+            category_id: null,
+            product_name: null,
+            product_price: null,
+            url: publicUrl,
+            path: uniqueFileName,
+            uploaded_at: firebaseServerTimestamp(),
+            created_at: new Date().toISOString()
+          });
+          console.log(`✅ Görsel URL Firebase database'e kaydedildi (images koleksiyonu) - Ürün bilgisi bulunamadı`);
+        }
+      } catch (firebaseError) {
+        console.warn('⚠️ Firebase database kayıt hatası (devam ediliyor):', firebaseError.message);
+      }
+    } else if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
+      // productId yoksa (temp görsel) sadece URL'yi kaydet
       try {
         const imagesRef = firebaseCollection(firestore, 'images');
         await firebaseAddDoc(imagesRef, {
-          product_id: productId,
+          product_id: null,
+          category_id: null,
+          product_name: null,
+          product_price: null,
           url: publicUrl,
           path: uniqueFileName,
           uploaded_at: firebaseServerTimestamp(),
           created_at: new Date().toISOString()
         });
-        console.log(`✅ Görsel URL Firebase database'e kaydedildi (images koleksiyonu)`);
+        console.log(`✅ Görsel URL Firebase database'e kaydedildi (images koleksiyonu) - Geçici görsel`);
       } catch (firebaseError) {
         console.warn('⚠️ Firebase database kayıt hatası (devam ediliyor):', firebaseError.message);
       }
@@ -2119,6 +2166,70 @@ async function uploadImageToR2(filePath, productId = null) {
   } catch (error) {
     console.error('❌ R2 yükleme hatası:', error);
     throw error;
+  }
+}
+
+// Firebase images koleksiyonunda görsel kaydını güncelle (ürün güncellendiğinde)
+async function updateImageRecordInFirebase(productId, imageUrl, productName, categoryId, productPrice) {
+  if (!firestore || !firebaseCollection || !firebaseGetDocs || !firebaseDoc || !firebaseSetDoc) {
+    return;
+  }
+  
+  try {
+    const imagesRef = firebaseCollection(firestore, 'images');
+    const snapshot = await firebaseGetDocs(imagesRef);
+    
+    // Bu ürün için görsel kaydı var mı kontrol et
+    let imageDocFound = null;
+    snapshot.forEach((doc) => {
+      const imageData = doc.data();
+      if (imageData.product_id === productId && imageData.url === imageUrl) {
+        imageDocFound = { docId: doc.id, data: imageData };
+      }
+    });
+    
+    if (imageDocFound) {
+      // Mevcut kaydı güncelle
+      const imageDocRef = firebaseDoc(firestore, 'images', imageDocFound.docId);
+      await firebaseSetDoc(imageDocRef, {
+        ...imageDocFound.data,
+        category_id: categoryId,
+        product_name: productName,
+        product_price: productPrice,
+        updated_at: firebaseServerTimestamp()
+      }, { merge: true });
+      console.log(`✅ Görsel kaydı Firebase'de güncellendi - Ürün: ${productName}`);
+    } else {
+      // Kayıt yoksa yeni kayıt ekle (ürün güncellendiğinde görsel değişmiş olabilir)
+      // URL'den path'i çıkar
+      let filePath = '';
+      if (imageUrl.includes('/images/')) {
+        const urlParts = imageUrl.split('/images/');
+        if (urlParts.length > 1) {
+          filePath = `images/${urlParts[1]}`;
+        }
+      } else {
+        const urlModule = require('url');
+        const urlObj = new urlModule.URL(imageUrl);
+        filePath = urlObj.pathname.substring(1);
+      }
+      
+      if (filePath) {
+        await firebaseAddDoc(imagesRef, {
+          product_id: productId,
+          category_id: categoryId,
+          product_name: productName,
+          product_price: productPrice,
+          url: imageUrl,
+          path: filePath,
+          uploaded_at: firebaseServerTimestamp(),
+          created_at: new Date().toISOString()
+        });
+        console.log(`✅ Görsel kaydı Firebase'e eklendi - Ürün: ${productName}`);
+      }
+    }
+  } catch (firebaseError) {
+    console.warn('⚠️ Firebase görsel kaydı güncelleme hatası (devam ediliyor):', firebaseError.message);
   }
 }
 
@@ -2169,14 +2280,19 @@ async function deleteImageFromR2(imageURL) {
         const imagesRef = firebaseCollection(firestore, 'images');
         const snapshot = await firebaseGetDocs(imagesRef);
         
-        snapshot.forEach(async (doc) => {
+        const deletePromises = [];
+        snapshot.forEach((doc) => {
           const imageData = doc.data();
           if (imageData.url === imageURL || imageData.path === filePath) {
             const imageDocRef = firebaseDoc(firestore, 'images', doc.id);
-            await firebaseDeleteDoc(imageDocRef);
-            console.log(`✅ Görsel Firebase database'den silindi (images koleksiyonu)`);
+            deletePromises.push(firebaseDeleteDoc(imageDocRef));
           }
         });
+        
+        if (deletePromises.length > 0) {
+          await Promise.all(deletePromises);
+          console.log(`✅ Görsel Firebase database'den silindi (images koleksiyonu)`);
+        }
       } catch (firebaseError) {
         console.warn('⚠️ Firebase database silme hatası (devam ediliyor):', firebaseError.message);
       }

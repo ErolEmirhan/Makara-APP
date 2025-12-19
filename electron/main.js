@@ -36,6 +36,7 @@ const R2_CONFIG = {
   accessKeyId: '9ed5b5b10661aee16cb19588379afe42',
   secretAccessKey: '37caee60d81510e4f8bdec63cb857fd1832e1c88069d352dd110d5300f2b9c7d',
   endpoint: 'https://e33cde4cf4906c2179b978f47a24bc2e.r2.cloudflarestorage.com',
+  publicSubdomainId: 'pub-25a516669a2e4f49b458356009f7fb83', // R2.dev public subdomain ID
   publicUrl: null // R2 public domain (eğer varsa) veya custom domain - null ise R2.dev subdomain kullanılır
 };
 
@@ -2092,14 +2093,17 @@ async function uploadImageToR2(filePath, productId = null) {
     console.log(`✅ Görsel R2'ye yüklendi: ${uniqueFileName}`);
     
     // Public URL oluştur
-    // R2.dev subdomain formatı: https://<bucket-name>.<account-id>.r2.dev/path
-    // Eğer custom domain varsa onu kullan, yoksa R2.dev subdomain kullan
+    // R2.dev subdomain formatı: https://pub-{subdomain-id}.r2.dev/path
+    // Eğer custom domain varsa onu kullan, yoksa R2.dev public subdomain kullan
     // Not: R2.dev subdomain Cloudflare dashboard'dan etkinleştirilmiş olmalı
     let publicUrl;
     if (R2_CONFIG.publicUrl) {
       publicUrl = `${R2_CONFIG.publicUrl}/${uniqueFileName}`;
+    } else if (R2_CONFIG.publicSubdomainId) {
+      // Doğru R2.dev public subdomain formatı: pub-{subdomain-id}.r2.dev
+      publicUrl = `https://${R2_CONFIG.publicSubdomainId}.r2.dev/${uniqueFileName}`;
     } else {
-      // Doğru R2.dev subdomain formatı: bucket-name.account-id.r2.dev
+      // Fallback: eski format (kullanılmamalı)
       publicUrl = `https://${R2_CONFIG.bucketName}.${R2_CONFIG.accountId}.r2.dev/${uniqueFileName}`;
     }
     

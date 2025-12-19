@@ -9,6 +9,8 @@ const http = require('http');
 const { Server } = require('socket.io');
 const QRCode = require('qrcode');
 const os = require('os');
+const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 // Firebase entegrasyonu
 let firebaseApp = null;
@@ -26,6 +28,26 @@ let storageRef = null;
 let storageUploadBytes = null;
 let storageGetDownloadURL = null;
 let storageDeleteObject = null;
+
+// Cloudflare R2 entegrasyonu
+const R2_CONFIG = {
+  accountId: 'e33cde4cf4906c2179b978f47a24bc2e',
+  bucketName: 'makara',
+  accessKeyId: '9ed5b5b10661aee16cb19588379afe42',
+  secretAccessKey: '37caee60d81510e4f8bdec63cb857fd1832e1c88069d352dd110d5300f2b9c7d',
+  endpoint: 'https://e33cde4cf4906c2179b978f47a24bc2e.r2.cloudflarestorage.com',
+  publicUrl: null // R2 public domain (eğer varsa) veya custom domain - null ise R2.dev subdomain kullanılır
+};
+
+// R2 S3 Client
+const r2Client = new S3Client({
+  region: 'auto',
+  endpoint: R2_CONFIG.endpoint,
+  credentials: {
+    accessKeyId: R2_CONFIG.accessKeyId,
+    secretAccessKey: R2_CONFIG.secretAccessKey,
+  },
+});
 
 try {
   // Firebase modüllerini dinamik olarak yükle
@@ -256,8 +278,10 @@ async function migrateLocalImagesToFirebase() {
         continue;
       }
 
-      // Firebase Storage URL kontrolü
-      if (product.image.includes('firebasestorage.googleapis.com')) {
+      // Firebase Storage veya R2 URL kontrolü
+      if (product.image.includes('firebasestorage.googleapis.com') || 
+          product.image.includes('r2.cloudflarestorage.com') || 
+          product.image.includes('r2.dev')) {
         skippedCount++;
         continue;
       }
@@ -295,7 +319,7 @@ async function migrateLocalImagesToFirebase() {
 
       try {
         // Firebase Storage'a yükle
-        const downloadURL = await uploadImageToFirebaseStorage(imagePath, product.id);
+        const downloadURL = await uploadImageToR2(imagePath, product.id);
         
         // Ürünü güncelle
         product.image = downloadURL;
@@ -314,7 +338,7 @@ async function migrateLocalImagesToFirebase() {
       
       // Firebase'e de güncelle
       for (const product of db.products) {
-        if (product.image && product.image.includes('firebasestorage.googleapis.com')) {
+        if (product.image && (product.image.includes('firebasestorage.googleapis.com') || product.image.includes('r2.cloudflarestorage.com') || product.image.includes('r2.dev'))) {
           await saveProductToFirebase(product);
         }
       }
@@ -326,47 +350,9 @@ async function migrateLocalImagesToFirebase() {
   }
 }
 
-// Tüm kategorileri Firebase'e senkronize et
-async function syncCategoriesToFirebase() {
-  if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
-    console.warn('⚠️ Firebase başlatılamadı, kategoriler senkronize edilemedi');
-    return;
-  }
-  
-  try {
-    console.log('🔄 Kategoriler Firebase\'e senkronize ediliyor...');
-    const categories = db.categories || [];
-    
-    for (const category of categories) {
-      await saveCategoryToFirebase(category);
-    }
-    
-    console.log(`✅ ${categories.length} kategori Firebase'e senkronize edildi`);
-  } catch (error) {
-    console.error('❌ Kategoriler senkronize edilirken hata oluştu:', error);
-  }
-}
-
-// Tüm ürünleri Firebase'e senkronize et
-async function syncProductsToFirebase() {
-  if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
-    console.warn('⚠️ Firebase başlatılamadı, ürünler senkronize edilemedi');
-    return;
-  }
-  
-  try {
-    console.log('🔄 Ürünler Firebase\'e senkronize ediliyor...');
-    const products = db.products || [];
-    
-    for (const product of products) {
-      await saveProductToFirebase(product);
-    }
-    
-    console.log(`✅ ${products.length} ürün Firebase'e senkronize edildi`);
-  } catch (error) {
-    console.error('❌ Ürünler senkronize edilirken hata oluştu:', error);
-  }
-}
+// NOT: syncCategoriesToFirebase ve syncProductsToFirebase fonksiyonları kaldırıldı
+// Artık sadece yeni ekleme/güncelleme/silme işlemlerinde Firebase'e yazma yapılıyor
+// Bu sayede gereksiz read/write maliyetleri önleniyor
 
 // Firebase'den kategorileri çek ve local database'e senkronize et
 async function syncCategoriesFromFirebase() {
@@ -477,6 +463,7 @@ async function syncProductsFromFirebase() {
 }
 
 // Firebase'den gerçek zamanlı kategori dinleme
+let isCategoriesListenerInitialized = false;
 function setupCategoriesRealtimeListener() {
   if (!firestore || !firebaseCollection || !firebaseOnSnapshot) {
     console.warn('⚠️ Firebase başlatılamadı, kategori listener kurulamadı');
@@ -488,9 +475,24 @@ function setupCategoriesRealtimeListener() {
     const categoriesRef = firebaseCollection(firestore, 'categories');
     
     const unsubscribe = firebaseOnSnapshot(categoriesRef, (snapshot) => {
-      console.log('🔄 Firebase\'den kategori güncellemesi alındı');
+      // İlk yüklemede tüm dokümanlar "added" olarak gelir - bunları sessizce işle
+      const isInitialLoad = !isCategoriesListenerInitialized;
+      if (isInitialLoad) {
+        isCategoriesListenerInitialized = true;
+        console.log('📥 İlk kategori yüklemesi tamamlandı (sessiz mod)');
+        // İlk yüklemede sadece renderer'a bildir, her kategori için log yazma
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('categories-updated', db.categories);
+        }
+        return;
+      }
       
-      snapshot.docChanges().forEach((change) => {
+      // Sadece gerçek değişiklikler için log yaz
+      const changes = snapshot.docChanges();
+      if (changes.length === 0) return;
+      
+      let hasChanges = false;
+      changes.forEach((change) => {
         const firebaseCategory = change.doc.data();
         const categoryId = typeof firebaseCategory.id === 'string' ? parseInt(firebaseCategory.id) : firebaseCategory.id;
         
@@ -505,28 +507,21 @@ function setupCategoriesRealtimeListener() {
           };
           
           if (existingCategoryIndex !== -1) {
-            // Güncelle
-            db.categories[existingCategoryIndex] = categoryData;
-            console.log(`✅ Kategori güncellendi: ${categoryData.name} (ID: ${categoryId})`);
+            // Güncelle - sadece gerçekten değiştiyse
+            const oldCategory = db.categories[existingCategoryIndex];
+            const hasRealChange = oldCategory.name !== categoryData.name || 
+                                 oldCategory.order_index !== categoryData.order_index;
+            
+            if (hasRealChange) {
+              db.categories[existingCategoryIndex] = categoryData;
+              console.log(`🔄 Kategori güncellendi: ${categoryData.name} (ID: ${categoryId})`);
+              hasChanges = true;
+            }
           } else {
             // Yeni ekle
             db.categories.push(categoryData);
-            console.log(`✅ Yeni kategori eklendi: ${categoryData.name} (ID: ${categoryId})`);
-          }
-          
-          // ID'leri sırala ve order_index'e göre sırala
-          db.categories.sort((a, b) => {
-            if (a.order_index !== b.order_index) {
-              return a.order_index - b.order_index;
-            }
-            return a.id - b.id;
-          });
-          
-          saveDatabase();
-          
-          // Renderer process'e bildir
-          if (mainWindow && mainWindow.webContents) {
-            mainWindow.webContents.send('categories-updated', db.categories);
+            console.log(`➕ Yeni kategori eklendi: ${categoryData.name} (ID: ${categoryId})`);
+            hasChanges = true;
           }
         } else if (change.type === 'removed') {
           // Kategori silindi
@@ -534,21 +529,34 @@ function setupCategoriesRealtimeListener() {
           if (categoryIndex !== -1) {
             const deletedCategory = db.categories[categoryIndex];
             db.categories.splice(categoryIndex, 1);
-            saveDatabase();
-            console.log(`✅ Kategori silindi: ${deletedCategory.name} (ID: ${categoryId})`);
-            
-            // Renderer process'e bildir
-            if (mainWindow && mainWindow.webContents) {
-              mainWindow.webContents.send('categories-updated', db.categories);
-            }
+            console.log(`🗑️ Kategori silindi: ${deletedCategory.name} (ID: ${categoryId})`);
+            hasChanges = true;
           }
         }
       });
+      
+      // Sadece gerçek değişiklik varsa database'e yaz ve sırala
+      if (hasChanges) {
+        // ID'leri sırala ve order_index'e göre sırala
+        db.categories.sort((a, b) => {
+          if (a.order_index !== b.order_index) {
+            return a.order_index - b.order_index;
+          }
+          return a.id - b.id;
+        });
+        
+        saveDatabase();
+        
+        // Renderer process'e bildir
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('categories-updated', db.categories);
+        }
+      }
     }, (error) => {
       console.error('❌ Kategori listener hatası:', error);
     });
     
-    console.log('✅ Kategoriler için gerçek zamanlı listener aktif');
+    console.log('✅ Kategoriler için gerçek zamanlı listener aktif (optimize edilmiş)');
     return unsubscribe;
   } catch (error) {
     console.error('❌ Kategori listener kurulum hatası:', error);
@@ -557,6 +565,7 @@ function setupCategoriesRealtimeListener() {
 }
 
 // Firebase'den gerçek zamanlı ürün dinleme
+let isProductsListenerInitialized = false;
 function setupProductsRealtimeListener() {
   if (!firestore || !firebaseCollection || !firebaseOnSnapshot) {
     console.warn('⚠️ Firebase başlatılamadı, ürün listener kurulamadı');
@@ -568,9 +577,24 @@ function setupProductsRealtimeListener() {
     const productsRef = firebaseCollection(firestore, 'products');
     
     const unsubscribe = firebaseOnSnapshot(productsRef, (snapshot) => {
-      console.log('🔄 Firebase\'den ürün güncellemesi alındı');
+      // İlk yüklemede tüm dokümanlar "added" olarak gelir - bunları sessizce işle
+      const isInitialLoad = !isProductsListenerInitialized;
+      if (isInitialLoad) {
+        isProductsListenerInitialized = true;
+        console.log('📥 İlk ürün yüklemesi tamamlandı (sessiz mod)');
+        // İlk yüklemede sadece renderer'a bildir, her ürün için log yazma
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('products-updated', db.products);
+        }
+        return;
+      }
       
-      snapshot.docChanges().forEach((change) => {
+      // Sadece gerçek değişiklikler için log yaz
+      const changes = snapshot.docChanges();
+      if (changes.length === 0) return;
+      
+      let hasChanges = false;
+      changes.forEach((change) => {
         const firebaseProduct = change.doc.data();
         const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id) : firebaseProduct.id;
         
@@ -587,20 +611,23 @@ function setupProductsRealtimeListener() {
           };
           
           if (existingProductIndex !== -1) {
-            // Güncelle
-            db.products[existingProductIndex] = productData;
-            console.log(`✅ Ürün güncellendi: ${productData.name} (ID: ${productId})`);
+            // Güncelle - sadece gerçekten değiştiyse
+            const oldProduct = db.products[existingProductIndex];
+            const hasRealChange = oldProduct.name !== productData.name || 
+                                 oldProduct.category_id !== productData.category_id ||
+                                 oldProduct.price !== productData.price ||
+                                 oldProduct.image !== productData.image;
+            
+            if (hasRealChange) {
+              db.products[existingProductIndex] = productData;
+              console.log(`🔄 Ürün güncellendi: ${productData.name} (ID: ${productId})`);
+              hasChanges = true;
+            }
           } else {
             // Yeni ekle
             db.products.push(productData);
-            console.log(`✅ Yeni ürün eklendi: ${productData.name} (ID: ${productId})`);
-          }
-          
-          saveDatabase();
-          
-          // Renderer process'e bildir
-          if (mainWindow && mainWindow.webContents) {
-            mainWindow.webContents.send('products-updated', db.products);
+            console.log(`➕ Yeni ürün eklendi: ${productData.name} (ID: ${productId})`);
+            hasChanges = true;
           }
         } else if (change.type === 'removed') {
           // Ürün silindi
@@ -608,21 +635,26 @@ function setupProductsRealtimeListener() {
           if (productIndex !== -1) {
             const deletedProduct = db.products[productIndex];
             db.products.splice(productIndex, 1);
-            saveDatabase();
-            console.log(`✅ Ürün silindi: ${deletedProduct.name} (ID: ${productId})`);
-            
-            // Renderer process'e bildir
-            if (mainWindow && mainWindow.webContents) {
-              mainWindow.webContents.send('products-updated', db.products);
-            }
+            console.log(`🗑️ Ürün silindi: ${deletedProduct.name} (ID: ${productId})`);
+            hasChanges = true;
           }
         }
       });
+      
+      // Sadece gerçek değişiklik varsa database'e yaz
+      if (hasChanges) {
+        saveDatabase();
+        
+        // Renderer process'e bildir
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('products-updated', db.products);
+        }
+      }
     }, (error) => {
       console.error('❌ Ürün listener hatası:', error);
     });
     
-    console.log('✅ Ürünler için gerçek zamanlı listener aktif');
+    console.log('✅ Ürünler için gerçek zamanlı listener aktif (optimize edilmiş)');
     return unsubscribe;
   } catch (error) {
     console.error('❌ Ürün listener kurulum hatası:', error);
@@ -1928,9 +1960,9 @@ ipcMain.handle('update-product', async (event, productData) => {
   const oldImage = oldProduct.image;
   
   // Eğer görsel değiştiyse ve eski görsel Firebase Storage'da ise, eski görseli sil
-  if (oldImage && oldImage !== image && oldImage.includes('firebasestorage.googleapis.com')) {
-    await deleteImageFromFirebaseStorage(oldImage);
-  }
+    if (oldImage && oldImage !== image && (oldImage.includes('firebasestorage.googleapis.com') || oldImage.includes('r2.cloudflarestorage.com') || oldImage.includes('r2.dev'))) {
+      await deleteImageFromR2(oldImage);
+    }
   
   db.products[productIndex] = {
     ...db.products[productIndex],
@@ -1965,10 +1997,10 @@ ipcMain.handle('delete-product', async (event, productId) => {
   console.log(`🗑️ Ürün siliniyor: ${product.name} (ID: ${productIdNum})`);
   
   // Eğer ürünün Firebase Storage'da görseli varsa, onu da sil
-  if (product.image && product.image.includes('firebasestorage.googleapis.com')) {
+  if (product.image && (product.image.includes('firebasestorage.googleapis.com') || product.image.includes('r2.cloudflarestorage.com') || product.image.includes('r2.dev'))) {
     try {
-      await deleteImageFromFirebaseStorage(product.image);
-      console.log(`✅ Ürün görseli Firebase Storage'dan silindi`);
+      await deleteImageFromR2(product.image);
+      console.log(`✅ Ürün görseli R2'den silindi`);
     } catch (error) {
       console.error('⚠️ Görsel silme hatası (devam ediliyor):', error.message);
     }
@@ -2016,71 +2048,141 @@ ipcMain.handle('delete-product', async (event, productId) => {
   return { success: true };
 });
 
-// Firebase Storage'a görsel yükleme fonksiyonu
-async function uploadImageToFirebaseStorage(filePath, productId = null) {
-  if (!storage || !storageRef || !storageUploadBytes || !storageGetDownloadURL) {
-    throw new Error('Firebase Storage başlatılamadı');
-  }
-
+// Cloudflare R2'ye görsel yükleme fonksiyonu
+async function uploadImageToR2(filePath, productId = null) {
   try {
     // Dosyayı oku
     const fileBuffer = fs.readFileSync(filePath);
     const fileName = path.basename(filePath);
     const fileExt = path.extname(fileName);
     
+    // MIME type belirle
+    const mimeTypes = {
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.gif': 'image/gif',
+      '.webp': 'image/webp'
+    };
+    const contentType = mimeTypes[fileExt.toLowerCase()] || 'image/jpeg';
+    
     // Benzersiz dosya adı oluştur (ürün ID + timestamp)
     const timestamp = Date.now();
     const uniqueFileName = productId 
-      ? `products/${productId}_${timestamp}${fileExt}`
-      : `products/temp_${timestamp}${fileExt}`;
+      ? `images/products/${productId}_${timestamp}${fileExt}`
+      : `images/products/temp_${timestamp}${fileExt}`;
     
-    // Storage referansı oluştur
-    const imageRef = storageRef(storage, uniqueFileName);
+    // R2'ye yükle
+    const command = new PutObjectCommand({
+      Bucket: R2_CONFIG.bucketName,
+      Key: uniqueFileName,
+      Body: fileBuffer,
+      ContentType: contentType,
+      // Public read için ACL (R2'de public bucket ise gerekli olmayabilir)
+    });
     
-    // Dosyayı yükle
-    await storageUploadBytes(imageRef, fileBuffer);
-    console.log(`✅ Görsel Firebase Storage'a yüklendi: ${uniqueFileName}`);
+    await r2Client.send(command);
+    console.log(`✅ Görsel R2'ye yüklendi: ${uniqueFileName}`);
     
-    // Download URL'yi al
-    const downloadURL = await storageGetDownloadURL(imageRef);
-    console.log(`✅ Görsel URL alındı: ${downloadURL}`);
+    // Public URL oluştur
+    // R2.dev subdomain formatı: https://<bucket-name>.<account-id>.r2.dev/path
+    // Eğer custom domain varsa onu kullan, yoksa R2.dev subdomain kullan
+    // Not: R2.dev subdomain Cloudflare dashboard'dan etkinleştirilmiş olmalı
+    let publicUrl;
+    if (R2_CONFIG.publicUrl) {
+      publicUrl = `${R2_CONFIG.publicUrl}/${uniqueFileName}`;
+    } else {
+      // Doğru R2.dev subdomain formatı: bucket-name.account-id.r2.dev
+      publicUrl = `https://${R2_CONFIG.bucketName}.${R2_CONFIG.accountId}.r2.dev/${uniqueFileName}`;
+    }
     
-    return downloadURL;
+    console.log(`✅ Görsel URL oluşturuldu: ${publicUrl}`);
+    
+    // Firebase Firestore'a images koleksiyonuna kaydet
+    if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
+      try {
+        const imagesRef = firebaseCollection(firestore, 'images');
+        await firebaseAddDoc(imagesRef, {
+          product_id: productId,
+          url: publicUrl,
+          path: uniqueFileName,
+          uploaded_at: firebaseServerTimestamp(),
+          created_at: new Date().toISOString()
+        });
+        console.log(`✅ Görsel URL Firebase database'e kaydedildi (images koleksiyonu)`);
+      } catch (firebaseError) {
+        console.warn('⚠️ Firebase database kayıt hatası (devam ediliyor):', firebaseError.message);
+      }
+    }
+    
+    return publicUrl;
   } catch (error) {
-    console.error('❌ Firebase Storage yükleme hatası:', error);
+    console.error('❌ R2 yükleme hatası:', error);
     throw error;
   }
 }
 
-// Firebase Storage'dan görsel silme fonksiyonu
-async function deleteImageFromFirebaseStorage(imageURL) {
-  if (!storage || !storageRef || !storageDeleteObject) {
-    console.warn('⚠️ Firebase Storage başlatılamadı, görsel silinemedi');
-    return;
-  }
-
+// R2'den görsel silme fonksiyonu
+async function deleteImageFromR2(imageURL) {
   if (!imageURL || typeof imageURL !== 'string') {
     return;
   }
 
   try {
     // URL'den dosya yolunu çıkar
-    // Firebase Storage URL formatı: https://firebasestorage.googleapis.com/v0/b/BUCKET/o/PATH?alt=media&token=TOKEN
-    const urlMatch = imageURL.match(/\/o\/([^?]+)/);
-    if (!urlMatch || !urlMatch[1]) {
-      console.warn('⚠️ Geçersiz Storage URL formatı:', imageURL);
+    // R2 URL formatları:
+    // https://makara.public.r2.dev/images/products/123_timestamp.jpg
+    // https://account-id.r2.cloudflarestorage.com/bucket/images/products/123_timestamp.jpg
+    let filePath = '';
+    
+    if (imageURL.includes('/images/')) {
+      // Public domain veya custom domain kullanılıyorsa
+      const urlParts = imageURL.split('/images/');
+      if (urlParts.length > 1) {
+        filePath = `images/${urlParts[1]}`;
+      }
+    } else if (imageURL.includes(R2_CONFIG.bucketName)) {
+      // R2 endpoint kullanılıyorsa
+      const urlParts = imageURL.split(`/${R2_CONFIG.bucketName}/`);
+      if (urlParts.length > 1) {
+        filePath = urlParts[1].split('?')[0]; // Query string'i temizle
+      }
+    }
+    
+    if (!filePath) {
+      console.warn('⚠️ Geçersiz R2 URL formatı:', imageURL);
       return;
     }
-
-    // URL decode yap
-    const filePath = decodeURIComponent(urlMatch[1]);
     
-    // Storage referansı oluştur ve sil
-    const imageRef = storageRef(storage, filePath);
-    await storageDeleteObject(imageRef);
-    console.log(`✅ Görsel Firebase Storage'dan silindi: ${filePath}`);
+    // R2'den sil
+    const command = new DeleteObjectCommand({
+      Bucket: R2_CONFIG.bucketName,
+      Key: filePath,
+    });
+    
+    await r2Client.send(command);
+    console.log(`✅ Görsel R2'den silindi: ${filePath}`);
+    
+    // Firebase Firestore'dan da sil (images koleksiyonu)
+    if (firestore && firebaseCollection && firebaseGetDocs && firebaseDeleteDoc && firebaseDoc) {
+      try {
+        const imagesRef = firebaseCollection(firestore, 'images');
+        const snapshot = await firebaseGetDocs(imagesRef);
+        
+        snapshot.forEach(async (doc) => {
+          const imageData = doc.data();
+          if (imageData.url === imageURL || imageData.path === filePath) {
+            const imageDocRef = firebaseDoc(firestore, 'images', doc.id);
+            await firebaseDeleteDoc(imageDocRef);
+            console.log(`✅ Görsel Firebase database'den silindi (images koleksiyonu)`);
+          }
+        });
+      } catch (firebaseError) {
+        console.warn('⚠️ Firebase database silme hatası (devam ediliyor):', firebaseError.message);
+      }
+    }
   } catch (error) {
-    console.error('❌ Firebase Storage silme hatası:', error);
+    console.error('❌ R2 silme hatası:', error);
     // Hata olsa bile devam et, kritik değil
   }
 }
@@ -2113,7 +2215,7 @@ ipcMain.handle('select-image-file', async (event, productId = null) => {
 
     // Firebase Storage'a yükle
     try {
-      const downloadURL = await uploadImageToFirebaseStorage(filePath, productId);
+      const downloadURL = await uploadImageToR2(filePath, productId);
       return { success: true, path: downloadURL, isFirebaseURL: true };
     } catch (storageError) {
       console.error('Firebase Storage yükleme hatası:', storageError);
@@ -3249,26 +3351,24 @@ app.whenReady().then(() => {
   createWindow();
   startAPIServer();
 
-  // Firebase senkronizasyonu: Önce Firebase'den çek, sonra local'den Firebase'e gönder
+  // Firebase senkronizasyonu: Sadece Firebase'den çek, gereksiz write işlemleri yapma
   setTimeout(async () => {
     console.log('🔄 Firebase senkronizasyonu başlatılıyor...');
     
-    // 1. Önce Firebase'den kategorileri ve ürünleri çek
+    // 1. Önce Firebase'den kategorileri ve ürünleri çek (sadece read)
     await syncCategoriesFromFirebase();
     await syncProductsFromFirebase();
     
-    // 2. Local path'leri Firebase Storage'a yükle (migration)
+    // 2. Local path'leri Firebase Storage'a yükle (migration - sadece ilk kurulum için)
     await migrateLocalImagesToFirebase();
     
-    // 3. Sonra local database'deki verileri Firebase'e gönder (iki yönlü senkronizasyon)
-    await syncCategoriesToFirebase();
-    await syncProductsToFirebase();
-    
-    // 4. Gerçek zamanlı listener'ları başlat (anında güncellemeler için)
+    // 3. Gerçek zamanlı listener'ları başlat (anında güncellemeler için)
+    // NOT: Artık tüm ürünleri Firebase'e yazmıyoruz - sadece yeni ekleme/silme işlemlerinde yazıyoruz
     setupCategoriesRealtimeListener();
     setupProductsRealtimeListener();
     
     console.log('✅ Firebase senkronizasyonu tamamlandı ve gerçek zamanlı listener\'lar aktif');
+    console.log('💡 Not: Ürünler sadece ekleme/silme işlemlerinde Firebase\'e yazılacak (maliyet optimizasyonu)');
   }, 2000); // 2 saniye bekle, Firebase tam yüklensin
 
   // Uygulama paketlenmişse güncelleme kontrolü yap
@@ -6877,8 +6977,17 @@ function generateMobileHTML(serverURL) {
     
     // Resmi cache'le ve blob URL oluştur
     async function cacheImage(imageUrl) {
-      if (!imageUrl || !imageUrl.includes('firebasestorage.googleapis.com')) {
+      if (!imageUrl) {
         return null;
+      }
+      
+      // Firebase Storage veya R2 URL'lerini destekle
+      const isFirebaseStorage = imageUrl.includes('firebasestorage.googleapis.com');
+      const isR2 = imageUrl.includes('r2.dev') || imageUrl.includes('r2.cloudflarestorage.com');
+      
+      if (!isFirebaseStorage && !isR2) {
+        // Direkt URL ise (local path veya başka bir URL), direkt dön
+        return imageUrl;
       }
       
       // Zaten cache'de varsa
@@ -7628,6 +7737,7 @@ function startAPIServer() {
   const CACHE_MAX_SIZE = 100; // Maksimum 100 resim cache'de tut
   
   // Resim proxy endpoint - CORS sorununu çözmek için + Backend cache
+  // Image proxy endpoint - Firebase Storage ve R2 görselleri için CORS sorununu çözer
   appExpress.get('/api/image-proxy', async (req, res) => {
     try {
       const imageUrl = req.query.url;
@@ -7635,38 +7745,145 @@ function startAPIServer() {
         return res.status(400).json({ error: 'URL parametresi gerekli' });
       }
       
-      // Firebase Storage URL'si kontrolü
-      if (!imageUrl.includes('firebasestorage.googleapis.com')) {
-        return res.status(400).json({ error: 'Geçersiz resim URL\'si' });
+      // Firebase Storage veya R2 URL kontrolü
+      const isFirebaseStorage = imageUrl.includes('firebasestorage.googleapis.com');
+      const isR2ImageUrl = imageUrl.includes('r2.dev') || imageUrl.includes('r2.cloudflarestorage.com');
+      
+      if (!isFirebaseStorage && !isR2ImageUrl) {
+        return res.status(400).json({ error: 'Geçersiz resim URL\'si (sadece Firebase Storage veya R2 destekleniyor)' });
       }
       
       // Cache'de var mı kontrol et
       const cached = imageCache.get(imageUrl);
       if (cached && (Date.now() - cached.timestamp) < CACHE_MAX_AGE) {
-        // Cache'den döndür - Firebase Storage'a istek yok!
+        // Cache'den döndür - Storage'a istek yok!
         res.setHeader('Content-Type', cached.contentType);
         res.setHeader('Cache-Control', 'public, max-age=31536000');
         res.send(cached.buffer);
         return;
       }
       
-      // Cache'de yoksa Firebase Storage'dan çek
-      const https = require('https');
-      const response = await new Promise((resolve, reject) => {
-        https.get(imageUrl, (response) => {
-          if (response.statusCode !== 200) {
-            reject(new Error(`HTTP ${response.statusCode}`));
-            return;
+      // Cache'de yoksa Storage'dan çek (Firebase Storage veya R2)
+      let response;
+      
+      if (isR2ImageUrl) {
+        // R2 için iki yöntem deneyelim:
+        // 1. Önce R2 S3 API'sini kullanarak direkt çek (en güvenilir)
+        // 2. Başarısız olursa public URL üzerinden çek
+        
+        try {
+          // R2 URL'den dosya yolunu çıkar
+          let filePath = '';
+          if (imageUrl.includes('/images/')) {
+            const urlParts = imageUrl.split('/images/');
+            if (urlParts.length > 1) {
+              filePath = `images/${urlParts[1]}`;
+            }
+          } else {
+            // R2.dev subdomain formatından path çıkar
+            const urlModule = require('url');
+            const urlObj = new urlModule.URL(imageUrl);
+            filePath = urlObj.pathname.substring(1); // Başındaki / karakterini kaldır
           }
-          const chunks = [];
-          response.on('data', (chunk) => chunks.push(chunk));
-          response.on('end', () => resolve({
-            buffer: Buffer.concat(chunks),
-            contentType: response.headers['content-type'] || 'image/jpeg'
-          }));
-          response.on('error', reject);
-        }).on('error', reject);
-      });
+          
+          if (filePath) {
+            // R2 S3 API'sini kullanarak direkt çek
+            const getObjectCommand = new GetObjectCommand({
+              Bucket: R2_CONFIG.bucketName,
+              Key: filePath
+            });
+            
+            const s3Response = await r2Client.send(getObjectCommand);
+            
+            // Stream'i buffer'a çevir
+            const chunks = [];
+            for await (const chunk of s3Response.Body) {
+              chunks.push(chunk);
+            }
+            const buffer = Buffer.concat(chunks);
+            
+            response = {
+              buffer: buffer,
+              contentType: s3Response.ContentType || 'image/jpeg'
+            };
+            
+            console.log(`✅ R2 görsel S3 API üzerinden çekildi: ${filePath}`);
+          } else {
+            throw new Error('R2 dosya yolu çıkarılamadı');
+          }
+        } catch (s3Error) {
+          console.warn('⚠️ R2 S3 API hatası, public URL denenecek:', s3Error.message);
+          
+          // S3 API başarısız olduysa, public URL üzerinden çek
+          const https = require('https');
+          const urlModule = require('url');
+          const parsedUrl = new urlModule.URL(imageUrl);
+          
+          // R2.dev subdomain HTTPS kullanır
+          const requestOptions = {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+              'Accept': 'image/*'
+            },
+            rejectUnauthorized: true
+          };
+          
+          response = await new Promise((resolve, reject) => {
+            const req = https.get(imageUrl, requestOptions, (httpResponse) => {
+              if (httpResponse.statusCode !== 200) {
+                reject(new Error(`HTTP ${httpResponse.statusCode}`));
+                return;
+              }
+              const chunks = [];
+              httpResponse.on('data', (chunk) => chunks.push(chunk));
+              httpResponse.on('end', () => resolve({
+                buffer: Buffer.concat(chunks),
+                contentType: httpResponse.headers['content-type'] || 'image/jpeg'
+              }));
+              httpResponse.on('error', reject);
+            });
+            req.on('error', (error) => {
+              console.error('❌ R2 public URL hatası:', error);
+              reject(error);
+            });
+            req.setTimeout(10000, () => {
+              req.destroy();
+              reject(new Error('Request timeout'));
+            });
+          });
+        }
+      } else {
+        // Firebase Storage için mevcut yöntem
+        const https = require('https');
+        const http = require('http');
+        const url = require('url');
+        const parsedUrl = new url.URL(imageUrl);
+        const httpModule = parsedUrl.protocol === 'https:' ? https : http;
+        
+        response = await new Promise((resolve, reject) => {
+          const req = httpModule.get(imageUrl, (httpResponse) => {
+            if (httpResponse.statusCode !== 200) {
+              reject(new Error(`HTTP ${httpResponse.statusCode}`));
+              return;
+            }
+            const chunks = [];
+            httpResponse.on('data', (chunk) => chunks.push(chunk));
+            httpResponse.on('end', () => resolve({
+              buffer: Buffer.concat(chunks),
+              contentType: httpResponse.headers['content-type'] || 'image/jpeg'
+            }));
+            httpResponse.on('error', reject);
+          });
+          req.on('error', (error) => {
+            console.error('❌ Resim proxy hatası:', error);
+            reject(error);
+          });
+          req.setTimeout(10000, () => {
+            req.destroy();
+            reject(new Error('Request timeout'));
+          });
+        });
+      }
       
       // Cache'e ekle (eski cache'leri temizle)
       if (imageCache.size >= CACHE_MAX_SIZE) {

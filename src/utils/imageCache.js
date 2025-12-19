@@ -85,10 +85,13 @@ export async function getCachedImage(imageUrl) {
 // Resmi yükle ve cache'le
 async function loadAndCacheImage(imageUrl) {
   try {
-    // Firebase Storage URL'si ise proxy üzerinden yükle (CORS sorununu çözmek için)
+    // Firebase Storage veya R2 URL'si ise proxy üzerinden yükle (CORS sorununu çözmek için)
     let fetchUrl = imageUrl;
-    if (imageUrl && imageUrl.includes('firebasestorage.googleapis.com')) {
-      // Proxy endpoint'i kullan
+    const isFirebaseStorage = imageUrl && imageUrl.includes('firebasestorage.googleapis.com');
+    const isR2 = imageUrl && (imageUrl.includes('r2.dev') || imageUrl.includes('r2.cloudflarestorage.com'));
+    
+    // Firebase Storage ve R2 için her zaman proxy kullan (CORS ve SSL sorunlarını çözmek için)
+    if (isFirebaseStorage || isR2) {
       const proxyUrl = `http://localhost:3000/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
       fetchUrl = proxyUrl;
     }

@@ -696,6 +696,68 @@ function setupProductsRealtimeListener() {
   }
 }
 
+// Firebase'den gerçek zamanlı broadcast mesajı dinleme
+let isBroadcastsListenerInitialized = false;
+function setupBroadcastsRealtimeListener() {
+  if (!firestore || !firebaseCollection || !firebaseOnSnapshot) {
+    console.warn('⚠️ Firebase başlatılamadı, broadcast listener kurulamadı');
+    return null;
+  }
+  
+  try {
+    console.log('👂 Broadcast mesajları için gerçek zamanlı listener başlatılıyor...');
+    const broadcastsRef = firebaseCollection(firestore, 'broadcasts');
+    
+    const unsubscribe = firebaseOnSnapshot(broadcastsRef, (snapshot) => {
+      // İlk yüklemede tüm dokümanlar "added" olarak gelir - bunları sessizce işle
+      const isInitialLoad = !isBroadcastsListenerInitialized;
+      if (isInitialLoad) {
+        isBroadcastsListenerInitialized = true;
+        console.log('📥 İlk broadcast yüklemesi tamamlandı (sessiz mod)');
+        return;
+      }
+      
+      // Sadece yeni eklenen mesajları işle
+      const changes = snapshot.docChanges();
+      if (changes.length === 0) return;
+      
+      changes.forEach((change) => {
+        if (change.type === 'added') {
+          const data = change.doc.data();
+          console.log('📢 Yeni broadcast mesajı alındı:', data.message);
+          
+          // Socket.IO ile tüm clientlara gönder
+          if (io) {
+            io.emit('broadcast-message', {
+              message: data.message,
+              date: data.date,
+              time: data.time
+            });
+            console.log('✅ Broadcast mesajı tüm clientlara gönderildi');
+          }
+          
+          // Desktop uygulamaya da gönder
+          if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('broadcast-message', {
+              message: data.message,
+              date: data.date,
+              time: data.time
+            });
+          }
+        }
+      });
+    }, (error) => {
+      console.error('❌ Broadcast listener hatası:', error);
+    });
+    
+    console.log('✅ Broadcast mesajları için gerçek zamanlı listener aktif');
+    return unsubscribe;
+  } catch (error) {
+    console.error('❌ Broadcast listener kurulum hatası:', error);
+    return null;
+  }
+}
+
 function createWindow() {
   // Menü çubuğunu kaldır
   Menu.setApplicationMenu(null);
@@ -3643,6 +3705,7 @@ app.whenReady().then(() => {
     // NOT: Artık tüm ürünleri Firebase'e yazmıyoruz - sadece yeni ekleme/silme işlemlerinde yazıyoruz
     setupCategoriesRealtimeListener();
     setupProductsRealtimeListener();
+    setupBroadcastsRealtimeListener();
     
     console.log('✅ Firebase senkronizasyonu tamamlandı ve gerçek zamanlı listener\'lar aktif');
     console.log('💡 Not: Ürünler sadece ekleme/silme işlemlerinde Firebase\'e yazılacak (maliyet optimizasyonu)');

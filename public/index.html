@@ -42,6 +42,7 @@
     let salesCustomDateRange = { start: null, end: null }; // Satış geçmişi için özel tarih aralığı
     let tablesUnsubscribe = null; // Masalar için real-time listener
     let activeTablesUnsubscribe = null; // Aktif masa sayısı için real-time listener
+    let allStaticTables = {}; // Tüm masaları sakla (iç, dış, paket)
 
     try {
       // Ana Firebase zaten başlatılmış mı kontrol et
@@ -802,38 +803,41 @@
       }
     }
 
-    // Aktif masa sayısını gerçek zamanlı dinle
-    function startActiveTablesListener() {
-      if (!db) {
-        updateActiveTablesCount(0);
-        return;
-      }
-
-      // Önceki listener'ı temizle
-      if (activeTablesUnsubscribe) {
-        activeTablesUnsubscribe();
-        activeTablesUnsubscribe = null;
-      }
-
-      const tablesRef = db.collection('tables');
-      activeTablesUnsubscribe = tablesRef.onSnapshot((snapshot) => {
-        let activeCount = 0;
-        snapshot.forEach((doc) => {
-          const table = doc.data();
+    // Aktif masa sayısını hesapla (sadece iç ve dış masalar)
+    function calculateActiveTablesCount() {
+      let activeCount = 0;
+      
+      // allStaticTables objesindeki tüm masaları kontrol et
+      Object.values(allStaticTables).forEach(table => {
+        // Sadece iç ve dış masaları say (paket masalarını hariç tut)
+        const tableId = table.table_id || '';
+        const isInsideOrOutside = tableId.startsWith('inside-') || tableId.startsWith('outside-');
+        const isPackage = tableId.startsWith('package-');
+        
+        if (isInsideOrOutside && !isPackage) {
+          // Masa dolu mu kontrol et
           const isOccupied = table.is_occupied === true || 
                             table.is_occupied === 'true' || 
                             table.is_occupied === 1 ||
                             (table.status && (table.status === 'occupied' || table.status === 'dolu')) ||
                             (table.items && Array.isArray(table.items) && table.items.length > 0);
+          
           if (isOccupied) {
             activeCount++;
           }
-        });
-        updateActiveTablesCount(activeCount);
-      }, (error) => {
-        console.error('Aktif masa sayısı dinlenemedi:', error);
-        updateActiveTablesCount(0);
+        }
       });
+      
+      return activeCount;
+    }
+
+    // Aktif masa sayısını gerçek zamanlı dinle
+    function startActiveTablesListener() {
+      // İlk hesaplama
+      updateActiveTablesCount(calculateActiveTablesCount());
+      
+      // Not: Aktif masa sayısı renderAllTables() ve Firebase listener'ında otomatik güncelleniyor
+      // Burada sadece ilk hesaplamayı yapıyoruz
     }
 
     // Aktif masa sayısını güncelle
@@ -855,6 +859,12 @@
       );
       const todayRevenue = todaySales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       
+      // Nakit ve kart tutarlarını hesapla
+      const cashSales = todaySales.filter(s => s.payment_method === 'Nakit');
+      const cardSales = todaySales.filter(s => s.payment_method === 'Kart' || (s.payment_method !== 'Nakit' && s.payment_method !== 'Masraf'));
+      const cashTotal = cashSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+      const cardTotal = cardSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+      
       // Günlük masrafları hesapla
       const todayExpenses = sales.filter(s => 
         s.sale_date === today && 
@@ -866,11 +876,23 @@
       if (!statsGrid) return;
       
       statsGrid.innerHTML = `
-        <div class="stat-card stat-card-green">
-          <div class="stat-icon">💰</div>
-          <div class="stat-content">
-            <h3>Günlük Ciro</h3>
-            <div class="stat-value">₺${todayRevenue.toFixed(2)}</div>
+        <div class="stat-card-wrapper">
+          <div class="stat-card stat-card-green">
+            <div class="stat-icon">💰</div>
+            <div class="stat-content">
+              <h3>Günlük Ciro</h3>
+              <div class="stat-value">₺${todayRevenue.toFixed(2)}</div>
+            </div>
+          </div>
+          <div class="payment-breakdown-card">
+            <div class="payment-breakdown-item">
+              <span class="payment-breakdown-label">💵 Nakit:</span>
+              <span class="payment-breakdown-value">₺${cashTotal.toFixed(2)}</span>
+            </div>
+            <div class="payment-breakdown-item">
+              <span class="payment-breakdown-label">💳 Kart:</span>
+              <span class="payment-breakdown-value">₺${cardTotal.toFixed(2)}</span>
+            </div>
           </div>
         </div>
         <div class="stat-card stat-card-red">
@@ -1618,6 +1640,9 @@
 
       container.innerHTML = html;
       console.log('✅ Tüm masalar render edildi');
+      
+      // Aktif masa sayısını güncelle (sadece iç ve dış masalar)
+      updateActiveTablesCount(calculateActiveTablesCount());
     }
 
     // Masalar render et
@@ -1641,7 +1666,7 @@
       if (!tablesDb) {
         console.warn('⚠️ tablesDb bulunamadı - sadece statik masalar gösterilecek');
         // Firebase olmasa bile tüm masaları göster
-        const allStaticTables = {};
+        allStaticTables = {};
         for (let i = 1; i <= 20; i++) {
           allStaticTables[`inside-${i}`] = {
             table_id: `inside-${i}`,
@@ -1687,6 +1712,8 @@
           };
         }
         renderAllTables(allStaticTables);
+        // Aktif masa sayısını güncelle
+        updateActiveTablesCount(calculateActiveTablesCount());
         return;
       }
 
@@ -1699,7 +1726,8 @@
       }
 
       // TÜM masaları statik olarak oluştur (masaüstü uygulamasındaki gibi)
-      const allStaticTables = {};
+      // Global allStaticTables objesini kullan
+      allStaticTables = {};
       
       // İçeri masalar (1-20)
       for (let i = 1; i <= 20; i++) {
@@ -1761,6 +1789,9 @@
 
       // İlk render - tüm masaları göster (Firebase verisi olmasa bile)
       renderAllTables(allStaticTables);
+      
+      // Aktif masa sayısını güncelle
+      updateActiveTablesCount(calculateActiveTablesCount());
 
       const tablesRef = tablesDb.collection('tables');
       console.log('📡 Firebase collection dinleniyor: tables');
@@ -1792,6 +1823,9 @@
             console.log(`✅ Masa güncellendi: ${tableId} - Dolu: ${allStaticTables[tableId].is_occupied}, Tutar: ${allStaticTables[tableId].total_amount}`);
           }
         });
+        
+        // Aktif masa sayısını güncelle (sadece iç ve dış masalar)
+        updateActiveTablesCount(calculateActiveTablesCount());
 
         // Masaları kategorilere ayır
         const insideTables = [];
@@ -2251,69 +2285,28 @@
       }
 
       try {
-        // Backend API'ye mesaj gönder (local IP'yi bul veya localhost kullan)
-        let localIP = window.location.hostname;
-        
-        // Eğer hostname boşsa veya file:// protokolü kullanılıyorsa localhost kullan
-        if (!localIP || localIP === '' || window.location.protocol === 'file:') {
-          localIP = 'localhost';
-        }
-        
-        const apiUrl = `http://${localIP}:3000/api/broadcast-message`;
-        
-        const response = await fetch(apiUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            message: messageContent
-          })
-        });
+        // Direkt Firebase'e mesaj kaydet (HTTPS üzerinden)
+        const now = new Date();
+        const messageDate = now.toLocaleDateString('tr-TR');
+        const messageTime = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
-        if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        const result = await response.json();
-
-        if (result.success) {
+        // Firebase'e direkt kaydet
+        if (db) {
+          await db.collection('broadcasts').add({
+            message: messageContent,
+            date: messageDate,
+            time: messageTime,
+            created_at: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          
           showToast('success', 'Başarılı', 'Mesaj başarıyla gönderildi!');
           hideSendMessageModal();
         } else {
-          showToast('error', 'Hata', 'Mesaj gönderilirken bir hata oluştu: ' + (result.error || 'Bilinmeyen hata'));
+          throw new Error('Firebase bağlantısı yok');
         }
       } catch (error) {
         console.error('Mesaj gönderme hatası:', error);
-        
-        // Eğer localhost ile başarısız olursa, Firebase'e direkt kaydet
-        if (error.message.includes('Failed to fetch') || error.message.includes('Failed to parse URL')) {
-          try {
-            const now = new Date();
-            const messageDate = now.toLocaleDateString('tr-TR');
-            const messageTime = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-
-            // Firebase'e direkt kaydet
-            if (db) {
-              await db.collection('broadcasts').add({
-                message: messageContent,
-                date: messageDate,
-                time: messageTime,
-                created_at: firebase.firestore.FieldValue.serverTimestamp()
-              });
-              
-              showToast('success', 'Başarılı', 'Mesaj Firebase\'e kaydedildi! (Backend bağlantısı kurulamadı, ancak mesaj kaydedildi)');
-              hideSendMessageModal();
-            } else {
-              throw new Error('Firebase bağlantısı yok');
-            }
-          } catch (firebaseError) {
-            console.error('Firebase kayıt hatası:', firebaseError);
-            showToast('error', 'Hata', 'Mesaj gönderilemedi. Lütfen internet bağlantınızı ve backend servisinin çalıştığını kontrol edin.');
-          }
-        } else {
-          showToast('error', 'Hata', 'Mesaj gönderilirken bir hata oluştu: ' + error.message);
-        }
+        showToast('error', 'Hata', 'Mesaj gönderilirken bir hata oluştu: ' + (error.message || 'Bilinmeyen hata'));
       } finally {
         if (sendBtn) {
           sendBtn.disabled = false;
@@ -3598,6 +3591,46 @@
 
     .stat-card-pink .stat-value {
       color: #ec4899;
+    }
+
+    /* Günlük Ciro altında ödeme detayları mini kartı */
+    .stat-card-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .payment-breakdown-card {
+      background: #f8fafc;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+
+    .payment-breakdown-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+    }
+
+    .payment-breakdown-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #64748b;
+      white-space: nowrap;
+    }
+
+    .payment-breakdown-value {
+      font-size: 14px;
+      font-weight: 700;
+      color: #1e293b;
+      white-space: nowrap;
     }
 
     /* Tarih grupları + satış kartları */
@@ -6233,6 +6266,16 @@
 
       .stats-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .payment-breakdown-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 8px;
+      }
+
+      .payment-breakdown-item {
+        justify-content: space-between;
       }
 
       .reports-header {

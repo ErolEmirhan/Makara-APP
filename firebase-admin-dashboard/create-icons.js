@@ -25,3 +25,4 @@ console.log('2. 192x192 ve 512x512 boyutlarında PNG dosyaları oluşturun');
 console.log('3. icon-192.png ve icon-512.png olarak kaydedin');
 console.log('4. Bu dosyaları public klasörüne kopyalayın');
 
+

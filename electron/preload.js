@@ -27,6 +27,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateProduct: (productData) => ipcRenderer.invoke('update-product', productData),
   deleteProduct: (productId) => ipcRenderer.invoke('delete-product', productId),
   selectImageFile: (productId) => ipcRenderer.invoke('select-image-file', productId),
+  // Stock Management API
+  adjustProductStock: (productId, adjustment) => ipcRenderer.invoke('adjust-product-stock', productId, adjustment),
+  getProductStock: (productId) => ipcRenderer.invoke('get-product-stock', productId),
+  toggleProductStockTracking: (productId, trackStock) => ipcRenderer.invoke('toggle-product-stock-tracking', productId, trackStock),
   // Update API
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),

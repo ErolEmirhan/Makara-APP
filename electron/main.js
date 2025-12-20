@@ -292,6 +292,165 @@ async function saveProductToFirebase(product) {
   }
 }
 
+// Firebase'e (makaramasalar) ürün stok bilgisini kaydetme fonksiyonu
+async function saveProductStockToFirebase(productId, stock) {
+  if (!tablesFirestore || !tablesFirebaseDoc || !tablesFirebaseSetDoc) {
+    return;
+  }
+  
+  try {
+    const stockRef = tablesFirebaseDoc(tablesFirestore, 'product_stocks', productId.toString());
+    await tablesFirebaseSetDoc(stockRef, {
+      product_id: productId,
+      stock: stock || 0,
+      updated_at: new Date().toISOString()
+    }, { merge: true });
+    console.log(`✅ Ürün stoku Firebase'e kaydedildi: Product ID: ${productId}, Stok: ${stock || 0}`);
+  } catch (error) {
+    console.error(`❌ Ürün stoku Firebase'e kaydedilemedi (Product ID: ${productId}):`, error);
+  }
+}
+
+// Firebase'den (makaramasalar) ürün stok bilgisini çekme fonksiyonu
+async function getProductStockFromFirebase(productId) {
+  if (!tablesFirestore || !tablesFirebaseDoc) {
+    return null;
+  }
+  
+  try {
+    const firebaseFirestoreModule = require('firebase/firestore');
+    const firebaseGetDoc = firebaseFirestoreModule.getDoc;
+    
+    const stockRef = tablesFirebaseDoc(tablesFirestore, 'product_stocks', productId.toString());
+    const stockDoc = await firebaseGetDoc(stockRef);
+    
+    if (stockDoc.exists()) {
+      const data = stockDoc.data();
+      return data.stock || 0;
+    }
+    return null;
+  } catch (error) {
+    console.error(`❌ Ürün stoku Firebase'den çekilemedi (Product ID: ${productId}):`, error);
+    return null;
+  }
+}
+
+// Ürün stokunu düşürme fonksiyonu
+async function decreaseProductStock(productId, quantity) {
+  const productIdNum = typeof productId === 'string' ? parseInt(productId) : productId;
+  
+  const productIndex = db.products.findIndex(p => p.id === productIdNum);
+  if (productIndex === -1) {
+    console.warn(`⚠️ Ürün bulunamadı (stok düşürme): Product ID: ${productIdNum}`);
+    return false;
+  }
+  
+  const product = db.products[productIndex];
+  
+  // Stok takibi yapılmıyorsa, stok düşürme işlemi yapma
+  if (!product.trackStock) {
+    console.log(`ℹ️ Stok takibi yapılmayan ürün: ${product.name} - Stok düşürülmedi`);
+    return true; // Hata değil, sadece stok takibi yapılmıyor
+  }
+  
+  // Stok bilgisini al (local veya Firebase'den)
+  let currentStock = product.stock !== undefined ? (product.stock || 0) : null;
+  if (currentStock === null) {
+    currentStock = await getProductStockFromFirebase(productIdNum);
+    if (currentStock === null) {
+      currentStock = 0;
+    }
+  }
+  
+  // Stok yeterli mi kontrol et
+  if (currentStock < quantity) {
+    console.warn(`⚠️ Yetersiz stok: ${product.name} (Mevcut: ${currentStock}, İstenen: ${quantity})`);
+    return false;
+  }
+  
+  // Stoku düşür
+  const newStock = Math.max(0, currentStock - quantity);
+  
+  // Local database'i güncelle
+  db.products[productIndex] = {
+    ...product,
+    stock: newStock
+  };
+  
+  saveDatabase();
+  
+  // Firebase'e kaydet
+  await saveProductStockToFirebase(productIdNum, newStock);
+  
+  console.log(`✅ Stok düşürüldü: ${product.name} (${currentStock} → ${newStock}, -${quantity})`);
+  
+  // Mobil personel arayüzüne gerçek zamanlı stok güncellemesi gönder
+  if (io) {
+    io.emit('product-stock-update', {
+      productId: productIdNum,
+      stock: newStock,
+      trackStock: product.trackStock
+    });
+  }
+  
+  return true;
+}
+
+// Ürün stokunu artırma fonksiyonu (iptal durumunda)
+async function increaseProductStock(productId, quantity) {
+  const productIdNum = typeof productId === 'string' ? parseInt(productId) : productId;
+  
+  const productIndex = db.products.findIndex(p => p.id === productIdNum);
+  if (productIndex === -1) {
+    console.warn(`⚠️ Ürün bulunamadı (stok artırma): Product ID: ${productIdNum}`);
+    return false;
+  }
+  
+  const product = db.products[productIndex];
+  
+  // Stok takibi yapılmıyorsa, stok artırma işlemi yapma
+  if (!product.trackStock) {
+    console.log(`ℹ️ Stok takibi yapılmayan ürün: ${product.name} - Stok artırılmadı`);
+    return true; // Hata değil, sadece stok takibi yapılmıyor
+  }
+  
+  // Stok bilgisini al (local veya Firebase'den)
+  let currentStock = product.stock !== undefined ? (product.stock || 0) : 0;
+  if (currentStock === 0 && product.stock === undefined) {
+    const firebaseStock = await getProductStockFromFirebase(productIdNum);
+    if (firebaseStock !== null) {
+      currentStock = firebaseStock;
+    }
+  }
+  
+  // Stoku artır
+  const newStock = currentStock + quantity;
+  
+  // Local database'i güncelle
+  db.products[productIndex] = {
+    ...product,
+    stock: newStock
+  };
+  
+  saveDatabase();
+  
+  // Firebase'e kaydet
+  await saveProductStockToFirebase(productIdNum, newStock);
+  
+  console.log(`✅ Stok artırıldı: ${product.name} (${currentStock} → ${newStock}, +${quantity})`);
+  
+  // Mobil personel arayüzüne gerçek zamanlı stok güncellemesi gönder
+  if (io) {
+    io.emit('product-stock-update', {
+      productId: productIdNum,
+      stock: newStock,
+      trackStock: product.trackStock
+    });
+  }
+  
+  return true;
+}
+
 // Local path'leri Firebase Storage'a yükleme (migration)
 async function migrateLocalImagesToFirebase() {
   if (!storage || !storageRef || !storageUploadBytes || !storageGetDownloadURL) {
@@ -977,11 +1136,46 @@ ipcMain.handle('delete-category', async (event, categoryId) => {
   return { success: false, error: 'Kategori silinemedi' };
 });
 
-ipcMain.handle('get-products', (event, categoryId) => {
-  if (categoryId) {
-    return db.products.filter(p => p.category_id === categoryId);
-  }
-  return db.products;
+ipcMain.handle('get-products', async (event, categoryId) => {
+  let products = categoryId 
+    ? db.products.filter(p => p.category_id === categoryId)
+    : db.products;
+  
+  // Her ürün için stok bilgisini Firebase'den çek (eğer local'de yoksa)
+  const productsWithStock = await Promise.all(products.map(async (product) => {
+    // Eğer local'de stok bilgisi varsa onu kullan
+    if (product.stock !== undefined) {
+      return product;
+    }
+    
+    // Firebase'den çek
+    const firebaseStock = await getProductStockFromFirebase(product.id);
+    if (firebaseStock !== null) {
+      // Local'e kaydet
+      const productIndex = db.products.findIndex(p => p.id === product.id);
+      if (productIndex !== -1) {
+        db.products[productIndex] = {
+          ...db.products[productIndex],
+          stock: firebaseStock
+        };
+      }
+      return {
+        ...product,
+        stock: firebaseStock
+      };
+    }
+    
+    // Stok bilgisi yoksa 0 olarak döndür
+    return {
+      ...product,
+      stock: 0
+    };
+  }));
+  
+  // Database'i kaydet (stok bilgileri güncellendi)
+  saveDatabase();
+  
+  return productsWithStock;
 });
 
 ipcMain.handle('create-sale', async (event, saleData) => {
@@ -990,6 +1184,23 @@ ipcMain.handle('create-sale', async (event, saleData) => {
   const now = new Date();
   const saleDate = now.toLocaleDateString('tr-TR');
   const saleTime = getFormattedTime(now);
+
+  // Stok kontrolü ve düşürme (sadece stok takibi yapılan ürünler için)
+  for (const item of items) {
+    if (!item.isGift && !item.isExpense) { // İkram ve masraf ürünleri stoktan düşmez
+      const product = db.products.find(p => p.id === item.id);
+      // Sadece stok takibi yapılan ürünler için kontrol et
+      if (product && product.trackStock) {
+        const stockDecreased = await decreaseProductStock(item.id, item.quantity);
+        if (!stockDecreased) {
+          return { 
+            success: false, 
+            error: `${item.name} için yetersiz stok` 
+          };
+        }
+      }
+    }
+  }
 
   // Yeni satış ID'si
   const saleId = db.sales.length > 0 
@@ -1163,7 +1374,7 @@ ipcMain.handle('delete-all-sales', async (event) => {
 });
 
 // Table Order IPC Handlers
-ipcMain.handle('create-table-order', (event, orderData) => {
+ipcMain.handle('create-table-order', async (event, orderData) => {
   const { items, totalAmount, tableId, tableName, tableType, orderNote } = orderData;
   
   const now = new Date();
@@ -1177,6 +1388,23 @@ ipcMain.handle('create-table-order', (event, orderData) => {
 
   let orderId;
   let isNewOrder = false;
+
+  // Stok kontrolü ve düşürme (sadece stok takibi yapılan ürünler için)
+  for (const item of items) {
+    if (!item.isGift) { // İkram edilen ürünler stoktan düşmez
+      const product = db.products.find(p => p.id === item.id);
+      // Sadece stok takibi yapılan ürünler için kontrol et
+      if (product && product.trackStock) {
+        const stockDecreased = await decreaseProductStock(item.id, item.quantity);
+        if (!stockDecreased) {
+          return { 
+            success: false, 
+            error: `${item.name} için yetersiz stok` 
+          };
+        }
+      }
+    }
+  }
 
   if (existingOrder) {
     // Mevcut siparişe ekle
@@ -1332,6 +1560,11 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
   const quantityToCancel = cancelQuantity || item.quantity;
   if (quantityToCancel <= 0 || quantityToCancel > item.quantity) {
     return { success: false, error: 'Geçersiz iptal miktarı' };
+  }
+  
+  // Stok iadesi (ikram edilen ürünler hariç)
+  if (!item.isGift) {
+    await increaseProductStock(item.product_id, quantityToCancel);
   }
 
   // Ürün bilgilerini al (kategori ve yazıcı için)
@@ -2139,6 +2372,128 @@ ipcMain.handle('update-product', async (event, productData) => {
   }
   
   return { success: true, product: db.products[productIndex] };
+});
+
+// Stok güncelleme IPC handler
+ipcMain.handle('adjust-product-stock', async (event, productId, adjustment) => {
+  const productIdNum = typeof productId === 'string' ? parseInt(productId) : productId;
+  
+  const productIndex = db.products.findIndex(p => p.id === productIdNum);
+  if (productIndex === -1) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+  
+  const product = db.products[productIndex];
+  
+  // Stok takibini aktif et (eğer henüz aktif değilse)
+  if (!product.trackStock) {
+    db.products[productIndex] = {
+      ...product,
+      trackStock: true,
+      stock: 0
+    };
+    product.trackStock = true;
+    product.stock = 0;
+  }
+  
+  const currentStock = product.stock !== undefined ? (product.stock || 0) : 0;
+  const newStock = Math.max(0, currentStock + adjustment);
+  
+  // Ürün stokunu güncelle
+  db.products[productIndex] = {
+    ...product,
+    trackStock: true,
+    stock: newStock
+  };
+  
+  saveDatabase();
+  
+  // Firebase'e kaydet (makaramasalar)
+  await saveProductStockToFirebase(productIdNum, newStock);
+  
+  console.log(`✅ Ürün stoku güncellendi: ${product.name} (${currentStock} → ${newStock})`);
+  
+  // Mobil personel arayüzüne gerçek zamanlı stok güncellemesi gönder
+  if (io) {
+    io.emit('product-stock-update', {
+      productId: productIdNum,
+      stock: newStock,
+      trackStock: true
+    });
+  }
+  
+  return { success: true, product: db.products[productIndex], newStock };
+});
+
+// Stok takibini açma/kapama IPC handler
+ipcMain.handle('toggle-product-stock-tracking', async (event, productId, trackStock) => {
+  const productIdNum = typeof productId === 'string' ? parseInt(productId) : productId;
+  
+  const productIndex = db.products.findIndex(p => p.id === productIdNum);
+  if (productIndex === -1) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+  
+  const product = db.products[productIndex];
+  
+  // Stok takibini aç/kapat
+  db.products[productIndex] = {
+    ...product,
+    trackStock: trackStock === true
+  };
+  
+  // Eğer stok takibi kapatılıyorsa, stok bilgisini sıfırla (opsiyonel)
+  if (!trackStock) {
+    db.products[productIndex].stock = undefined;
+  }
+  
+  saveDatabase();
+  
+  console.log(`✅ Ürün stok takibi ${trackStock ? 'açıldı' : 'kapatıldı'}: ${product.name}`);
+  
+  // Mobil personel arayüzüne gerçek zamanlı stok güncellemesi gönder
+  if (io) {
+    const currentStock = db.products[productIndex].stock !== undefined ? (db.products[productIndex].stock || 0) : 0;
+    io.emit('product-stock-update', {
+      productId: productIdNum,
+      stock: trackStock ? currentStock : null,
+      trackStock: trackStock
+    });
+  }
+  
+  return { success: true, product: db.products[productIndex] };
+});
+
+// Ürün stokunu getir (Firebase'den)
+ipcMain.handle('get-product-stock', async (event, productId) => {
+  const productIdNum = typeof productId === 'string' ? parseInt(productId) : productId;
+  
+  const product = db.products.find(p => p.id === productIdNum);
+  if (!product) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+  
+  // Önce local'den kontrol et
+  if (product.stock !== undefined) {
+    return { success: true, stock: product.stock || 0 };
+  }
+  
+  // Firebase'den çek
+  const firebaseStock = await getProductStockFromFirebase(productIdNum);
+  if (firebaseStock !== null) {
+    // Local'e kaydet
+    const productIndex = db.products.findIndex(p => p.id === productIdNum);
+    if (productIndex !== -1) {
+      db.products[productIndex] = {
+        ...product,
+        stock: firebaseStock
+      };
+      saveDatabase();
+    }
+    return { success: true, stock: firebaseStock };
+  }
+  
+  return { success: true, stock: 0 };
 });
 
 ipcMain.handle('delete-product', async (event, productId) => {
@@ -6836,6 +7191,36 @@ function generateMobileHTML(serverURL) {
           console.log('📢 Yayın mesajı alındı:', data);
           showBroadcastMessage(data.message, data.date, data.time);
         });
+        socket.on('product-stock-update', async (data) => {
+          console.log('📦 Stok güncellemesi alındı:', data);
+          // Ürün listesini güncelle
+          const productIndex = products.findIndex(p => p.id === data.productId);
+          if (productIndex !== -1) {
+            products[productIndex] = {
+              ...products[productIndex],
+              stock: data.stock,
+              trackStock: data.trackStock
+            };
+            // Eğer sipariş ekranındaysak ürünleri yeniden render et
+            if (document.getElementById('orderSection') && document.getElementById('orderSection').style.display !== 'none') {
+              renderProducts();
+            }
+          } else {
+            // Ürün bulunamadıysa API'den yeniden yükle
+            try {
+              const prodsRes = await fetch(API_URL + '/products');
+              if (prodsRes.ok) {
+                products = await prodsRes.json();
+                // Eğer sipariş ekranındaysak ürünleri yeniden render et
+                if (document.getElementById('orderSection') && document.getElementById('orderSection').style.display !== 'none') {
+                  renderProducts();
+                }
+              }
+            } catch (error) {
+              console.error('Ürün güncelleme hatası:', error);
+            }
+          }
+        });
         socket.on('disconnect', () => console.log('WebSocket bağlantısı kesildi'));
       } catch (error) {
         console.error('WebSocket bağlantı hatası:', error);
@@ -7407,9 +7792,30 @@ function generateMobileHTML(serverURL) {
         // Cache'de varsa hemen göster, yoksa arka planda yüklenecek
         const cachedImageUrl = prod.image && imageCache[prod.image] ? imageCache[prod.image] : null;
         const backgroundStyle = cachedImageUrl ? 'background-image: url(' + cachedImageUrl + ');' : '';
-        return '<div id="' + cardId + '" class="product-card" onclick="addToCart(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')" style="' + backgroundStyle + '">' +
-          '<div class="product-name">' + prod.name + '</div>' +
-          '<div class="product-price">' + prod.price.toFixed(2) + ' ₺</div>' +
+        const trackStock = prod.trackStock === true;
+        const stock = trackStock && prod.stock !== undefined ? (prod.stock || 0) : null;
+        const isOutOfStock = trackStock && stock !== null && stock === 0;
+        const isLowStock = trackStock && stock !== null && stock > 0 && stock <= 5;
+        const onClickHandler = isOutOfStock ? '' : 'onclick="addToCart(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"';
+        const cardStyle = isOutOfStock ? backgroundStyle + ' opacity: 0.6; cursor: not-allowed; pointer-events: none;' : backgroundStyle;
+        
+        // Kilit ikonu (sadece stok 0 olduğunda)
+        const lockIcon = isOutOfStock ? '<div style="position: absolute; top: 8px; left: 8px; background: rgba(0, 0, 0, 0.7); color: white; width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; z-index: 10; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);"><svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg></div>' : '';
+        
+        // Stok uyarı badge'i (0 ise "Kalmadı", 1-5 arası ise "X adet kaldı")
+        let stockBadge = '';
+        if (isOutOfStock) {
+          stockBadge = '<div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(239, 68, 68, 0.95) 0%, rgba(239, 68, 68, 0.85) 100%); color: white; padding: 8px; text-align: center; font-size: 12px; font-weight: 700; z-index: 10; border-radius: 0 0 12px 12px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);">🔒 Kalmadı</div>';
+        } else if (isLowStock) {
+          const stockText = stock === 1 ? '1 adet kaldı' : stock + ' adet kaldı';
+          stockBadge = '<div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(245, 158, 11, 0.95) 0%, rgba(245, 158, 11, 0.85) 100%); color: white; padding: 8px; text-align: center; font-size: 12px; font-weight: 700; z-index: 10; border-radius: 0 0 12px 12px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);">⚠️ ' + stockText + '</div>';
+        }
+        
+        return '<div id="' + cardId + '" class="product-card" ' + onClickHandler + ' style="' + cardStyle + ' position: relative; overflow: hidden;">' +
+          lockIcon +
+          '<div class="product-name" style="' + (isOutOfStock ? 'opacity: 0.7;' : '') + '">' + prod.name + '</div>' +
+          '<div class="product-price" style="' + (isOutOfStock ? 'opacity: 0.7;' : '') + '">' + prod.price.toFixed(2) + ' ₺</div>' +
+          stockBadge +
         '</div>';
       }).join('');
       
@@ -7450,6 +7856,19 @@ function generateMobileHTML(serverURL) {
     }
     
     function addToCart(productId, name, price) {
+      // Stok kontrolü
+      const product = products.find(p => p.id === productId);
+      if (product) {
+        const trackStock = product.trackStock === true;
+        const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
+        const isOutOfStock = trackStock && stock !== null && stock === 0;
+        
+        if (isOutOfStock) {
+          showToast('error', 'Stok Yok', name + ' için stok kalmadı');
+          return;
+        }
+      }
+      
       const existing = cart.find(item => item.id === productId);
       if (existing) existing.quantity++;
       else cart.push({ id: productId, name, price, quantity: 1 });
@@ -7940,7 +8359,10 @@ function generateMobileHTML(serverURL) {
           
           // Siparişleri yenile
           await loadExistingOrders(currentTableId);
-          loadData();
+          // Ürünleri yenile (stok bilgisi güncellensin)
+          await loadData();
+          // Ürünleri render et (stok 0 olanlar "Kalmadı" göstersin)
+          renderProducts();
         } else {
           showToast('error', 'Hata', result.error || 'Sipariş gönderilemedi');
         }
@@ -8029,12 +8451,13 @@ function startAPIServer() {
     try {
       const categoryId = req.query.category_id;
       
+      let products = [];
+      
       // Firebase'den direkt çek
       if (firestore && firebaseCollection && firebaseGetDocs) {
         const productsRef = firebaseCollection(firestore, 'products');
         const snapshot = await firebaseGetDocs(productsRef);
         
-        const products = [];
         snapshot.forEach((doc) => {
           const firebaseProduct = doc.data();
           const product = {
@@ -8050,24 +8473,71 @@ function startAPIServer() {
             products.push(product);
           }
         });
-        
-        res.json(products);
       } else {
         // Firebase yoksa local database'den çek
         if (categoryId) {
-          res.json(db.products.filter(p => p.category_id === Number(categoryId)));
+          products = db.products.filter(p => p.category_id === Number(categoryId));
         } else {
-          res.json(db.products);
+          products = db.products;
         }
       }
+      
+      // Her ürün için stok bilgisini ekle (local database'den veya Firebase'den)
+      const productsWithStock = await Promise.all(products.map(async (product) => {
+        // Local database'de ürünü bul
+        const localProduct = db.products.find(p => p.id === product.id);
+        
+        // Stok bilgisini al
+        let stock = null;
+        let trackStock = false;
+        
+        if (localProduct) {
+          trackStock = localProduct.trackStock === true;
+          if (trackStock) {
+            stock = localProduct.stock !== undefined ? (localProduct.stock || 0) : null;
+            // Eğer local'de stok yoksa Firebase'den çek
+            if (stock === null) {
+              stock = await getProductStockFromFirebase(product.id);
+              if (stock === null) {
+                stock = 0;
+              }
+            }
+          }
+        } else {
+          // Local'de yoksa Firebase'den stok bilgisini çek
+          const firebaseStock = await getProductStockFromFirebase(product.id);
+          if (firebaseStock !== null) {
+            trackStock = true;
+            stock = firebaseStock;
+          }
+        }
+        
+        return {
+          ...product,
+          trackStock: trackStock,
+          stock: trackStock ? (stock !== null ? stock : 0) : undefined
+        };
+      }));
+      
+      res.json(productsWithStock);
     } catch (error) {
       console.error('❌ Ürünler çekilirken hata:', error);
       // Hata durumunda local database'den çek
+      let products = [];
       if (categoryId) {
-        res.json(db.products.filter(p => p.category_id === Number(categoryId)));
+        products = db.products.filter(p => p.category_id === Number(categoryId));
       } else {
-        res.json(db.products);
+        products = db.products;
       }
+      
+      // Stok bilgisini ekle
+      const productsWithStock = products.map(product => ({
+        ...product,
+        trackStock: product.trackStock === true,
+        stock: product.trackStock ? (product.stock !== undefined ? product.stock : 0) : undefined
+      }));
+      
+      res.json(productsWithStock);
     }
   });
 
@@ -8530,6 +9000,14 @@ function startAPIServer() {
       // İptal edilecek tutarı hesapla (ikram değilse)
       const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
 
+      // Stok iadesi (ikram edilen ürünler hariç, sadece stok takibi yapılan ürünler için)
+      if (!item.isGift) {
+        const product = db.products.find(p => p.id === item.product_id);
+        if (product && product.trackStock) {
+          await increaseProductStock(item.product_id, quantityToCancel);
+        }
+      }
+
       // Masa siparişinin toplam tutarını güncelle
       order.total_amount = Math.max(0, order.total_amount - cancelAmount);
 
@@ -8746,6 +9224,24 @@ function startAPIServer() {
   appExpress.post('/api/orders', async (req, res) => {
     try {
       const { items, totalAmount, tableId, tableName, tableType, orderNote, staffId } = req.body;
+      
+      // Stok kontrolü ve düşürme (sadece stok takibi yapılan ürünler için)
+      for (const item of items) {
+        if (!item.isGift) {
+          const product = db.products.find(p => p.id === item.id);
+          // Sadece stok takibi yapılan ürünler için kontrol et
+          if (product && product.trackStock) {
+            const stockDecreased = await decreaseProductStock(item.id, item.quantity);
+            if (!stockDecreased) {
+              return res.status(400).json({ 
+                success: false, 
+                error: `${item.name} için yetersiz stok` 
+              });
+            }
+          }
+        }
+      }
+      
       const existingOrder = (db.tableOrders || []).find(
         o => o.table_id === tableId && o.status === 'pending'
       );

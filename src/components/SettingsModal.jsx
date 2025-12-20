@@ -1320,6 +1320,41 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       ))}
                     </select>
                   </div>
+                  {stockFilterCategory && (
+                    <div className="flex items-end">
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm(
+                            `${stockFilterCategory.name} kategorisindeki TÜM ürünlerin stokunu 0 yapmak ve stok takibini açmak istediğinize emin misiniz?\n\nBu işlem geri alınamaz!`
+                          )) {
+                            return;
+                          }
+                          
+                          try {
+                            const result = await window.electronAPI.markCategoryOutOfStock(stockFilterCategory.id);
+                            
+                            if (result && result.success) {
+                              alert(`✅ ${result.updatedCount} ürün "kalmadı" olarak işaretlendi`);
+                              // Ürünleri yenile
+                              await loadAllProducts();
+                              // Ana uygulamayı yenile
+                              if (onProductsUpdated) {
+                                onProductsUpdated();
+                              }
+                            } else {
+                              alert(result?.error || 'Kategori işaretlenemedi');
+                            }
+                          } catch (error) {
+                            console.error('Kategori işaretleme hatası:', error);
+                            alert('Kategori işaretlenemedi: ' + error.message);
+                          }
+                        }}
+                        className="w-full px-4 py-2 bg-gradient-to-r from-red-500 to-rose-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+                      >
+                        🔴 Kalmadı İşaretle
+                      </button>
+                    </div>
+                  )}
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Ürün

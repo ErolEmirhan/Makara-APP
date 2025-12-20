@@ -2496,6 +2496,57 @@ ipcMain.handle('get-product-stock', async (event, productId) => {
   return { success: true, stock: 0 };
 });
 
+// Kategori bazında toplu "kalmadı" işaretleme IPC handler
+ipcMain.handle('mark-category-out-of-stock', async (event, categoryId) => {
+  const categoryIdNum = typeof categoryId === 'string' ? parseInt(categoryId) : categoryId;
+  
+  // Kategorideki tüm ürünleri bul
+  const categoryProducts = db.products.filter(p => p.category_id === categoryIdNum);
+  
+  if (categoryProducts.length === 0) {
+    return { success: false, error: 'Bu kategoride ürün bulunamadı' };
+  }
+  
+  const updatedProducts = [];
+  
+  // Her ürün için stok takibini aç ve stoku 0 yap
+  for (const product of categoryProducts) {
+    const productIndex = db.products.findIndex(p => p.id === product.id);
+    if (productIndex !== -1) {
+      // Stok takibini aç ve stoku 0 yap
+      db.products[productIndex] = {
+        ...product,
+        trackStock: true,
+        stock: 0
+      };
+      
+      // Firebase'e kaydet
+      await saveProductStockToFirebase(product.id, 0);
+      
+      updatedProducts.push(db.products[productIndex]);
+      
+      // Mobil personel arayüzüne gerçek zamanlı stok güncellemesi gönder
+      if (io) {
+        io.emit('product-stock-update', {
+          productId: product.id,
+          stock: 0,
+          trackStock: true
+        });
+      }
+    }
+  }
+  
+  saveDatabase();
+  
+  console.log(`✅ Kategori "kalmadı" olarak işaretlendi: ${categoryProducts.length} ürün güncellendi`);
+  
+  return { 
+    success: true, 
+    updatedCount: updatedProducts.length,
+    products: updatedProducts 
+  };
+});
+
 ipcMain.handle('delete-product', async (event, productId) => {
   // productId'yi number'a çevir (tip uyumluluğu için)
   const productIdNum = typeof productId === 'string' ? parseInt(productId) : productId;

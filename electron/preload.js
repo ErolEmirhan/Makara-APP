@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   adjustProductStock: (productId, adjustment) => ipcRenderer.invoke('adjust-product-stock', productId, adjustment),
   getProductStock: (productId) => ipcRenderer.invoke('get-product-stock', productId),
   toggleProductStockTracking: (productId, trackStock) => ipcRenderer.invoke('toggle-product-stock-tracking', productId, trackStock),
+  markCategoryOutOfStock: (categoryId) => ipcRenderer.invoke('mark-category-out-of-stock', categoryId),
   // Update API
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),

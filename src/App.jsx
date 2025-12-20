@@ -771,6 +771,32 @@ function App() {
         />
       )}
 
+      {/* Minimize Button - Sol Alt Köşe */}
+      <button
+        onClick={() => {
+          if (window.electronAPI && window.electronAPI.minimizeWindow) {
+            window.electronAPI.minimizeWindow();
+          }
+        }}
+        className="fixed bottom-4 left-4 z-50 w-10 h-10 rounded-full bg-white/80 hover:bg-white border-2 border-purple-300 hover:border-purple-500 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center group"
+        title="Uygulamayı Arka Plana Al (Alt+Tab)"
+      >
+        <svg 
+          className="w-5 h-5 text-purple-600 group-hover:text-purple-700 transition-colors" 
+          fill="none" 
+          stroke="currentColor" 
+          viewBox="0 0 24 24"
+        >
+          <path 
+            strokeLinecap="round" 
+            strokeLinejoin="round" 
+            strokeWidth={2.5} 
+            d="M19 9l-7 7-7-7" 
+            transform="rotate(90 12 12)"
+          />
+        </svg>
+      </button>
+
       {/* Broadcast Message Modal */}
       {broadcastMessage && (
         <div 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 
 const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled }) => {
   const [sessionDuration, setSessionDuration] = useState('');
@@ -14,6 +14,46 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   const [pendingCancelQuantity, setPendingCancelQuantity] = useState(null);
 
   if (!order) return null;
+
+  // Aynı ürünleri grupla ve toplam miktarı göster
+  const groupedItems = useMemo(() => {
+    const grouped = new Map();
+    
+    items.forEach(item => {
+      // product_id ve isGift'e göre grup key'i oluştur
+      const key = `${item.product_id}_${item.isGift || false}`;
+      
+      if (!grouped.has(key)) {
+        // İlk kez görülen ürün
+        grouped.set(key, {
+          ...item,
+          // Tüm item ID'lerini sakla (iptal işlemleri için)
+          allItemIds: [item.id],
+          // Orijinal item'ları sakla (detay için)
+          originalItems: [item]
+        });
+      } else {
+        // Aynı ürün bulundu, miktarları topla
+        const existing = grouped.get(key);
+        existing.quantity += item.quantity;
+        existing.paid_quantity = (existing.paid_quantity || 0) + (item.paid_quantity || 0);
+        existing.is_paid = existing.is_paid && item.is_paid; // Her ikisi de ödenmişse true
+        // Payment method'ları birleştir
+        if (item.payment_method && existing.payment_method) {
+          if (existing.payment_method !== item.payment_method) {
+            existing.payment_method = `${existing.payment_method}, ${item.payment_method}`;
+          }
+        } else if (item.payment_method) {
+          existing.payment_method = item.payment_method;
+        }
+        // ID'leri ve orijinal item'ları ekle
+        existing.allItemIds.push(item.id);
+        existing.originalItems.push(item);
+      }
+    });
+    
+    return Array.from(grouped.values());
+  }, [items]);
 
   // Oturum süresini canlı olarak hesapla
   useEffect(() => {
@@ -48,13 +88,13 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     return () => clearInterval(interval);
   }, [order.order_date, order.order_time]);
 
-  // Başlangıç toplam tutarı (ikram edilen ürünler hariç)
-  const originalTotalAmount = items.reduce((sum, item) => {
+  // Başlangıç toplam tutarı (ikram edilen ürünler hariç) - groupedItems kullan
+  const originalTotalAmount = groupedItems.reduce((sum, item) => {
     if (item.isGift) return sum;
     return sum + (item.price * item.quantity);
   }, 0);
-  // Ödemesi alınan ürünlerin toplam tutarı (kısmi ödemeler dahil)
-  const paidAmount = items.reduce((sum, item) => {
+  // Ödemesi alınan ürünlerin toplam tutarı (kısmi ödemeler dahil) - groupedItems kullan
+  const paidAmount = groupedItems.reduce((sum, item) => {
     if (item.isGift) return sum;
     const paidQty = item.paid_quantity || 0;
     return sum + (item.price * paidQty);
@@ -130,30 +170,82 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
       return;
     }
 
-    setCancellingItemId(pendingCancelItemId);
-    try {
-      // Kısa bir delay ekleyerek UI donmasını önle
-      await new Promise(resolve => setTimeout(resolve, 100));
+    // Gruplanmış item'ı bul (eğer varsa)
+    const groupedItem = groupedItems.find(item => item.id === pendingCancelItemId || item.allItemIds?.includes(pendingCancelItemId));
+    
+    // Eğer gruplanmış item varsa ve birden fazla item varsa, toplu iptal kullan
+    if (groupedItem && groupedItem.originalItems && groupedItem.originalItems.length > 1) {
+      // Tüm item'ları toplu iptal için hazırla
+      let remainingQuantity = pendingCancelQuantity;
+      const itemsToCancel = [];
       
-      const result = await window.electronAPI.cancelTableOrderItem(pendingCancelItemId, pendingCancelQuantity, cancelReason.trim());
-      
-      if (result.success) {
-        // Başarılı
-        setShowCancelReasonModal(false);
-        setCancelReason('');
-        setPendingCancelItemId(null);
-        setPendingCancelQuantity(null);
-        if (onItemCancelled) {
-          onItemCancelled();
-        }
-      } else {
-        alert(result.error || 'İptal açıklaması kaydedilemedi');
+      for (const originalItem of groupedItem.originalItems) {
+        if (remainingQuantity <= 0) break;
+        
+        // Bu item'dan ne kadar iptal edilecek?
+        const quantityToCancel = Math.min(remainingQuantity, originalItem.quantity);
+        itemsToCancel.push({
+          itemId: originalItem.id,
+          quantity: quantityToCancel
+        });
+        
+        remainingQuantity -= quantityToCancel;
       }
-    } catch (error) {
-      console.error('İptal açıklaması kaydetme hatası:', error);
-      alert('İptal açıklaması kaydedilirken bir hata oluştu');
-    } finally {
-      setCancellingItemId(null);
+      
+      setCancellingItemId(pendingCancelItemId);
+      
+      try {
+        // Toplu iptal işlemi (tek fiş)
+        const result = await window.electronAPI.cancelTableOrderItemsBulk(
+          itemsToCancel,
+          cancelReason.trim()
+        );
+        
+        if (result.success) {
+          // Başarılı
+          setShowCancelReasonModal(false);
+          setCancelReason('');
+          setPendingCancelItemId(null);
+          setPendingCancelQuantity(null);
+          if (onItemCancelled) {
+            onItemCancelled();
+          }
+        } else {
+          alert(result.error || 'İptal açıklaması kaydedilemedi');
+        }
+      } catch (error) {
+        console.error('İptal açıklaması kaydetme hatası:', error);
+        alert('İptal açıklaması kaydedilirken bir hata oluştu');
+      } finally {
+        setCancellingItemId(null);
+      }
+    } else {
+      // Normal iptal (tek item veya gruplanmamış)
+      setCancellingItemId(pendingCancelItemId);
+      try {
+        // Kısa bir delay ekleyerek UI donmasını önle
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        const result = await window.electronAPI.cancelTableOrderItem(pendingCancelItemId, pendingCancelQuantity, cancelReason.trim());
+        
+        if (result.success) {
+          // Başarılı
+          setShowCancelReasonModal(false);
+          setCancelReason('');
+          setPendingCancelItemId(null);
+          setPendingCancelQuantity(null);
+          if (onItemCancelled) {
+            onItemCancelled();
+          }
+        } else {
+          alert(result.error || 'İptal açıklaması kaydedilemedi');
+        }
+      } catch (error) {
+        console.error('İptal açıklaması kaydetme hatası:', error);
+        alert('İptal açıklaması kaydedilirken bir hata oluştu');
+      } finally {
+        setCancellingItemId(null);
+      }
     }
   };
 
@@ -216,7 +308,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
           <div>
             <h3 className="text-xl font-bold mb-4 gradient-text">Ürünler</h3>
             <div className="space-y-3">
-              {items.map((item) => {
+              {groupedItems.map((item) => {
                 const isGift = item.isGift || false;
                 const isPaid = item.is_paid || false;
                 const paidQuantity = item.paid_quantity || 0;
@@ -228,7 +320,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                 
                 return (
                 <div
-                  key={item.id}
+                  key={`${item.product_id}_${item.isGift || false}`}
                   className={`flex items-center justify-between p-4 rounded-xl border-2 transition-all ${
                     isPaid
                       ? 'bg-gradient-to-r from-green-50 to-emerald-50 border-green-300'

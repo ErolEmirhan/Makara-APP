@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getProducts: (categoryId) => ipcRenderer.invoke('get-products', categoryId),
   createSale: (saleData) => ipcRenderer.invoke('create-sale', saleData),
   getSales: () => ipcRenderer.invoke('get-sales'),
+  getRecentSales: (hours) => ipcRenderer.invoke('get-recent-sales', hours),
   getSaleDetails: (saleId) => ipcRenderer.invoke('get-sale-details', saleId),
   deleteAllSales: () => ipcRenderer.invoke('delete-all-sales'),
   // Table Order API
@@ -16,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getTableOrders: (tableId) => ipcRenderer.invoke('get-table-orders', tableId),
   getTableOrderItems: (orderId) => ipcRenderer.invoke('get-table-order-items', orderId),
   cancelTableOrderItem: (itemId, cancelQuantity, cancelReason) => ipcRenderer.invoke('cancel-table-order-item', itemId, cancelQuantity, cancelReason),
+  cancelTableOrderItemsBulk: (itemsToCancel, cancelReason) => ipcRenderer.invoke('cancel-table-order-items-bulk', itemsToCancel, cancelReason),
   previewCancelReceipt: (itemId, cancelQuantity) => ipcRenderer.invoke('preview-cancel-receipt', itemId, cancelQuantity),
   completeTableOrder: (orderId, paymentMethod) => ipcRenderer.invoke('complete-table-order', orderId, paymentMethod),
   transferTableOrder: (sourceTableId, targetTableId) => ipcRenderer.invoke('transfer-table-order', sourceTableId, targetTableId),
@@ -88,6 +90,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeAllListeners('broadcast-message');
     };
-  }
+  },
+  // Window Management API
+  minimizeWindow: () => ipcRenderer.invoke('minimize-window')
 });
 

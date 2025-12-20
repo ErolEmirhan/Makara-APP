@@ -1313,6 +1313,73 @@ ipcMain.handle('get-sales', () => {
   return salesWithItems.sort((a, b) => b.id - a.id).slice(0, 100);
 });
 
+// Son 12 saatin satışlarını getir
+ipcMain.handle('get-recent-sales', (event, hours = 12) => {
+  const now = new Date();
+  const hoursAgo = new Date(now.getTime() - (hours * 60 * 60 * 1000));
+  
+  // Satışları ve itemları birleştir
+  const salesWithItems = db.sales.map(sale => {
+    const saleItems = db.saleItems.filter(si => si.sale_id === sale.id);
+    
+    // Items string'i (eski format için uyumluluk)
+    const items = saleItems
+      .map(si => {
+        const giftText = si.isGift ? ' (İKRAM)' : '';
+        return `${si.product_name} x${si.quantity}${giftText}`;
+      })
+      .join(', ');
+    
+    // Items array (gerçek veriler için - personel bilgisi dahil)
+    const itemsArray = saleItems.map(si => ({
+      product_id: si.product_id,
+      product_name: si.product_name,
+      quantity: si.quantity,
+      price: si.price,
+      isGift: si.isGift || false,
+      staff_id: si.staff_id || null,
+      staff_name: si.staff_name || null
+    }));
+    
+    return {
+      ...sale,
+      items: items || 'Ürün bulunamadı',
+      items_array: itemsArray
+    };
+  });
+  
+  // Son 12 saat içindeki satışları filtrele
+  const recentSales = salesWithItems.filter(sale => {
+    try {
+      // Tarih ve saat bilgisini parse et
+      const [day, month, year] = sale.sale_date.split('.');
+      const [hours, minutes, seconds] = (sale.sale_time || '00:00:00').split(':');
+      const saleDate = new Date(year, month - 1, day, hours || 0, minutes || 0, seconds || 0);
+      
+      return saleDate >= hoursAgo;
+    } catch (error) {
+      return false;
+    }
+  });
+  
+  // En yeni satışlar önce
+  return recentSales.sort((a, b) => {
+    try {
+      const [dayA, monthA, yearA] = a.sale_date.split('.');
+      const [hoursA, minutesA, secondsA] = (a.sale_time || '00:00:00').split(':');
+      const dateA = new Date(yearA, monthA - 1, dayA, hoursA || 0, minutesA || 0, secondsA || 0);
+      
+      const [dayB, monthB, yearB] = b.sale_date.split('.');
+      const [hoursB, minutesB, secondsB] = (b.sale_time || '00:00:00').split(':');
+      const dateB = new Date(yearB, monthB - 1, dayB, hoursB || 0, minutesB || 0, secondsB || 0);
+      
+      return dateB - dateA;
+    } catch (error) {
+      return 0;
+    }
+  });
+});
+
 ipcMain.handle('get-sale-details', (event, saleId) => {
   const sale = db.sales.find(s => s.id === saleId);
   const items = db.saleItems.filter(si => si.sale_id === saleId);
@@ -1408,34 +1475,27 @@ ipcMain.handle('create-table-order', async (event, orderData) => {
 
   if (existingOrder) {
     // Mevcut siparişe ekle
+    // Her sipariş için ayrı kayıt oluştur (aynı ürün olsa bile, farklı saat bilgisiyle)
+    // Böylece kategori bazlı yazdırmada her siparişin kendi bilgileri kullanılır
     orderId = existingOrder.id;
     items.forEach(newItem => {
-      const existingItem = (db.tableOrderItems || []).find(
-        oi => oi.order_id === orderId && 
-              oi.product_id === newItem.id && 
-              oi.isGift === (newItem.isGift || false)
-      );
-      if (existingItem) {
-        existingItem.quantity += newItem.quantity;
-      } else {
-        const itemId = (db.tableOrderItems || []).length > 0 
-          ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 
-          : 1;
-        if (!db.tableOrderItems) db.tableOrderItems = [];
-        db.tableOrderItems.push({
-          id: itemId,
-          order_id: orderId,
-          product_id: newItem.id,
-          product_name: newItem.name,
-          quantity: newItem.quantity,
-          price: newItem.price,
-          isGift: newItem.isGift || false,
-          staff_id: null, // Electron'dan eklenen ürünler için staff bilgisi yok
-          staff_name: null,
-          added_date: orderDate,
-          added_time: orderTime
-        });
-      }
+      const itemId = (db.tableOrderItems || []).length > 0 
+        ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 
+        : 1;
+      if (!db.tableOrderItems) db.tableOrderItems = [];
+      db.tableOrderItems.push({
+        id: itemId,
+        order_id: orderId,
+        product_id: newItem.id,
+        product_name: newItem.name,
+        quantity: newItem.quantity,
+        price: newItem.price,
+        isGift: newItem.isGift || false,
+        staff_id: null, // Electron'dan eklenen ürünler için staff bilgisi yok
+        staff_name: null,
+        added_date: orderDate,
+        added_time: orderTime
+      });
     });
     // Toplam tutarı güncelle
     const existingTotal = existingOrder.total_amount || 0;
@@ -1701,6 +1761,220 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
   }
 
   // Yeni Firebase'e sadece bu masayı kaydet (makaramasalar)
+  syncSingleTableToFirebase(order.table_id).catch(err => {
+    console.error('Masa Firebase kaydetme hatası:', err);
+  });
+
+  return { success: true, remainingAmount: order.total_amount };
+});
+
+// Toplu iptal handler - birden fazla item'ı tek fişte iptal et
+ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, cancelReason = null, staffId = null) => {
+  // itemsToCancel: [{ itemId, quantity }, ...]
+  if (!itemsToCancel || itemsToCancel.length === 0) {
+    return { success: false, error: 'İptal edilecek ürün bulunamadı' };
+  }
+
+  // İlk item'dan order bilgisini al
+  const firstItem = db.tableOrderItems.find(oi => oi.id === itemsToCancel[0].itemId);
+  if (!firstItem) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+
+  const order = db.tableOrders.find(o => o.id === firstItem.order_id);
+  if (!order) {
+    return { success: false, error: 'Sipariş bulunamadı' };
+  }
+
+  if (order.status !== 'pending') {
+    return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
+  }
+
+  // Müdür kontrolü (sadece mobil personel arayüzünden gelen istekler için)
+  if (staffId) {
+    const staff = (db.staff || []).find(s => s.id === staffId);
+    if (!staff || !staff.is_manager) {
+      return { 
+        success: false, 
+        error: 'İptal yetkisi yok. İptal ettirmek için lütfen müdürle görüşünüz.' 
+      };
+    }
+  }
+
+  if (!cancelReason || cancelReason.trim() === '') {
+    return { success: false, requiresReason: true, error: 'İptal açıklaması zorunludur' };
+  }
+
+  cancelReason = cancelReason.trim();
+
+  // Tüm item'ları iptal et ve toplam bilgilerini topla
+  let totalCancelAmount = 0;
+  const cancelItems = [];
+  const categoryGroups = new Map(); // categoryId -> { items: [], totalQuantity, totalAmount }
+
+  for (const cancelItem of itemsToCancel) {
+    const item = db.tableOrderItems.find(oi => oi.id === cancelItem.itemId);
+    if (!item) continue;
+
+    const quantityToCancel = cancelItem.quantity || item.quantity;
+    if (quantityToCancel <= 0 || quantityToCancel > item.quantity) continue;
+
+    // Stok iadesi (ikram edilen ürünler hariç)
+    if (!item.isGift) {
+      await increaseProductStock(item.product_id, quantityToCancel);
+    }
+
+    // Ürün bilgilerini al
+    const product = db.products.find(p => p.id === item.product_id);
+    if (!product) continue;
+
+    const category = db.categories.find(c => c.id === product.category_id);
+    const categoryName = category ? category.name : 'Diğer';
+
+    // Kategoriye göre grupla
+    if (!categoryGroups.has(product.category_id)) {
+      const assignment = db.printerAssignments.find(a => {
+        const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+        return assignmentCategoryId === product.category_id;
+      });
+
+      if (!assignment) continue; // Yazıcı ataması yoksa atla
+
+      categoryGroups.set(product.category_id, {
+        categoryName,
+        printerName: assignment.printerName,
+        printerType: assignment.printerType,
+        items: [],
+        totalQuantity: 0,
+        totalAmount: 0
+      });
+    }
+
+    const categoryGroup = categoryGroups.get(product.category_id);
+    categoryGroup.items.push({
+      productName: item.product_name,
+      quantity: quantityToCancel,
+      price: item.price
+    });
+    categoryGroup.totalQuantity += quantityToCancel;
+    categoryGroup.totalAmount += item.isGift ? 0 : (item.price * quantityToCancel);
+
+    // İptal edilecek tutarı hesapla
+    const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
+    totalCancelAmount += cancelAmount;
+
+    // Item'ı güncelle veya sil
+    if (quantityToCancel >= item.quantity) {
+      item.cancel_reason = cancelReason;
+      item.cancel_date = new Date().toISOString();
+      const itemIndex = db.tableOrderItems.findIndex(oi => oi.id === cancelItem.itemId);
+      if (itemIndex !== -1) {
+        db.tableOrderItems.splice(itemIndex, 1);
+      }
+    } else {
+      item.quantity -= quantityToCancel;
+      item.cancel_reason = cancelReason;
+      item.cancel_date = new Date().toISOString();
+    }
+
+    cancelItems.push({
+      itemId: cancelItem.itemId,
+      productName: item.product_name,
+      quantity: quantityToCancel,
+      price: item.price
+    });
+  }
+
+  // Masa siparişinin toplam tutarını güncelle
+  order.total_amount = Math.max(0, order.total_amount - totalCancelAmount);
+
+  saveDatabase();
+
+  // Her kategori için tek bir fiş yazdır
+  const now = new Date();
+  const cancelDate = now.toLocaleDateString('tr-TR');
+  const cancelTime = getFormattedTime(now);
+
+  for (const [categoryId, categoryGroup] of categoryGroups) {
+    try {
+      // Tek fiş için toplam bilgileriyle yazdır
+      const cancelReceiptData = {
+        tableName: order.table_name,
+        tableType: order.table_type,
+        productName: categoryGroup.items.length === 1 
+          ? categoryGroup.items[0].productName 
+          : `${categoryGroup.items.length} Farklı Ürün`,
+        quantity: categoryGroup.totalQuantity,
+        price: categoryGroup.items.length === 1 
+          ? categoryGroup.items[0].price 
+          : categoryGroup.totalAmount / categoryGroup.totalQuantity, // Ortalama fiyat
+        cancelDate,
+        cancelTime,
+        categoryName: categoryGroup.categoryName,
+        items: categoryGroup.items // Detaylı ürün listesi
+      };
+
+      await printCancelReceipt(categoryGroup.printerName, categoryGroup.printerType, cancelReceiptData);
+    } catch (error) {
+      console.error('İptal fişi yazdırma hatası:', error);
+      // Yazdırma hatası olsa bile iptal işlemini devam ettir
+    }
+  }
+
+  // Firebase'e iptal kayıtları ekle
+  if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
+    try {
+      const orderStaffName = order.staff_name || firstItem.staff_name || null;
+      const cancelStaff = staffId ? (db.staff || []).find(s => s.id === staffId) : null;
+      const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
+      const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
+
+      const cancelRef = firebaseCollection(firestore, 'cancels');
+      
+      for (const cancelItem of cancelItems) {
+        await firebaseAddDoc(cancelRef, {
+          item_id: cancelItem.itemId,
+          order_id: order.id,
+          table_id: order.table_id,
+          table_name: order.table_name,
+          table_type: order.table_type,
+          product_name: cancelItem.productName,
+          quantity: cancelItem.quantity,
+          price: cancelItem.price,
+          cancel_reason: cancelReason,
+          cancel_date: cancelDate,
+          cancel_time: cancelTime,
+          staff_id: staffId || null,
+          staff_name: cancelStaffName,
+          staff_is_manager: cancelStaffIsManager,
+          order_staff_name: orderStaffName,
+          source: 'desktop',
+          created_at: firebaseServerTimestamp()
+        });
+      }
+      console.log('✅ Toplu iptal kayıtları Firebase\'e başarıyla kaydedildi');
+    } catch (error) {
+      console.error('❌ Firebase\'e iptal kayıtları kaydedilemedi:', error);
+    }
+  }
+
+  // Electron renderer process'e güncelleme gönder
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', { 
+      orderId: order.id,
+      tableId: order.table_id
+    });
+  }
+
+  // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
+  if (io) {
+    io.emit('table-update', {
+      tableId: order.table_id,
+      hasOrder: order.total_amount > 0
+    });
+  }
+
+  // Yeni Firebase'e sadece bu masayı kaydet
   syncSingleTableToFirebase(order.table_id).catch(err => {
     console.error('Masa Firebase kaydetme hatası:', err);
   });
@@ -5286,23 +5560,41 @@ function generateCancelReceiptHTML(cancelData) {
       <div style="margin-bottom: 12px; padding: 10px; background: white; border: 2px solid #000; border-radius: 4px;">
         <div style="margin-bottom: 6px;">
           <p style="margin: 0; font-size: 9px; color: #000; font-weight: 700; text-transform: uppercase;">Ürün</p>
-          <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 900; color: #000; text-decoration: line-through; text-decoration-thickness: 3px;">${cancelData.productName}</p>
+          ${cancelData.items && cancelData.items.length > 1 
+            ? cancelData.items.map(item => `
+              <div style="margin-top: 6px; padding-bottom: 6px; border-bottom: 1px solid #ccc;">
+                <p style="margin: 0; font-size: 11px; font-weight: 900; color: #000; text-decoration: line-through; text-decoration-thickness: 2px;">${item.productName}</p>
+                <div style="display: flex; justify-content: space-between; margin-top: 4px;">
+                  <span style="font-size: 9px; color: #000; font-weight: 700;">${item.quantity} adet</span>
+                  <span style="font-size: 9px; color: #000; font-weight: 700;">₺${(item.price * item.quantity).toFixed(2)}</span>
+                </div>
+              </div>
+            `).join('')
+            : `
+              <p style="margin: 4px 0 0 0; font-size: 12px; font-weight: 900; color: #000; text-decoration: line-through; text-decoration-thickness: 3px;">${cancelData.productName}</p>
+            `
+          }
           <span style="display: inline-block; font-size: 8px; color: #000; font-weight: 700; padding: 2px 6px; border: 1px solid #000; border-radius: 3px; margin-top: 4px;">iptal</span>
         </div>
         <div style="display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px; border-top: 2px solid #000;">
           <div>
-            <p style="margin: 0; font-size: 8px; color: #000; font-weight: 700;">Adet</p>
+            <p style="margin: 0; font-size: 8px; color: #000; font-weight: 700;">Toplam Adet</p>
             <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #000;">${cancelData.quantity} adet</p>
           </div>
+          ${!cancelData.items || cancelData.items.length === 1 ? `
           <div style="text-align: right;">
             <p style="margin: 0; font-size: 8px; color: #000; font-weight: 700;">Birim Fiyat</p>
             <p style="margin: 2px 0 0 0; font-size: 11px; font-weight: 900; color: #000;">₺${cancelData.price.toFixed(2)}</p>
           </div>
+          ` : ''}
         </div>
         <div style="margin-top: 10px; padding-top: 10px; border-top: 3px solid #000;">
           <div style="display: flex; justify-content: space-between; align-items: center;">
             <p style="margin: 0; font-size: 9px; color: #000; font-weight: 700; text-transform: uppercase;">Toplam</p>
-            <p style="margin: 0; font-size: 16px; font-weight: 900; color: #000;">₺${(cancelData.price * cancelData.quantity).toFixed(2)}</p>
+            <p style="margin: 0; font-size: 16px; font-weight: 900; color: #000;">₺${cancelData.items && cancelData.items.length > 1 
+              ? cancelData.items.reduce((sum, item) => sum + (item.price * item.quantity), 0).toFixed(2)
+              : (cancelData.price * cancelData.quantity).toFixed(2)
+            }</p>
           </div>
         </div>
       </div>
@@ -9379,38 +9671,31 @@ function startAPIServer() {
 
       if (existingOrder) {
         orderId = existingOrder.id;
+        // Her sipariş için ayrı kayıt oluştur (aynı ürün olsa bile, farklı personel/saat bilgisiyle)
+        // Böylece kategori bazlı yazdırmada her siparişin kendi bilgileri kullanılır
         items.forEach(newItem => {
-          const existingItem = (db.tableOrderItems || []).find(
-            oi => oi.order_id === orderId && 
-                  oi.product_id === newItem.id && 
-                  oi.isGift === (newItem.isGift || false)
-          );
-          if (existingItem) {
-            existingItem.quantity += newItem.quantity;
-          } else {
-            const itemId = (db.tableOrderItems || []).length > 0 
-              ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 
-              : 1;
-            if (!db.tableOrderItems) db.tableOrderItems = [];
-            const now = new Date();
-            const addedDate = now.toLocaleDateString('tr-TR');
-            const addedTime = getFormattedTime(now);
-            const staff = staffId && db.staff ? db.staff.find(s => s.id === staffId) : null;
-            const itemStaffName = staff ? `${staff.name} ${staff.surname}` : null;
-            db.tableOrderItems.push({
-              id: itemId,
-              order_id: orderId,
-              product_id: newItem.id,
-              product_name: newItem.name,
-              quantity: newItem.quantity,
-              price: newItem.price,
-              isGift: newItem.isGift || false,
-              staff_id: staffId || null,
-              staff_name: itemStaffName,
-              added_date: addedDate,
-              added_time: addedTime
-            });
-          }
+          const itemId = (db.tableOrderItems || []).length > 0 
+            ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 
+            : 1;
+          if (!db.tableOrderItems) db.tableOrderItems = [];
+          const now = new Date();
+          const addedDate = now.toLocaleDateString('tr-TR');
+          const addedTime = getFormattedTime(now);
+          const staff = staffId && db.staff ? db.staff.find(s => s.id === staffId) : null;
+          const itemStaffName = staff ? `${staff.name} ${staff.surname}` : null;
+          db.tableOrderItems.push({
+            id: itemId,
+            order_id: orderId,
+            product_id: newItem.id,
+            product_name: newItem.name,
+            quantity: newItem.quantity,
+            price: newItem.price,
+            isGift: newItem.isGift || false,
+            staff_id: staffId || null,
+            staff_name: itemStaffName,
+            added_date: addedDate,
+            added_time: addedTime
+          });
         });
         const existingTotal = existingOrder.total_amount || 0;
         existingOrder.total_amount = existingTotal + totalAmount;
@@ -9504,20 +9789,28 @@ function startAPIServer() {
         // Items'a staff_name, added_time ve added_date ekle (tableOrderItems'dan al)
         // Veritabanı zaten kaydedildi, şimdi items'ları bulabiliriz
         // Bu sipariş için az önce eklenen item'ları bul (en yüksek ID'li olanlar - en son eklenenler)
-        const itemsWithStaff = items.map(item => {
+        // Her item için ayrı kayıt oluşturulduğu için, items array'indeki sıra ile tableOrderItems'daki sıra aynı olmalı
+        // Ama güvenlik için en son eklenen kaydı bulalım
+        const itemsWithStaff = items.map((item, index) => {
           // Mevcut orderId için bu ürünü ekleyen garsonu bul
           // En son eklenen item'ı al (ID'ye göre sırala - en yüksek ID = en son eklenen)
           const matchingItems = db.tableOrderItems.filter(oi => 
             oi.order_id === orderId && 
             oi.product_id === item.id && 
-            oi.product_name === item.name
+            oi.product_name === item.name &&
+            oi.isGift === (item.isGift || false)
           );
           
           // En son eklenen item'ı al (ID'ye göre sırala - büyükten küçüğe)
           let orderItem = null;
           if (matchingItems.length > 0) {
             // ID'ye göre sırala ve en yüksek ID'li olanı al (en son eklenen)
-            orderItem = matchingItems.sort((a, b) => b.id - a.id)[0];
+            // Eğer birden fazla kayıt varsa, en son eklenenleri al ve index'e göre seç
+            const sortedItems = matchingItems.sort((a, b) => b.id - a.id);
+            // Eğer aynı ürün için birden fazla kayıt varsa, index'e göre seç
+            // Örneğin: 2 adet çay sipariş edildiyse, 2 ayrı kayıt olacak
+            // İlk item için en son eklenen 1. kayıt, ikinci item için en son eklenen 2. kayıt
+            orderItem = sortedItems[index] || sortedItems[0];
           }
           
           // Eğer orderItem bulunduysa, onun bilgilerini kullan
@@ -9589,6 +9882,14 @@ ipcMain.handle('quit-app', () => {
   setTimeout(() => {
     app.quit();
   }, 500);
+  return { success: true };
+});
+
+// Minimize window handler
+ipcMain.handle('minimize-window', () => {
+  if (mainWindow) {
+    mainWindow.minimize();
+  }
   return { success: true };
 });
 

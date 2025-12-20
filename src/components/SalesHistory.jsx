@@ -12,6 +12,10 @@ const SalesHistory = () => {
   const [staffList, setStaffList] = useState([]);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showAdisyonModal, setShowAdisyonModal] = useState(false);
+  const [recentSales, setRecentSales] = useState([]);
+  const [loadingRecentSales, setLoadingRecentSales] = useState(false);
+  const [selectedSaleForAdisyon, setSelectedSaleForAdisyon] = useState(null);
 
   useEffect(() => {
     loadSales();
@@ -1073,13 +1077,198 @@ const SalesHistory = () => {
                 </a>
                 {' '}üzerinden giriş yapınız.
               </p>
-              <p className="text-base text-gray-600">
+              <p className="text-base text-gray-600 mb-6">
                 Dashboard'da tarih bazlı filtreleme, ödeme yöntemi analizleri, personel performans raporları ve daha fazlasını bulabilirsiniz.
               </p>
+              <button
+                onClick={async () => {
+                  setShowAdisyonModal(true);
+                  setLoadingRecentSales(true);
+                  try {
+                    const recent = await window.electronAPI.getRecentSales(12);
+                    setRecentSales(recent || []);
+                  } catch (error) {
+                    console.error('Son satışlar yüklenemedi:', error);
+                    alert('Son satışlar yüklenemedi');
+                  } finally {
+                    setLoadingRecentSales(false);
+                  }
+                }}
+                className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center space-x-2 mx-auto"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <span>Geçmiş Adisyon İste</span>
+              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Geçmiş Adisyon Modal */}
+      {showAdisyonModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-3xl font-bold gradient-text">Geçmiş Adisyon İste</h2>
+              <button
+                onClick={() => {
+                  setShowAdisyonModal(false);
+                  setSelectedSaleForAdisyon(null);
+                  setRecentSales([]);
+                }}
+                className="text-gray-500 hover:text-gray-700 transition-colors p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <p className="text-gray-600 mb-6">Son 12 saatin satış geçmişi:</p>
+
+            {loadingRecentSales ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : recentSales.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-600">Son 12 saatte satış bulunamadı.</p>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-3 max-h-96 overflow-y-auto mb-6">
+                  {recentSales.map((sale) => (
+                    <div
+                      key={sale.id}
+                      onClick={() => setSelectedSaleForAdisyon(sale)}
+                      className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                        selectedSaleForAdisyon?.id === sale.id
+                          ? 'bg-gradient-to-r from-purple-50 to-pink-50 border-purple-400'
+                          : 'bg-gray-50 border-gray-200 hover:border-purple-300'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3 mb-2">
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                              sale.payment_method === 'Nakit'
+                                ? 'bg-gradient-to-r from-green-500 to-emerald-500'
+                                : 'bg-gradient-to-r from-blue-500 to-cyan-500'
+                            }`}>
+                              {sale.payment_method === 'Nakit' ? (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                                </svg>
+                              ) : (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <p className="font-bold text-gray-800">
+                                {sale.table_name ? `${sale.table_type === 'inside' ? 'İç' : 'Dış'} Masa ${sale.table_name}` : 'Hızlı Satış'}
+                              </p>
+                              <p className="text-sm text-gray-600">
+                                {sale.sale_date} {sale.sale_time}
+                                {sale.staff_name && ` • ${sale.staff_name}`}
+                              </p>
+                            </div>
+                          </div>
+                          <p className="text-sm text-gray-500 mt-2">
+                            {sale.items || 'Ürün bulunamadı'}
+                          </p>
+                        </div>
+                        <div className="text-right ml-4">
+                          <p className="text-2xl font-bold text-purple-600">
+                            ₺{sale.total_amount?.toFixed(2) || '0.00'}
+                          </p>
+                          <p className="text-xs text-gray-500 mt-1">{sale.payment_method}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center justify-end space-x-4">
+                  <button
+                    onClick={() => {
+                      setShowAdisyonModal(false);
+                      setSelectedSaleForAdisyon(null);
+                      setRecentSales([]);
+                    }}
+                    className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedSaleForAdisyon) {
+                        alert('Lütfen bir satış seçin');
+                        return;
+                      }
+
+                      if (!window.electronAPI || !window.electronAPI.printAdisyon) {
+                        alert('Adisyon yazdırma özelliği kullanılamıyor');
+                        return;
+                      }
+
+                      try {
+                        setPrintToast({ status: 'printing', message: 'Adisyon yazdırılıyor...' });
+
+                        // Satış item'larını adisyon formatına çevir
+                        const adisyonItems = (selectedSaleForAdisyon.items_array || []).map(item => ({
+                          id: item.product_id,
+                          name: item.product_name,
+                          quantity: item.quantity,
+                          price: item.price,
+                          isGift: item.isGift || false,
+                          staff_name: item.staff_name || null
+                        }));
+
+                        const adisyonData = {
+                          items: adisyonItems,
+                          tableName: selectedSaleForAdisyon.table_name || null,
+                          tableType: selectedSaleForAdisyon.table_type || null,
+                          orderNote: null,
+                          sale_date: selectedSaleForAdisyon.sale_date,
+                          sale_time: selectedSaleForAdisyon.sale_time,
+                          staff_name: selectedSaleForAdisyon.staff_name || null,
+                          cashierOnly: true // Sadece kasa yazıcısından fiyatlı fiş
+                        };
+
+                        const result = await window.electronAPI.printAdisyon(adisyonData);
+
+                        if (result.success) {
+                          setPrintToast({ status: 'success', message: 'Adisyon başarıyla yazdırıldı' });
+                          setShowAdisyonModal(false);
+                          setSelectedSaleForAdisyon(null);
+                          setRecentSales([]);
+                        } else {
+                          setPrintToast({ status: 'error', message: result.error || 'Adisyon yazdırılamadı' });
+                        }
+                      } catch (error) {
+                        console.error('Adisyon yazdırılırken hata:', error);
+                        setPrintToast({ status: 'error', message: 'Adisyon yazdırılamadı: ' + error.message });
+                      }
+                    }}
+                    disabled={!selectedSaleForAdisyon}
+                    className={`px-6 py-3 rounded-xl font-bold text-white transition-all ${
+                      selectedSaleForAdisyon
+                        ? 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 shadow-lg hover:shadow-xl'
+                        : 'bg-gray-300 cursor-not-allowed'
+                    }`}
+                  >
+                    Adisyon Yazdır
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

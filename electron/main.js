@@ -6479,6 +6479,15 @@ function generateMobileHTML(serverURL) {
     .qty-btn:active {
       transform: scale(0.95);
     }
+    .gift-btn {
+      transition: all 0.3s;
+    }
+    .gift-btn:hover {
+      transform: scale(1.05);
+    }
+    .gift-btn:active {
+      transform: scale(0.95);
+    }
     .send-btn {
       width: 100%;
       padding: 18px;
@@ -8749,7 +8758,8 @@ function generateMobileHTML(serverURL) {
           id: pendingTurkishCoffeeProduct.id, 
           name: productName, 
           price: pendingTurkishCoffeeProduct.price, 
-          quantity: 1 
+          quantity: 1,
+          isGift: false
         });
       }
       
@@ -8779,9 +8789,12 @@ function generateMobileHTML(serverURL) {
         }
       }
       
-      const existing = cart.find(item => item.id === productId);
-      if (existing) existing.quantity++;
-      else cart.push({ id: productId, name, price, quantity: 1 });
+      const existing = cart.find(item => item.id === productId && item.name === name);
+      if (existing) {
+        existing.quantity++;
+      } else {
+        cart.push({ id: productId, name, price, quantity: 1, isGift: false });
+      }
       updateCart();
       
       // Arama input'unu temizle ve ürünleri yeniden render et
@@ -8797,26 +8810,37 @@ function generateMobileHTML(serverURL) {
     
     function updateCart() {
       const itemsDiv = document.getElementById('cartItems');
-      const total = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      // İkram edilen ürünleri toplamdan çıkar
+      const total = cart.reduce((sum, item) => {
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
       const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
       
       if (cart.length === 0) {
         itemsDiv.innerHTML = '<div style="text-align: center; padding: 40px 20px; color: #9ca3af; font-size: 14px;">Sepetiniz boş</div>';
       } else {
-        itemsDiv.innerHTML = cart.map(item => 
-          '<div class="cart-item">' +
+        itemsDiv.innerHTML = cart.map(item => {
+          const isGift = item.isGift || false;
+          const isTea = item.name.toLowerCase().includes('çay');
+          const displayPrice = isGift ? 0 : item.price;
+          const displayTotal = isGift ? 0 : (item.price * item.quantity);
+          const giftBadge = isGift ? '<span style="display: inline-flex; align-items: center; gap: 4px; background: #10b981; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-left: 6px;">İKRAM</span>' : '';
+          
+          return '<div class="cart-item">' +
             '<div style="flex: 1;">' +
-              '<div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 4px;">' + item.name + '</div>' +
-              '<div style="color: #6b7280; font-size: 13px; font-weight: 600;">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + (item.price * item.quantity).toFixed(2) + ' ₺</div>' +
+              '<div style="font-weight: 700; font-size: 15px; color: ' + (isGift ? '#9ca3af' : '#1f2937') + '; margin-bottom: 4px; display: flex; align-items: center; ' + (isGift ? 'text-decoration: line-through;' : '') + '">' + item.name + giftBadge + '</div>' +
+              '<div style="color: #6b7280; font-size: 13px; font-weight: 600;">' + displayPrice.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + displayTotal.toFixed(2) + ' ₺</div>' +
             '</div>' +
-            '<div class="cart-item-controls">' +
+            '<div class="cart-item-controls" style="display: flex; align-items: center; gap: 8px;">' +
+              (isTea ? '<button onclick="toggleGift(' + item.id + ')" class="gift-btn" style="padding: 8px 12px; background: ' + (isGift ? '#10b981' : '#f59e0b') + '; color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s;">' + (isGift ? 'İKRAM ✓' : 'İKRAM') + '</button>' : '') +
               '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', -1)" title="Azalt">-</button>' +
               '<span style="min-width: 36px; text-align: center; font-weight: 700; color: #1f2937; font-size: 15px;">' + item.quantity + '</span>' +
               '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', 1)" title="Artır">+</button>' +
               '<button class="qty-btn" onclick="removeFromCart(' + item.id + ')" style="background: #ef4444; color: white; border-color: #ef4444; font-size: 18px;" title="Sil">×</button>' +
             '</div>' +
-          '</div>'
-        ).join('');
+          '</div>';
+        }).join('');
       }
       
       document.getElementById('cartTotal').textContent = total.toFixed(2);
@@ -8829,6 +8853,14 @@ function generateMobileHTML(serverURL) {
     function changeQuantity(productId, delta) {
       const item = cart.find(item => item.id === productId);
       if (item) { item.quantity += delta; if (item.quantity <= 0) removeFromCart(productId); else updateCart(); }
+    }
+    
+    function toggleGift(productId) {
+      const item = cart.find(item => item.id === productId);
+      if (item) {
+        item.isGift = !item.isGift;
+        updateCart();
+      }
     }
     
     function removeFromCart(productId) { cart = cart.filter(item => item.id !== productId); updateCart(); }
@@ -9250,14 +9282,24 @@ function generateMobileHTML(serverURL) {
         return; 
       }
       
-      const totalAmount = cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+      // İkram edilen ürünleri toplamdan çıkar
+      const totalAmount = cart.reduce((sum, item) => {
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
       
       try {
         const response = await fetch(API_URL + '/orders', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
-            items: cart, 
+            items: cart.map(item => ({
+              id: item.id,
+              name: item.name,
+              price: item.price,
+              quantity: item.quantity,
+              isGift: item.isGift || false
+            })), 
             totalAmount, 
             tableId: selectedTable.id, 
             tableName: selectedTable.name, 

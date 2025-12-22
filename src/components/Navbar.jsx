@@ -299,76 +299,99 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             </div>
           </button>
 
-          {/* Dropdown Menu */}
+          {/* Dropdown Menu - Modern & Professional */}
           {showUserMenu && (
-            <div className="absolute right-0 top-full mt-2 w-56 bg-white rounded-2xl shadow-2xl border border-purple-200 overflow-hidden animate-fade-in z-[100]">
+            <div className="absolute right-0 top-full mt-3 w-64 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden animate-fade-in z-[100]">
+              {/* Header */}
+              <div className="px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-blue-50/50 to-indigo-50/50">
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Kullanıcı Tipi</p>
+              </div>
+
+              {/* Options */}
               <div className="p-2">
                 <button
                   onClick={() => handleUserTypeChange('Admin')}
-                  className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all ${
+                  className={`w-full flex items-center space-x-3 p-3.5 rounded-lg transition-all duration-200 ${
                     userType === 'Admin'
-                      ? 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white'
-                      : 'hover:bg-gray-100 text-gray-700'
+                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md'
+                      : 'hover:bg-blue-50/50 text-gray-700'
                   }`}
                 >
-                  <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-full flex items-center justify-center">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    userType === 'Admin'
+                      ? 'bg-white/20'
+                      : 'bg-blue-100'
+                  }`}>
+                    <svg className={`w-5 h-5 ${userType === 'Admin' ? 'text-white' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                     </svg>
                   </div>
-                  <div className="text-left flex-1">
-                    <p className="font-semibold">Admin</p>
-                    <p className="text-xs opacity-75">Tüm yetkilere sahip</p>
+                  <div className="text-left flex-1 min-w-0">
+                    <p className={`font-semibold text-sm ${userType === 'Admin' ? 'text-white' : 'text-gray-900'}`}>Admin</p>
+                    <p className={`text-xs ${userType === 'Admin' ? 'text-white/80' : 'text-gray-500'}`}>Tüm yetkilere sahip</p>
                   </div>
                   {userType === 'Admin' && (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                     </svg>
                   )}
                 </button>
 
                 <button
                   onClick={() => handleUserTypeChange('Personel')}
-                  className={`w-full flex items-center space-x-3 p-3 rounded-xl transition-all mt-2 ${
+                  className={`w-full flex items-center space-x-3 p-3.5 rounded-lg transition-all duration-200 mt-1 ${
                     userType === 'Personel'
-                      ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white'
-                      : 'hover:bg-gray-100 text-gray-700'
+                      ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md'
+                      : 'hover:bg-emerald-50/50 text-gray-700'
                   }`}
                 >
-                  <div className="w-8 h-8 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center">
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    userType === 'Personel'
+                      ? 'bg-white/20'
+                      : 'bg-emerald-100'
+                  }`}>
+                    <svg className={`w-5 h-5 ${userType === 'Personel' ? 'text-white' : 'text-emerald-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                     </svg>
                   </div>
-                  <div className="text-left flex-1">
-                    <p className="font-semibold">Personel</p>
-                    <p className="text-xs opacity-75">Satış yapabilir</p>
+                  <div className="text-left flex-1 min-w-0">
+                    <p className={`font-semibold text-sm ${userType === 'Personel' ? 'text-white' : 'text-gray-900'}`}>Personel</p>
+                    <p className={`text-xs ${userType === 'Personel' ? 'text-white/80' : 'text-gray-500'}`}>Satış yapabilir</p>
                   </div>
                   {userType === 'Personel' && (
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                     </svg>
                   )}
                 </button>
               </div>
 
-              <div className="border-t border-gray-200 p-3 bg-gray-50">
-                <p className="text-xs text-gray-600 text-center">
-                  {userType === 'Admin' ? '🔐 Tüm özelliklere erişim' : '📋 Satış işlemleri'}
+              {/* Status Info */}
+              <div className={`px-4 py-2.5 border-t border-gray-100 ${
+                userType === 'Admin' 
+                  ? 'bg-blue-50/50' 
+                  : 'bg-emerald-50/50'
+              }`}>
+                <p className={`text-xs text-center font-medium ${
+                  userType === 'Admin' 
+                    ? 'text-blue-700' 
+                    : 'text-emerald-700'
+                }`}>
+                  {userType === 'Admin' ? 'Tüm özelliklere erişim' : 'Satış işlemleri'}
                 </p>
               </div>
 
-              {/* Çıkış Butonu - Panelin En Altı */}
-              <div className="border-t border-gray-200 p-2">
+              {/* Çıkış Butonu */}
+              <div className="border-t border-gray-100 p-2">
                 <button
                   onClick={() => setShowExitConfirm(true)}
-                  className="w-full flex items-center justify-center space-x-2 p-3 rounded-xl hover:bg-red-50 transition-all duration-300 text-red-600 hover:text-red-700"
+                  className="w-full flex items-center justify-center space-x-2 p-3 rounded-lg hover:bg-red-50 transition-all duration-200 text-gray-600 hover:text-red-600"
                   title="Çıkış Yap"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                   </svg>
-                  <span className="font-semibold">Çıkış Yap</span>
+                  <span className="text-sm font-medium">Çıkış Yap</span>
                 </button>
               </div>
             </div>

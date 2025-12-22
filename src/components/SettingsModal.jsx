@@ -37,6 +37,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
   const [showEditCategoryModal, setShowEditCategoryModal] = useState(false);
   const [editingCategory, setEditingCategory] = useState(null);
   const [newCategoryName, setNewCategoryName] = useState('');
+  const productFormRef = useRef(null);
   const [categoryError, setCategoryError] = useState('');
   
   // Printer management state
@@ -501,6 +502,13 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       price: product.price.toString(),
       image: product.image || ''
     });
+    
+    // Form alanına scroll yap
+    setTimeout(() => {
+      if (productFormRef.current) {
+        productFormRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 100);
   };
 
   const handleCancelEdit = () => {
@@ -776,71 +784,89 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
   };
 
   return createPortal(
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-lg flex items-center justify-center z-[999] animate-fade-in px-4">
-      <div className="bg-white rounded-3xl p-8 w-full max-w-6xl max-h-[90vh] shadow-2xl transform animate-scale-in relative overflow-hidden flex flex-col">
-        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-purple-500 via-pink-500 to-blue-500"></div>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[999] animate-fade-in px-4">
+      <div className="bg-white rounded-2xl p-8 w-full max-w-6xl max-h-[90vh] shadow-xl transform animate-scale-in relative overflow-hidden flex flex-col border border-gray-200">
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
       
         <button
           onClick={onClose}
-          className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-all hover:rotate-90"
+          className="absolute top-4 right-4 w-8 h-8 rounded-lg bg-gray-50 hover:bg-gray-100 flex items-center justify-center transition-all duration-200"
         >
-          <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
 
-        <div className="text-center mb-6">
-          <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="text-center mb-6 pt-2">
+          <div className="w-14 h-14 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+            <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
             </svg>
           </div>
-          <h2 className="text-3xl font-bold gradient-text mb-2">Ayarlar</h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-1">Ayarlar</h2>
+          <p className="text-sm text-gray-500">Sistem ayarlarını yönetin</p>
         </div>
 
         {/* Tabs */}
-        <div className="flex space-x-2 mb-6 border-b border-gray-200">
-          <button
-            onClick={() => setActiveTab('password')}
-            className={`px-6 py-3 font-medium transition-all ${
-              activeTab === 'password'
-                ? 'text-purple-600 border-b-2 border-purple-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            🔐 Parola Değiştirme
-          </button>
-          <button
-            onClick={() => setActiveTab('products')}
-            className={`px-6 py-3 font-medium transition-all ${
-              activeTab === 'products'
-                ? 'text-purple-600 border-b-2 border-purple-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            📦 Ürün Yönetimi
-          </button>
-          <button
-            onClick={() => setActiveTab('printers')}
-            className={`px-6 py-3 font-medium transition-all ${
-              activeTab === 'printers'
-                ? 'text-purple-600 border-b-2 border-purple-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            🖨️ Adisyon Yönetimi
-          </button>
-          <button
-            onClick={() => setActiveTab('stock')}
-            className={`px-6 py-3 font-medium transition-all ${
-              activeTab === 'stock'
-                ? 'text-purple-600 border-b-2 border-purple-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            📊 Stok Takibi
-          </button>
+        <div className="flex justify-center mb-6">
+          <div className="inline-flex bg-white rounded-xl border border-gray-200 shadow-sm p-1.5 gap-1">
+            <button
+              onClick={() => setActiveTab('password')}
+              className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
+                activeTab === 'password'
+                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+              <span>Parola Değiştirme</span>
+            </button>
+            <div className="w-px bg-gray-200 my-2"></div>
+            <button
+              onClick={() => setActiveTab('products')}
+              className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
+                activeTab === 'products'
+                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+              </svg>
+              <span>Ürün Yönetimi</span>
+            </button>
+            <div className="w-px bg-gray-200 my-2"></div>
+            <button
+              onClick={() => setActiveTab('printers')}
+              className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
+                activeTab === 'printers'
+                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+              </svg>
+              <span>Adisyon Yönetimi</span>
+            </button>
+            <div className="w-px bg-gray-200 my-2"></div>
+            <button
+              onClick={() => setActiveTab('stock')}
+              className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
+                activeTab === 'stock'
+                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+              </svg>
+              <span>Stok Takibi</span>
+            </button>
+          </div>
         </div>
 
         {/* Content */}
@@ -861,7 +887,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       setCurrentPassword(val);
                       setPasswordError('');
                     }}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
                     placeholder="4 haneli parola"
                   />
                 </div>
@@ -879,7 +905,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       setNewPassword(val);
                       setPasswordError('');
                     }}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
                     placeholder="4 haneli yeni parola"
                   />
                 </div>
@@ -897,7 +923,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       setConfirmPassword(val);
                       setPasswordError('');
                     }}
-                    className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none transition-all"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
                     placeholder="Yeni parolayı tekrar girin"
                   />
                 </div>
@@ -916,7 +942,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
 
                 <button
                   onClick={handlePasswordChange}
-                  className="w-full px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-semibold hover:shadow-lg transform hover:scale-105 transition-all"
+                  className="w-full px-6 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                 >
                   Parolayı Değiştir
                 </button>
@@ -927,7 +953,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
           {activeTab === 'products' && (
             <div className="space-y-6">
               {/* Product Form */}
-              <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-2xl p-6 border border-purple-200">
+              <div ref={productFormRef} className="bg-gray-50 rounded-xl p-6 border border-gray-200">
                 <h3 className="text-xl font-bold text-gray-800 mb-4">
                   {editingProduct ? 'Ürün Düzenle' : 'Yeni Ürün Ekle'}
                 </h3>
@@ -941,7 +967,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                         type="text"
                         value={productForm.name}
                         onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-                        className="w-full px-4 py-2 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none"
+                        className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white"
                         placeholder="Ürün adı"
                         required
                       />
@@ -954,20 +980,20 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       <button
                         type="button"
                         onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
-                        className={`w-full px-4 py-3 rounded-xl border-2 transition-all text-left flex items-center justify-between ${
+                        className={`w-full px-4 py-3 rounded-lg border transition-all text-left flex items-center justify-between ${
                           productForm.category_id
-                            ? 'border-purple-500 bg-purple-50'
-                            : 'border-gray-200 hover:border-purple-300'
-                        } focus:border-purple-500 focus:outline-none`}
+                            ? 'border-pink-500 bg-pink-50'
+                            : 'border-gray-300 hover:border-pink-400'
+                        } focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white`}
                       >
-                        <span className={productForm.category_id ? 'text-purple-700 font-medium' : 'text-gray-500'}>
+                        <span className={productForm.category_id ? 'text-pink-700 font-medium' : 'text-gray-500'}>
                           {productForm.category_id
                             ? categories.find(c => c.id === parseInt(productForm.category_id))?.name || 'Kategori Seçin'
                             : 'Kategori Seçin'}
                         </span>
                         <svg 
                           className={`w-5 h-5 transition-transform ${showCategoryDropdown ? 'rotate-180' : ''} ${
-                            productForm.category_id ? 'text-purple-600' : 'text-gray-400'
+                            productForm.category_id ? 'text-pink-600' : 'text-gray-400'
                           }`}
                           fill="none" 
                           stroke="currentColor" 
@@ -978,7 +1004,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       </button>
                       
                       {showCategoryDropdown && (
-                        <div className="absolute z-20 w-full mt-2 bg-white rounded-xl shadow-2xl border-2 border-purple-200 overflow-hidden max-h-60 overflow-y-auto">
+                        <div className="absolute z-20 w-full mt-2 bg-white rounded-lg shadow-lg border border-gray-200 overflow-hidden max-h-60 overflow-y-auto">
                           {categories.map(cat => (
                             <button
                               key={cat.id}
@@ -987,16 +1013,16 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                                 setProductForm({ ...productForm, category_id: cat.id.toString() });
                                 setShowCategoryDropdown(false);
                               }}
-                              className={`w-full px-4 py-3 text-left hover:bg-purple-50 transition-all flex items-center space-x-3 ${
+                              className={`w-full px-4 py-3 text-left hover:bg-pink-50 transition-all flex items-center space-x-3 ${
                                 productForm.category_id === cat.id.toString()
-                                  ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white'
+                                  ? 'bg-pink-500 text-white'
                                   : 'text-gray-700'
                               }`}
                             >
                               <div className={`w-2 h-2 rounded-full ${
                                 productForm.category_id === cat.id.toString()
                                   ? 'bg-white'
-                                  : 'bg-purple-500'
+                                  : 'bg-pink-500'
                               }`}></div>
                               <span className="font-medium">{cat.name}</span>
                               {productForm.category_id === cat.id.toString() && (
@@ -1032,7 +1058,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                             : normalized;
                           setProductForm({ ...productForm, price: finalValue });
                         }}
-                        className="w-full px-4 py-2 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none"
+                        className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white"
                         placeholder="0.00"
                         required
                       />
@@ -1071,7 +1097,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                               alert('Dosya seçme hatası: ' + error.message);
                             }
                           }}
-                          className="px-6 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-medium hover:shadow-lg transform hover:scale-105 transition-all whitespace-nowrap"
+                          className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-medium transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap"
                         >
                           📁 Dosya Seç
                         </button>
@@ -1093,7 +1119,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                               setIsLoadingFirebaseImages(false);
                             }
                           }}
-                          className="px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl font-medium hover:shadow-lg transform hover:scale-105 transition-all whitespace-nowrap"
+                          className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-medium transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap"
                         >
                           🔥 Firebase'den Seç
                         </button>
@@ -1128,7 +1154,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                   <div className="flex space-x-3">
                     <button
                       type="submit"
-                      className="flex-1 px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl font-semibold hover:shadow-lg transform hover:scale-105 transition-all"
+                      className="flex-1 px-6 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                     >
                       {editingProduct ? 'Güncelle' : 'Ekle'}
                     </button>
@@ -1178,7 +1204,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                     }
                   }}
                   disabled={isCreatingImageRecords}
-                  className="w-full px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl font-semibold hover:shadow-lg transform hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isCreatingImageRecords ? '🔄 Oluşturuluyor...' : '🔥 Tüm Ürünler İçin Firebase Image Kayıtları Oluştur'}
                 </button>
@@ -1190,7 +1216,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                 
                 {/* Modern Category Filter */}
                 <div className="mb-6">
-                  <div className="bg-gradient-to-br from-purple-50 via-pink-50 to-blue-50 rounded-2xl p-4 border-2 border-purple-200 shadow-lg">
+                  <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                     <div className="flex items-center space-x-2 mb-3">
                       <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
@@ -1202,7 +1228,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                         onClick={() => setSelectedCategory(null)}
                         className={`px-4 py-2.5 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 ${
                           !selectedCategory
-                            ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg scale-105'
+                            ? 'bg-pink-500 text-white shadow-md'
                             : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200 hover:border-purple-300'
                         }`}
                       >
@@ -1219,7 +1245,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                             onClick={() => setSelectedCategory(cat)}
                             className={`px-4 py-2.5 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 ${
                               selectedCategory?.id === cat.id
-                                ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg scale-105'
+                                ? 'bg-pink-500 text-white shadow-md'
                                 : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200 hover:border-purple-300'
                             }`}
                           >
@@ -1267,7 +1293,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                                 e.stopPropagation();
                                 handleEditCategory(cat);
                               }}
-                              className="w-6 h-6 bg-blue-500 hover:bg-blue-600 text-white rounded-full flex items-center justify-center shadow-lg transition-all"
+                              className="w-6 h-6 bg-pink-500 hover:bg-pink-600 text-white rounded-full flex items-center justify-center shadow-lg transition-all"
                               title="Kategoriyi Düzenle"
                             >
                               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1291,7 +1317,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       ))}
                       <button
                         onClick={() => setShowAddCategoryModal(true)}
-                        className="px-4 py-2.5 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl border-2 border-green-400"
+                        className="px-4 py-2.5 rounded-lg font-medium transition-all duration-200 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm hover:shadow-md"
                       >
                         <div className="flex items-center space-x-2">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1305,9 +1331,9 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       <div className="mt-3 pt-3 border-t border-purple-200">
                         <div className="flex items-center justify-between">
                           <span className="text-sm text-gray-600">
-                            <span className="font-semibold text-purple-600">{selectedCategory.name}</span> kategorisinde
+                            <span className="font-semibold text-pink-600">{selectedCategory.name}</span> kategorisinde
                           </span>
-                          <span className="text-sm font-bold text-purple-600">
+                          <span className="text-sm font-bold text-pink-600">
                             {filteredProducts.length} ürün
                           </span>
                         </div>
@@ -1328,7 +1354,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                           {product.image ? (
                             <img src={product.image} alt={product.name} className="w-16 h-16 rounded-lg object-cover" />
                           ) : (
-                            <div className="w-16 h-16 rounded-lg bg-gradient-to-br from-purple-200 to-pink-200 flex items-center justify-center">
+                            <div className="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center">
                               <span className="text-2xl">📦</span>
                             </div>
                           )}
@@ -1341,7 +1367,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                         <div className="flex space-x-2">
                           <button
                             onClick={() => handleEditProduct(product)}
-                            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all"
+                            className="px-4 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-all"
                           >
                             ✏️ Düzenle
                           </button>
@@ -1362,15 +1388,25 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
 
           {activeTab === 'stock' && (
             <div className="space-y-6">
-              <h3 className="text-xl font-bold text-gray-800 mb-4">Stok Takibi</h3>
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-1">Stok Takibi</h3>
+                  <p className="text-sm text-gray-500">Ürün stoklarını görüntüleyin ve güncelleyin</p>
+                </div>
+              </div>
               
               {/* Filtreler */}
-              <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-2xl p-6 border border-purple-200">
-                <h4 className="text-lg font-semibold text-gray-800 mb-4">Filtrele</h4>
-                <div className="grid grid-cols-2 gap-4">
+              <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
+                <div className="flex items-center space-x-2 mb-4">
+                  <svg className="w-5 h-5 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                  </svg>
+                  <h4 className="text-lg font-semibold text-gray-800">Filtrele ve Ara</h4>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Kategori
+                      Kategori Seçin
                     </label>
                     <select
                       value={stockFilterCategory?.id || ''}
@@ -1378,13 +1414,38 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                         const catId = e.target.value ? parseInt(e.target.value) : null;
                         const cat = categories.find(c => c.id === catId);
                         setStockFilterCategory(cat || null);
-                        setStockFilterProduct(null); // Kategori değişince ürün seçimini temizle
+                        setStockFilterProduct(null);
                       }}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none"
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all"
                     >
                       <option value="">Tüm Kategoriler</option>
                       {categories.map(cat => (
                         <option key={cat.id} value={cat.id}>{cat.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Ürün Seçin
+                    </label>
+                    <select
+                      value={stockFilterProduct?.id || ''}
+                      onChange={(e) => {
+                        const prodId = e.target.value ? parseInt(e.target.value) : null;
+                        const prod = products.find(p => p.id === prodId);
+                        setStockFilterProduct(prod || null);
+                      }}
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all disabled:bg-gray-50 disabled:text-gray-400"
+                      disabled={!stockFilterCategory && categories.length > 0}
+                    >
+                      <option value="">Önce kategori seçin</option>
+                      {(stockFilterCategory 
+                        ? products.filter(p => p.category_id === stockFilterCategory.id)
+                        : products
+                      ).map(prod => (
+                        <option key={prod.id} value={prod.id}>
+                          {prod.name} {prod.stock !== undefined ? `(Stok: ${prod.stock || 0})` : ''}
+                        </option>
                       ))}
                     </select>
                   </div>
@@ -1403,9 +1464,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                             
                             if (result && result.success) {
                               alert(`✅ ${result.updatedCount} ürün "kalmadı" olarak işaretlendi`);
-                              // Ürünleri yenile
                               await loadAllProducts();
-                              // Ana uygulamayı yenile
                               if (onProductsUpdated) {
                                 onProductsUpdated();
                               }
@@ -1417,114 +1476,191 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                             alert('Kategori işaretlenemedi: ' + error.message);
                           }
                         }}
-                        className="w-full px-4 py-2 bg-gradient-to-r from-red-500 to-rose-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
+                        className="w-full px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center space-x-2"
                       >
-                        🔴 Kalmadı İşaretle
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                        <span>Kategoriyi Tükenmiş İşaretle</span>
                       </button>
                     </div>
                   )}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Ürün
-                    </label>
-                    <select
-                      value={stockFilterProduct?.id || ''}
-                      onChange={(e) => {
-                        const prodId = e.target.value ? parseInt(e.target.value) : null;
-                        const prod = products.find(p => p.id === prodId);
-                        setStockFilterProduct(prod || null);
-                      }}
-                      className="w-full px-4 py-2 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none"
-                      disabled={!stockFilterCategory && categories.length > 0}
-                    >
-                      <option value="">Ürün Seçin</option>
-                      {(stockFilterCategory 
-                        ? products.filter(p => p.category_id === stockFilterCategory.id)
-                        : products
-                      ).map(prod => (
-                        <option key={prod.id} value={prod.id}>
-                          {prod.name} {prod.stock !== undefined ? `(Stok: ${prod.stock || 0})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
                 </div>
               </div>
 
               {/* Stok Güncelleme */}
               {stockFilterProduct && (
-                <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-200">
-                  <div className="flex items-center justify-between mb-4">
-                    <h4 className="text-lg font-semibold text-gray-800">
-                      {stockFilterProduct.name}
-                    </h4>
+                <div data-stock-form className="bg-gradient-to-br from-pink-50 to-rose-50 rounded-xl p-6 border border-pink-200 shadow-sm">
+                  <div className="flex items-start justify-between mb-6">
+                    <div className="flex-1">
+                      <div className="flex items-center space-x-3 mb-2">
+                        {stockFilterProduct.image ? (
+                          <img src={stockFilterProduct.image} alt={stockFilterProduct.name} className="w-12 h-12 rounded-lg object-cover" />
+                        ) : (
+                          <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center">
+                            <span className="text-xl">📦</span>
+                          </div>
+                        )}
+                        <div>
+                          <h4 className="text-xl font-bold text-gray-900">{stockFilterProduct.name}</h4>
+                          <p className="text-sm text-gray-500">
+                            {categories.find(c => c.id === stockFilterProduct.category_id)?.name || 'Kategori yok'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex items-center space-x-4">
+                        <div className="bg-white rounded-lg px-4 py-2 border border-gray-200">
+                          <p className="text-xs text-gray-500 mb-1">Mevcut Stok</p>
+                          <p className={`text-2xl font-bold ${
+                            stockFilterProduct.trackStock && stockFilterProduct.stock !== undefined
+                              ? stockFilterProduct.stock === 0
+                                ? 'text-red-600'
+                                : stockFilterProduct.stock < 10
+                                ? 'text-yellow-600'
+                                : 'text-emerald-600'
+                              : 'text-gray-400'
+                          }`}>
+                            {stockFilterProduct.trackStock && stockFilterProduct.stock !== undefined 
+                              ? (stockFilterProduct.stock || 0) 
+                              : '-'}
+                          </p>
+                        </div>
+                        <div className="bg-white rounded-lg px-4 py-2 border border-gray-200">
+                          <p className="text-xs text-gray-500 mb-1">Fiyat</p>
+                          <p className="text-2xl font-bold text-gray-900">{stockFilterProduct.price.toFixed(2)} ₺</p>
+                        </div>
+                      </div>
+                    </div>
                     <button
                       onClick={() => handleToggleStockTracking(stockFilterProduct.id, stockFilterProduct.trackStock)}
-                      className={`px-4 py-2 rounded-lg font-medium transition-all ${
+                      className={`px-5 py-2.5 rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md flex items-center space-x-2 ${
                         stockFilterProduct.trackStock
-                          ? 'bg-green-500 text-white hover:bg-green-600'
+                          ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                           : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
                       }`}
                     >
-                      {stockFilterProduct.trackStock ? '✅ Stok Takibi Açık' : '❌ Stok Takibi Kapalı'}
+                      {stockFilterProduct.trackStock ? (
+                        <>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <span>Takip Açık</span>
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <span>Takip Kapalı</span>
+                        </>
+                      )}
                     </button>
                   </div>
                   {stockFilterProduct.trackStock ? (
-                    <>
-                      <p className="text-sm text-gray-600 mb-4">
-                        Mevcut Stok: <span className="font-bold text-blue-600">{stockFilterProduct.stock !== undefined ? (stockFilterProduct.stock || 0) : 0}</span>
-                      </p>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        İşlem Tipi
-                      </label>
-                      <select
-                        value={stockAdjustmentType}
-                        onChange={(e) => setStockAdjustmentType(e.target.value)}
-                        className="w-full px-4 py-2 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:outline-none"
-                      >
-                        <option value="add">Stok Ekle</option>
-                        <option value="subtract">Stok Çıkar</option>
-                      </select>
+                    <div className="bg-white rounded-lg p-5 border border-gray-200">
+                      <h5 className="text-sm font-semibold text-gray-700 mb-4 flex items-center space-x-2">
+                        <svg className="w-4 h-4 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        </svg>
+                        <span>Stok Güncelle</span>
+                      </h5>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            İşlem Tipi
+                          </label>
+                          <select
+                            value={stockAdjustmentType}
+                            onChange={(e) => setStockAdjustmentType(e.target.value)}
+                            className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all"
+                          >
+                            <option value="add">➕ Stok Ekle</option>
+                            <option value="subtract">➖ Stok Çıkar</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            Miktar
+                          </label>
+                          <input
+                            type="number"
+                            min="1"
+                            value={stockAdjustmentAmount}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/\D/g, '');
+                              setStockAdjustmentAmount(val);
+                            }}
+                            className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all"
+                            placeholder="Miktar girin"
+                          />
+                        </div>
+                        <div className="flex items-end">
+                          <button
+                            onClick={handleStockAdjustment}
+                            className={`w-full px-6 py-2.5 rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center space-x-2 ${
+                              stockAdjustmentType === 'add'
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                : 'bg-red-600 hover:bg-red-700 text-white'
+                            }`}
+                          >
+                            {stockAdjustmentType === 'add' ? (
+                              <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                                </svg>
+                                <span>Ekle</span>
+                              </>
+                            ) : (
+                              <>
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                                </svg>
+                                <span>Çıkar</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Miktar
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={stockAdjustmentAmount}
-                        onChange={(e) => {
-                          const val = e.target.value.replace(/\D/g, '');
-                          setStockAdjustmentAmount(val);
-                        }}
-                        className="w-full px-4 py-2 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:outline-none"
-                        placeholder="Miktar"
-                      />
-                    </div>
-                    <div className="flex items-end">
-                      <button
-                        onClick={handleStockAdjustment}
-                        className="w-full px-6 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all"
-                      >
-                        {stockAdjustmentType === 'add' ? '➕ Ekle' : '➖ Çıkar'}
-                      </button>
-                    </div>
-                  </div>
-                    </>
                   ) : (
-                    <p className="text-sm text-gray-500 italic">
-                      Bu ürün için stok takibi yapılmıyor. Stok takibini açmak için yukarıdaki butona tıklayın.
-                    </p>
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                      <p className="text-sm text-yellow-800 flex items-center space-x-2">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <span>Bu ürün için stok takibi yapılmıyor. Stok takibini açmak için yukarıdaki butona tıklayın.</span>
+                      </p>
+                    </div>
                   )}
                 </div>
               )}
 
               {/* Ürün Listesi */}
               <div>
-                <h4 className="text-lg font-semibold text-gray-800 mb-4">Ürün Stokları</h4>
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="text-lg font-semibold text-gray-800 mb-1">Ürün Stokları</h4>
+                    <p className="text-sm text-gray-500">
+                      {stockFilterCategory 
+                        ? `${stockFilterCategory.name} kategorisindeki ürünler`
+                        : 'Tüm ürünler'}
+                    </p>
+                  </div>
+                  <div className="flex items-center space-x-2 text-sm text-gray-600">
+                    <div className="flex items-center space-x-1">
+                      <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                      <span>Yeterli</span>
+                    </div>
+                    <div className="flex items-center space-x-1">
+                      <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
+                      <span>Az</span>
+                    </div>
+                    <div className="flex items-center space-x-1">
+                      <div className="w-3 h-3 rounded-full bg-red-500"></div>
+                      <span>Tükendi</span>
+                    </div>
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 gap-3 max-h-96 overflow-y-auto scrollbar-custom">
                   {(stockFilterCategory 
                     ? products.filter(p => p.category_id === stockFilterCategory.id)
@@ -1533,71 +1669,95 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                     const category = categories.find(c => c.id === product.category_id);
                     const trackStock = product.trackStock === true;
                     const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
+                    const stockStatus = trackStock && stock !== null
+                      ? stock === 0 
+                        ? { color: 'red', bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-700', label: 'Tükendi' }
+                        : stock < 10 
+                        ? { color: 'yellow', bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-700', label: 'Az Stok' }
+                        : { color: 'emerald', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', label: 'Yeterli' }
+                      : { color: 'gray', bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-500', label: 'Takip Yok' };
+                    
                     return (
                       <div
                         key={product.id}
-                        className="bg-white rounded-xl p-4 border border-gray-200 hover:shadow-md transition-all flex items-center justify-between"
+                        className={`bg-white rounded-xl p-4 border-2 ${stockStatus.border} hover:shadow-md transition-all`}
                       >
-                        <div className="flex items-center space-x-4 flex-1">
-                          {product.image ? (
-                            <img src={product.image} alt={product.name} className="w-16 h-16 rounded-lg object-cover" />
-                          ) : (
-                            <div className="w-16 h-16 rounded-lg bg-gradient-to-br from-purple-200 to-pink-200 flex items-center justify-center">
-                              <span className="text-2xl">📦</span>
-                            </div>
-                          )}
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-semibold text-gray-800">{product.name}</h4>
-                              {trackStock ? (
-                                <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">Stok Takibi</span>
-                              ) : (
-                                <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded">Takip Yok</span>
-                              )}
-                            </div>
-                            <p className="text-sm text-gray-500">{category?.name || 'Kategori yok'}</p>
-                            <div className="flex items-center gap-4 mt-1">
-                              <p className="text-lg font-bold text-purple-600">{product.price.toFixed(2)} ₺</p>
-                              {trackStock && stock !== null ? (
-                                <span className={`text-sm font-bold px-3 py-1 rounded-lg ${
-                                  stock === 0 
-                                    ? 'bg-red-100 text-red-700' 
-                                    : stock < 10 
-                                    ? 'bg-yellow-100 text-yellow-700'
-                                    : 'bg-green-100 text-green-700'
-                                }`}>
-                                  Stok: {stock}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-4 flex-1">
+                            {product.image ? (
+                              <img src={product.image} alt={product.name} className="w-16 h-16 rounded-lg object-cover border border-gray-200" />
+                            ) : (
+                              <div className="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center border border-gray-200">
+                                <span className="text-2xl">📦</span>
+                              </div>
+                            )}
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <h4 className="font-bold text-gray-900">{product.name}</h4>
+                                <span className={`text-xs font-semibold px-2 py-0.5 rounded ${stockStatus.bg} ${stockStatus.text}`}>
+                                  {stockStatus.label}
                                 </span>
-                              ) : trackStock ? (
-                                <span className="text-sm text-gray-400 px-3 py-1 rounded-lg bg-gray-100">
-                                  Stok: 0
-                                </span>
-                              ) : null}
+                              </div>
+                              <p className="text-sm text-gray-500 mb-2">{category?.name || 'Kategori yok'}</p>
+                              <div className="flex items-center gap-4">
+                                <div className="flex items-center space-x-2">
+                                  <span className="text-xs text-gray-500">Fiyat:</span>
+                                  <span className="text-base font-bold text-gray-900">{product.price.toFixed(2)} ₺</span>
+                                </div>
+                                {trackStock && stock !== null && (
+                                  <div className="flex items-center space-x-2">
+                                    <span className="text-xs text-gray-500">Stok:</span>
+                                    <span className={`text-base font-bold ${stockStatus.text}`}>
+                                      {stock} adet
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          <button
-                            onClick={() => {
-                              setStockFilterCategory(category || null);
-                              setStockFilterProduct(product);
-                              setStockAdjustmentAmount('');
-                              setStockAdjustmentType('add');
-                            }}
-                            className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all text-sm"
-                          >
-                            📊 Stok Güncelle
-                          </button>
-                          <button
-                            onClick={() => handleToggleStockTracking(product.id, trackStock)}
-                            className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                              trackStock
-                                ? 'bg-orange-500 text-white hover:bg-orange-600'
-                                : 'bg-green-500 text-white hover:bg-green-600'
-                            }`}
-                          >
-                            {trackStock ? '❌ Takibi Kapat' : '✅ Takibi Aç'}
-                          </button>
+                          <div className="flex flex-col gap-2 ml-4">
+                            <button
+                              onClick={() => {
+                                setStockFilterCategory(category || null);
+                                setStockFilterProduct(product);
+                                setStockAdjustmentAmount('');
+                                setStockAdjustmentType('add');
+                                setTimeout(() => {
+                                  document.querySelector('[data-stock-form]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                                }, 100);
+                              }}
+                              className="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg transition-all text-sm font-semibold shadow-sm hover:shadow-md flex items-center justify-center space-x-1"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                              <span>Güncelle</span>
+                            </button>
+                            <button
+                              onClick={() => handleToggleStockTracking(product.id, trackStock)}
+                              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm hover:shadow-md flex items-center justify-center space-x-1 ${
+                                trackStock
+                                  ? 'bg-orange-500 hover:bg-orange-600 text-white'
+                                  : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                              }`}
+                            >
+                              {trackStock ? (
+                                <>
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                  <span>Kapat</span>
+                                </>
+                              ) : (
+                                <>
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                                  </svg>
+                                  <span>Aç</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -1615,20 +1775,20 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
               <div className="flex space-x-3 mb-6">
                 <button
                   onClick={() => setPrinterSubTab('usb')}
-                  className={`px-6 py-3 rounded-xl font-medium transition-all ${
+                  className={`px-6 py-3 rounded-lg font-medium transition-all ${
                     printerSubTab === 'usb'
-                      ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg'
-                      : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200'
+                            ? 'bg-pink-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 hover:bg-pink-50 border border-gray-300'
                   }`}
                 >
                   🔌 USB ile Bağlı Yazıcılar
                 </button>
                 <button
                   onClick={() => setPrinterSubTab('network')}
-                  className={`px-6 py-3 rounded-xl font-medium transition-all ${
+                  className={`px-6 py-3 rounded-lg font-medium transition-all ${
                     printerSubTab === 'network'
-                      ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg'
-                      : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200'
+                            ? 'bg-pink-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 hover:bg-pink-50 border border-gray-300'
                   }`}
                 >
                   🌐 Ethernet Yazıcılar
@@ -1663,10 +1823,10 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                         <div className="flex items-center space-x-4 flex-1">
                           <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
                             isCashierPrinter 
-                              ? 'bg-gradient-to-br from-green-400 to-emerald-500' 
-                              : 'bg-gradient-to-br from-blue-200 to-purple-200'
+                              ? 'bg-emerald-600' 
+                              : 'bg-pink-100'
                           }`}>
-                            <svg className={`w-6 h-6 ${isCashierPrinter ? 'text-white' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className={`w-6 h-6 ${isCashierPrinter ? 'text-white' : 'text-pink-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                             </svg>
                           </div>
@@ -1707,17 +1867,17 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       <div className="flex gap-2">
                         <button
                           onClick={() => handleSetCashierPrinter(printer.name, printerSubTab)}
-                          className={`flex-1 px-4 py-2 rounded-lg hover:shadow-lg transition-all font-medium ${
+                          className={`flex-1 px-4 py-2 rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md ${
                             isCashierPrinter
-                              ? 'bg-gradient-to-r from-red-500 to-rose-500 text-white'
-                              : 'bg-gradient-to-r from-green-500 to-emerald-500 text-white'
+                              ? 'bg-red-600 hover:bg-red-700 text-white'
+                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
                           }`}
                         >
                           {isCashierPrinter ? '💰 Kasa Yazıcısını Kaldır' : '💰 Kasa Yazıcısı Seç'}
                         </button>
                         <button
                           onClick={() => handleAssignCategory(printer.name, printerSubTab)}
-                          className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-lg hover:shadow-lg transition-all font-medium"
+                          className="flex-1 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md"
                         >
                           Kategori Ata
                         </button>
@@ -1745,9 +1905,9 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
 
       {/* Category Assignment Modal */}
       {showCategoryAssignModal && selectedPrinter && (
-        <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-purple-500 via-pink-500 to-blue-500"></div>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[1000] animate-fade-in px-4">
+          <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-xl transform animate-scale-in relative overflow-hidden border border-gray-200">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
             
             <button
               onClick={() => {
@@ -1764,14 +1924,14 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-20 h-20 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <div className="w-16 h-16 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                 </svg>
               </div>
-              <h3 className="text-2xl font-bold text-gray-800 mb-2">Kategori Ata</h3>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Kategori Ata</h3>
               <p className="text-gray-600 mb-2">
-                <span className="font-semibold text-purple-600">{selectedPrinter.name}</span>
+                <span className="font-semibold text-pink-600">{selectedPrinter.name}</span>
               </p>
               <p className="text-sm text-gray-500">Bu yazıcıya birden fazla kategori seçebilirsiniz</p>
             </div>
@@ -1806,14 +1966,14 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                             toggleCategorySelection(categoryIdNum);
                           }
                         }}
-                        className={`w-full px-4 py-3 rounded-xl text-left transition-all cursor-pointer ${
+                        className={`w-full px-4 py-3 rounded-lg text-left transition-all cursor-pointer ${
                           isSelected
-                        ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white'
+                        ? 'bg-pink-500 text-white'
                             : isAssignedToThisPrinter
-                            ? 'bg-purple-200 text-purple-800 border-2 border-purple-400'
+                            ? 'bg-pink-100 text-pink-800 border border-pink-300'
                             : isAssignedToOtherPrinter
-                            ? 'bg-yellow-100 text-yellow-800 border-2 border-yellow-400 cursor-not-allowed opacity-60'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                            ? 'bg-yellow-50 text-yellow-800 border border-yellow-300 cursor-not-allowed opacity-60'
+                        : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200'
                     }`}
                   >
                         <div className="flex items-center justify-between">
@@ -1867,7 +2027,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                     <button
                   onClick={confirmCategoryAssignment}
                   disabled={assigningCategory}
-                  className="flex-1 px-4 py-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl hover:shadow-lg transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 px-4 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {assigningCategory ? 'Atanıyor...' : 'Kategorileri Ata'}
                     </button>
@@ -1880,8 +2040,8 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       {/* Add Category Modal */}
       {showAddCategoryModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-green-500 via-emerald-500 to-green-500"></div>
+          <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-xl transform animate-scale-in relative overflow-hidden border border-gray-200">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-600 to-teal-600"></div>
             
             <button
               onClick={() => {
@@ -1897,7 +2057,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-20 h-20 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <div className="w-16 h-16 bg-emerald-600 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
@@ -1948,7 +2108,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                 </button>
                 <button
                   onClick={handleAddCategory}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
+                  className="flex-1 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                 >
                   <div className="flex items-center justify-center space-x-2">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1966,8 +2126,8 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       {/* Edit Category Modal */}
       {showEditCategoryModal && editingCategory && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-indigo-500 to-blue-500"></div>
+          <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-xl transform animate-scale-in relative overflow-hidden border border-gray-200">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
             
             <button
               onClick={() => {
@@ -1984,14 +2144,14 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <div className="w-16 h-16 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
               </div>
               <h3 className="text-2xl font-bold text-gray-800 mb-2">Kategori Düzenle</h3>
               <p className="text-gray-600 text-sm">
-                <span className="font-semibold text-blue-600">{editingCategory.name}</span> kategorisinin adını değiştirin
+                <span className="font-semibold text-pink-600">{editingCategory.name}</span> kategorisinin adını değiştirin
               </p>
             </div>
 
@@ -2012,7 +2172,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       handleUpdateCategory();
                     }
                   }}
-                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-blue-500 focus:outline-none transition-all"
+                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
                   placeholder="Kategori adını girin"
                   autoFocus
                 />
@@ -2038,7 +2198,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                 </button>
                 <button
                   onClick={handleUpdateCategory}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
+                  className="flex-1 px-6 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                 >
                   <div className="flex items-center justify-center space-x-2">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2101,7 +2261,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       {showFirebaseImageModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
           <div className="bg-white rounded-3xl p-8 w-full max-w-4xl shadow-2xl transform animate-scale-in relative overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-indigo-500 to-blue-500"></div>
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
             
             <button
               onClick={() => {
@@ -2116,7 +2276,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <div className="w-16 h-16 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
@@ -2128,7 +2288,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             <div className="flex-1 overflow-y-auto scrollbar-custom mb-6">
               {isLoadingFirebaseImages ? (
                 <div className="text-center py-12">
-                  <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+                  <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pink-500"></div>
                   <p className="mt-4 text-gray-600">Görseller yükleniyor...</p>
                 </div>
               ) : firebaseImages.length === 0 ? (
@@ -2149,7 +2309,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                         setShowFirebaseImageModal(false);
                         setFirebaseImages([]);
                       }}
-                      className="bg-white rounded-xl border-2 border-gray-200 hover:border-blue-500 cursor-pointer transition-all hover:shadow-lg overflow-hidden group"
+                      className="bg-white rounded-xl border-2 border-gray-200 hover:border-pink-500 cursor-pointer transition-all hover:shadow-lg overflow-hidden group"
                     >
                       <div className="aspect-square bg-gray-100 relative overflow-hidden">
                         <img

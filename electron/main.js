@@ -24,6 +24,8 @@ let firebaseDeleteDoc = null;
 let firebaseDoc = null;
 let firebaseSetDoc = null;
 let firebaseOnSnapshot = null;
+let firebaseWhere = null;
+let firebaseQuery = null;
 let storageRef = null;
 let storageUploadBytes = null;
 let storageGetDownloadURL = null;
@@ -78,6 +80,8 @@ try {
   firebaseDoc = firebaseFirestoreModule.doc;
   firebaseSetDoc = firebaseFirestoreModule.setDoc;
   firebaseOnSnapshot = firebaseFirestoreModule.onSnapshot;
+  firebaseWhere = firebaseFirestoreModule.where;
+  firebaseQuery = firebaseFirestoreModule.query;
   storageRef = firebaseStorageModule.ref;
   storageUploadBytes = firebaseStorageModule.uploadBytes;
   storageGetDownloadURL = firebaseStorageModule.getDownloadURL;
@@ -1385,6 +1389,69 @@ ipcMain.handle('get-sale-details', (event, saleId) => {
   const items = db.saleItems.filter(si => si.sale_id === saleId);
   
   return { sale, items };
+});
+
+// Tek bir satışı sil
+ipcMain.handle('delete-sale', async (event, saleId) => {
+  try {
+    console.log(`🗑️ Satış siliniyor: ${saleId}`);
+    
+    // Local database'den satışı bul
+    const saleIndex = db.sales.findIndex(s => s.id === saleId);
+    if (saleIndex === -1) {
+      return { 
+        success: false, 
+        error: 'Satış bulunamadı' 
+      };
+    }
+    
+    // Local database'den satışı ve itemlarını sil
+    db.sales.splice(saleIndex, 1);
+    const saleItemsToDelete = db.saleItems.filter(si => si.sale_id === saleId);
+    saleItemsToDelete.forEach(item => {
+      const itemIndex = db.saleItems.findIndex(si => si.id === item.id);
+      if (itemIndex !== -1) {
+        db.saleItems.splice(itemIndex, 1);
+      }
+    });
+    
+    saveDatabase();
+    console.log(`✅ Local database'den satış ve ${saleItemsToDelete.length} satış item'ı silindi`);
+    
+    // Firebase'den de satışı sil
+    if (firestore && firebaseCollection && firebaseGetDocs && firebaseDeleteDoc && firebaseWhere && firebaseQuery) {
+      try {
+        const salesRef = firebaseCollection(firestore, 'sales');
+        // sale_id'ye göre sorgula
+        const q = firebaseQuery(salesRef, firebaseWhere('sale_id', '==', saleId));
+        const snapshot = await firebaseGetDocs(q);
+        
+        const deletePromises = [];
+        snapshot.forEach((doc) => {
+          deletePromises.push(firebaseDeleteDoc(doc.ref));
+        });
+        
+        await Promise.all(deletePromises);
+        console.log(`✅ Firebase'den ${deletePromises.length} satış dokümanı silindi`);
+      } catch (firebaseError) {
+        console.error('❌ Firebase\'den silme hatası:', firebaseError);
+        // Firebase hatası olsa bile local database'den silindi, devam et
+      }
+    } else {
+      console.warn('⚠️ Firebase başlatılamadı, sadece local database\'den silindi');
+    }
+    
+    return { 
+      success: true, 
+      message: 'Satış başarıyla silindi'
+    };
+  } catch (error) {
+    console.error('❌ Satış silme hatası:', error);
+    return { 
+      success: false, 
+      error: error.message || 'Satış silinirken bir hata oluştu' 
+    };
+  }
 });
 
 // Tüm satışları sil

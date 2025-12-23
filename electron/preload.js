@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSales: () => ipcRenderer.invoke('get-sales'),
   getRecentSales: (hours) => ipcRenderer.invoke('get-recent-sales', hours),
   getSaleDetails: (saleId) => ipcRenderer.invoke('get-sale-details', saleId),
+  deleteSale: (saleId) => ipcRenderer.invoke('delete-sale', saleId),
   deleteAllSales: () => ipcRenderer.invoke('delete-all-sales'),
   // Table Order API
   createTableOrder: (orderData) => ipcRenderer.invoke('create-table-order', orderData),

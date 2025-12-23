@@ -16,6 +16,7 @@ const SalesHistory = () => {
   const [recentSales, setRecentSales] = useState([]);
   const [loadingRecentSales, setLoadingRecentSales] = useState(false);
   const [selectedSaleForAdisyon, setSelectedSaleForAdisyon] = useState(null);
+  const [saleToDelete, setSaleToDelete] = useState(null);
 
   useEffect(() => {
     loadSales();
@@ -1142,15 +1143,17 @@ const SalesHistory = () => {
                   {recentSales.map((sale) => (
                     <div
                       key={sale.id}
-                      onClick={() => setSelectedSaleForAdisyon(sale)}
-                      className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                      className={`p-4 rounded-xl border-2 transition-all ${
                         selectedSaleForAdisyon?.id === sale.id
                           ? 'bg-gradient-to-r from-purple-50 to-pink-50 border-purple-400'
                           : 'bg-gray-50 border-gray-200 hover:border-purple-300'
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <div className="flex-1">
+                        <div 
+                          className="flex-1 cursor-pointer"
+                          onClick={() => setSelectedSaleForAdisyon(sale)}
+                        >
                           <div className="flex items-center space-x-3 mb-2">
                             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                               sale.payment_method === 'Nakit'
@@ -1181,11 +1184,26 @@ const SalesHistory = () => {
                             {sale.items || 'Ürün bulunamadı'}
                           </p>
                         </div>
-                        <div className="text-right ml-4">
-                          <p className="text-2xl font-bold text-purple-600">
-                            ₺{sale.total_amount?.toFixed(2) || '0.00'}
-                          </p>
-                          <p className="text-xs text-gray-500 mt-1">{sale.payment_method}</p>
+                        <div className="flex items-center space-x-3 ml-4">
+                          <div className="text-right">
+                            <p className="text-2xl font-bold text-purple-600">
+                              ₺{sale.total_amount?.toFixed(2) || '0.00'}
+                            </p>
+                            <p className="text-xs text-gray-500 mt-1">{sale.payment_method}</p>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSaleToDelete(sale);
+                              setShowDeleteConfirm(true);
+                            }}
+                            className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg transition-all"
+                            title="Satışı Sil"
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -1266,6 +1284,97 @@ const SalesHistory = () => {
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Silme Onay Modal */}
+      {showDeleteConfirm && saleToDelete && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-white backdrop-blur-xl border border-red-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
+            <div className="flex items-center justify-center mb-6">
+              <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
+                <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+            </div>
+            <h2 className="text-2xl font-bold text-gray-900 text-center mb-4">
+              Satışı Silmek İstediğinize Emin misiniz?
+            </h2>
+            <div className="bg-gray-50 rounded-xl p-4 mb-6">
+              <p className="text-sm text-gray-600 mb-2">
+                <span className="font-semibold">Tarih:</span> {saleToDelete.sale_date} {saleToDelete.sale_time}
+              </p>
+              <p className="text-sm text-gray-600 mb-2">
+                <span className="font-semibold">Tutar:</span> ₺{saleToDelete.total_amount?.toFixed(2) || '0.00'}
+              </p>
+              <p className="text-sm text-gray-600">
+                <span className="font-semibold">Ödeme:</span> {saleToDelete.payment_method}
+              </p>
+            </div>
+            <p className="text-center text-gray-600 mb-6">
+              Bu işlem geri alınamaz. Satış veritabanından kalıcı olarak silinecektir.
+            </p>
+            <div className="flex items-center justify-end space-x-4">
+              <button
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setSaleToDelete(null);
+                }}
+                disabled={deleting}
+                className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                İptal
+              </button>
+              <button
+                onClick={async () => {
+                  if (!saleToDelete || !window.electronAPI || !window.electronAPI.deleteSale) {
+                    alert('Silme işlemi gerçekleştirilemedi');
+                    return;
+                  }
+
+                  setDeleting(true);
+                  try {
+                    const result = await window.electronAPI.deleteSale(saleToDelete.id);
+                    
+                    if (result.success) {
+                      // Satışı listeden kaldır
+                      setRecentSales(prev => prev.filter(s => s.id !== saleToDelete.id));
+                      // Eğer seçili satış silindiyse seçimi temizle
+                      if (selectedSaleForAdisyon?.id === saleToDelete.id) {
+                        setSelectedSaleForAdisyon(null);
+                      }
+                      setShowDeleteConfirm(false);
+                      setSaleToDelete(null);
+                    } else {
+                      alert(result.error || 'Satış silinirken bir hata oluştu');
+                    }
+                  } catch (error) {
+                    console.error('Satış silme hatası:', error);
+                    alert('Satış silinirken bir hata oluştu: ' + error.message);
+                  } finally {
+                    setDeleting(false);
+                  }
+                }}
+                disabled={deleting}
+                className="px-6 py-3 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold rounded-xl transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                {deleting ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                    <span>Siliniyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    <span>Evet, Sil</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

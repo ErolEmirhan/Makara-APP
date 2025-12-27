@@ -12,6 +12,14 @@ const TableTransferModal = ({
   const [tableOrders, setTableOrders] = useState([]);
   const [selectedSourceTable, setSelectedSourceTable] = useState(null);
   const [selectedTargetTable, setSelectedTargetTable] = useState(null);
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   const insideTables = Array.from({ length: 20 }, (_, i) => ({
     id: `inside-${i + 1}`,

@@ -104,3 +104,4 @@ const Toast = ({ message, type = 'info', onClose, autoHideDuration = 3000 }) => 
 
 export default Toast;
 
+

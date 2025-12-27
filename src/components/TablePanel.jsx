@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import TableOrderModal from './TableOrderModal';
 import TablePartialPaymentModal from './TablePartialPaymentModal';
 import TableTransferModal from './TableTransferModal';
+import Toast from './Toast';
 
 const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [selectedType, setSelectedType] = useState('inside'); // 'inside' or 'outside'
@@ -12,6 +13,14 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [showPartialPaymentModal, setShowPartialPaymentModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   const insideTables = Array.from({ length: 20 }, (_, i) => ({
     id: `inside-${i + 1}`,
@@ -265,11 +274,11 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           setShowSuccessToast(false);
         }, 1000);
       } else {
-        alert('Masa sonlandırılamadı: ' + (result.error || 'Bilinmeyen hata'));
+        showToast('Masa sonlandırılamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('Masa sonlandırılırken hata:', error);
-      alert('Masa sonlandırılamadı: ' + error.message);
+      showToast('Masa sonlandırılamadı: ' + error.message, 'error');
     }
   };
 
@@ -285,7 +294,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     
     if (!window.electronAPI || !window.electronAPI.printAdisyon) {
       console.error('printAdisyon API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
-      alert('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+      showToast('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
     
@@ -322,18 +331,18 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         // Başarı mesajı gösterilebilir
       } else {
         console.error('Adisyon yazdırılamadı:', result.error);
-        alert('Adisyon yazdırılamadı: ' + (result.error || 'Bilinmeyen hata'));
+        showToast('Adisyon yazdırılamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('Adisyon yazdırılırken hata:', error);
-      alert('Adisyon yazdırılamadı: ' + error.message);
+      showToast('Adisyon yazdırılamadı: ' + error.message, 'error');
     }
   };
 
   // Masa aktar
   const handleTransferTable = async (sourceTableId, targetTableId) => {
     if (!window.electronAPI || !window.electronAPI.transferTableOrder) {
-      alert('Masa aktarımı şu anda kullanılamıyor');
+      showToast('Masa aktarımı şu anda kullanılamıyor', 'error');
       return;
     }
 
@@ -353,11 +362,11 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           setShowSuccessToast(false);
         }, 2000);
       } else {
-        alert('Masa aktarılamadı: ' + (result.error || 'Bilinmeyen hata'));
+        showToast('Masa aktarılamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('Masa aktarılırken hata:', error);
-      alert('Masa aktarılamadı: ' + error.message);
+      showToast('Masa aktarılamadı: ' + error.message, 'error');
     }
   };
 
@@ -650,6 +659,15 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info', show: false })}
+        />
       )}
     </div>
   );

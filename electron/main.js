@@ -8890,6 +8890,8 @@ function generateMobileHTML(serverURL) {
         itemsDiv.innerHTML = cart.map(item => {
           const isGift = item.isGift || false;
           const isTea = item.name.toLowerCase().includes('çay');
+          const isFilterCoffee = item.name.toLowerCase().includes('filtre kahve');
+          const canBeGift = isTea || isFilterCoffee; // Çay veya Filtre Kahve için ikram özelliği
           const displayPrice = isGift ? 0 : item.price;
           const displayTotal = isGift ? 0 : (item.price * item.quantity);
           const giftBadge = isGift ? '<span style="display: inline-flex; align-items: center; gap: 4px; background: #10b981; color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; margin-left: 6px;">İKRAM</span>' : '';
@@ -8900,7 +8902,7 @@ function generateMobileHTML(serverURL) {
               '<div style="color: #6b7280; font-size: 13px; font-weight: 600;">' + displayPrice.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + displayTotal.toFixed(2) + ' ₺</div>' +
             '</div>' +
             '<div class="cart-item-controls" style="display: flex; align-items: center; gap: 8px;">' +
-              (isTea ? '<button onclick="toggleGift(' + item.id + ')" class="gift-btn" style="padding: 8px 12px; background: ' + (isGift ? '#10b981' : '#f59e0b') + '; color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s;">' + (isGift ? 'İKRAM ✓' : 'İKRAM') + '</button>' : '') +
+              (canBeGift ? '<button onclick="toggleGift(' + item.id + ')" class="gift-btn" style="padding: 8px 12px; background: ' + (isGift ? '#10b981' : '#f59e0b') + '; color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s;">' + (isGift ? 'İKRAM ✓' : 'İKRAM') + '</button>' : '') +
               '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', -1)" title="Azalt">-</button>' +
               '<span style="min-width: 36px; text-align: center; font-weight: 700; color: #1f2937; font-size: 15px;">' + item.quantity + '</span>' +
               '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', 1)" title="Artır">+</button>' +

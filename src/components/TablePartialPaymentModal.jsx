@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Toast from './Toast';
 
 const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComplete }) => {
   const [itemsWithPayment, setItemsWithPayment] = useState([]);
@@ -6,6 +7,14 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
   const [selectedItems, setSelectedItems] = useState(new Set());
   const [selectedQuantities, setSelectedQuantities] = useState({}); // { itemId: quantity }
   const [isProcessingBulk, setIsProcessingBulk] = useState(false);
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   useEffect(() => {
     // Items'ı ödeme durumuna göre hazırla
@@ -21,17 +30,17 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
   // Ürün için ödeme al
   const handlePayItem = async (item) => {
     if (!window.electronAPI || !window.electronAPI.payTableOrderItem) {
-      alert('Ödeme işlemi şu anda kullanılamıyor');
+      showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
       return;
     }
 
     if (item.isPaid) {
-      alert('Bu ürünün ödemesi zaten alınmış');
+      showToast('Bu ürünün ödemesi zaten alınmış', 'warning');
       return;
     }
 
     if (item.isGift) {
-      alert('İkram edilen ürünler için ödeme alınamaz');
+      showToast('İkram edilen ürünler için ödeme alınamaz', 'warning');
       return;
     }
 
@@ -79,7 +88,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
         modal.querySelector('#confirmQtyBtn').onclick = () => {
           const qty = parseInt(quantityInput.value) || 1;
           if (qty < 1 || qty > remainingQuantity) {
-            alert(`Lütfen 1 ile ${remainingQuantity} arasında bir değer girin!`);
+            showToast(`Lütfen 1 ile ${remainingQuantity} arasında bir değer girin!`, 'warning');
             return;
           }
           document.body.removeChild(modal);
@@ -174,11 +183,11 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
           onComplete([{ itemId: item.id, paymentMethod, quantity: quantityToPay }]);
         }
       } else {
-        alert(result.error || 'Ödeme alınamadı');
+        showToast(result.error || 'Ödeme alınamadı', 'error');
       }
     } catch (error) {
       console.error('Ödeme hatası:', error);
-      alert('Ödeme alınırken bir hata oluştu');
+      showToast('Ödeme alınırken bir hata oluştu', 'error');
     } finally {
       setProcessingItemId(null);
     }
@@ -267,7 +276,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
   // Toplu ödeme al
   const handleBulkPayment = async () => {
     if (selectedItems.size === 0) {
-      alert('Lütfen en az bir ürün seçin');
+      showToast('Lütfen en az bir ürün seçin', 'warning');
       return;
     }
 
@@ -385,11 +394,11 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
 
       if (paymentResults.length > 0) {
         // Başarı mesajı
-        alert(`${paymentResults.length} ürün için ödeme başarıyla alındı!`);
+        showToast(`${paymentResults.length} ürün için ödeme başarıyla alındı!`, 'success');
       }
     } catch (error) {
       console.error('Toplu ödeme hatası:', error);
-      alert('Ödeme alınırken bir hata oluştu');
+      showToast('Ödeme alınırken bir hata oluştu', 'error');
     } finally {
       setIsProcessingBulk(false);
     }
@@ -416,6 +425,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
   const remainingAmount = totalAmount - paidAmount;
 
   return (
+    <>
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
       <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-6">
@@ -679,6 +689,14 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
         </div>
       </div>
     </div>
+    {toast.show && (
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: '', type: 'info', show: false })}
+      />
+    )}
+    </>
   );
 };
 

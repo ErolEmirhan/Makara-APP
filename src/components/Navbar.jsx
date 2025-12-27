@@ -4,6 +4,7 @@ import PinModal from './PinModal';
 import SettingsModal from './SettingsModal';
 import SettingsSplash from './SettingsSplash';
 import DateTimeDisplay from './DateTimeDisplay';
+import Toast from './Toast';
 
 const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -22,7 +23,15 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [newPassword, setNewPassword] = useState('');
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
   const menuRef = useRef(null);
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   // Dışarı tıklayınca menüyü kapat
   useEffect(() => {
@@ -71,11 +80,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         setQrCode(result.qrCode);
         setServerURL(result.url);
       } else {
-        alert('QR kod oluşturulamadı: ' + (result?.error || 'Bilinmeyen hata'));
+        showToast('QR kod oluşturulamadı: ' + (result?.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('QR kod oluşturma hatası:', error);
-      alert('QR kod oluşturulamadı');
+      showToast('QR kod oluşturulamadı', 'error');
     }
   };
 
@@ -90,7 +99,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
   const handleAddStaff = async () => {
     if (!newStaff.name || !newStaff.surname || !newStaff.password) {
-      alert('Lütfen tüm alanları doldurun');
+      showToast('Lütfen tüm alanları doldurun', 'warning');
       return;
     }
 
@@ -107,11 +116,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           setShowSuccessToast(false);
         }, 3000);
       } else {
-        alert('Personel eklenemedi: ' + (result?.error || 'Bilinmeyen hata'));
+        showToast('Personel eklenemedi: ' + (result?.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('Personel ekleme hatası:', error);
-      alert('Personel eklenemedi');
+      showToast('Personel eklenemedi', 'error');
     }
   };
 
@@ -121,24 +130,28 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       if (result && result.success) {
         loadStaff();
         setDeleteConfirm(null);
-        alert('Personel başarıyla silindi');
+        setSuccessMessage('Personel başarıyla silindi');
+        setShowSuccessToast(true);
+        setTimeout(() => {
+          setShowSuccessToast(false);
+        }, 3000);
       } else {
-        alert('Personel silinemedi: ' + (result?.error || 'Bilinmeyen hata'));
+        showToast('Personel silinemedi: ' + (result?.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('Personel silme hatası:', error);
-      alert('Personel silinemedi');
+      showToast('Personel silinemedi', 'error');
     }
   };
 
   const handleUpdatePassword = async () => {
     if (!editingStaff) {
-      alert('Personel seçilmedi');
+      showToast('Personel seçilmedi', 'warning');
       return;
     }
 
     if (!newPassword || newPassword.trim().length < 4) {
-      alert('Şifre en az 4 karakter olmalıdır');
+      showToast('Şifre en az 4 karakter olmalıdır', 'warning');
       return;
     }
 
@@ -160,11 +173,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       } else {
         const errorMsg = result?.error || 'Bilinmeyen hata';
         console.error('Şifre güncelleme başarısız:', errorMsg);
-        alert('Şifre güncellenemedi: ' + errorMsg);
+        showToast('Şifre güncellenemedi: ' + errorMsg, 'error');
       }
     } catch (error) {
       console.error('Şifre güncelleme hatası:', error);
-      alert('Şifre güncellenemedi: ' + (error.message || 'Bilinmeyen hata'));
+      showToast('Şifre güncellenemedi: ' + (error.message || 'Bilinmeyen hata'), 'error');
     }
   };
 
@@ -187,7 +200,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
         <div>
           <h1 className="text-lg font-bold text-pink-500">Makara Satış Sistemi</h1>
-          <p className="text-xs text-gray-500 font-medium">v2.4.1</p>
+          <p className="text-xs text-gray-500 font-medium">v2.4.5</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300">
           <DateTimeDisplay />
@@ -573,13 +586,13 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                                   const result = await window.electronAPI.setStaffManager(staff.id, !staff.is_manager);
                                   if (result.success) {
                                     await loadStaff();
-                                    alert(staff.is_manager ? 'Müdürlük kaldırıldı' : 'Müdür olarak atandı');
+                                    showToast(staff.is_manager ? 'Müdürlük kaldırıldı' : 'Müdür olarak atandı', 'success');
                                   } else {
-                                    alert('Hata: ' + (result.error || 'Bilinmeyen hata'));
+                                    showToast('Hata: ' + (result.error || 'Bilinmeyen hata'), 'error');
                                   }
                                 } catch (error) {
                                   console.error('Müdür atama hatası:', error);
-                                  alert('Müdür atanamadı: ' + error.message);
+                                  showToast('Müdür atanamadı: ' + error.message, 'error');
                                 }
                               }}
                               className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 min-w-[80px] ${
@@ -827,6 +840,15 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           </div>,
           document.body
         )
+      )}
+
+      {/* Toast Notification */}
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info', show: false })}
+        />
       )}
     </nav>
   );

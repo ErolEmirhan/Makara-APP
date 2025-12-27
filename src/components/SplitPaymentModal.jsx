@@ -1,10 +1,19 @@
 import React, { useState, useEffect } from 'react';
+import Toast from './Toast';
 
 const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose }) => {
   const [payments, setPayments] = useState([]); // [{ amount: 50, method: 'Nakit' }, ...]
   const [currentPaymentMethod, setCurrentPaymentMethod] = useState('Nakit');
   const [currentAmount, setCurrentAmount] = useState('');
   const [remainingAmount, setRemainingAmount] = useState(totalAmount);
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   useEffect(() => {
     // Kalan tutarı hesapla
@@ -16,12 +25,12 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose 
     const amount = parseFloat(currentAmount);
     
     if (!amount || amount <= 0) {
-      alert('Lütfen geçerli bir tutar girin!');
+      showToast('Lütfen geçerli bir tutar girin!', 'warning');
       return;
     }
 
     if (amount > remainingAmount) {
-      alert(`Girilen tutar kalan tutardan (₺${remainingAmount.toFixed(2)}) fazla olamaz!`);
+      showToast(`Girilen tutar kalan tutardan (₺${remainingAmount.toFixed(2)}) fazla olamaz!`, 'warning');
       return;
     }
 
@@ -41,12 +50,12 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose 
 
   const handleComplete = () => {
     if (remainingAmount > 0.01) { // Kuruş farkı için tolerans
-      alert(`Kalan tutar (₺${remainingAmount.toFixed(2)}) ödenmemiş!`);
+      showToast(`Kalan tutar (₺${remainingAmount.toFixed(2)}) ödenmemiş!`, 'warning');
       return;
     }
 
     if (payments.length === 0) {
-      alert('Lütfen en az bir ödeme ekleyin!');
+      showToast('Lütfen en az bir ödeme ekleyin!', 'warning');
       return;
     }
 
@@ -57,6 +66,7 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose 
   const paidAmount = payments.reduce((sum, payment) => sum + payment.amount, 0);
 
   return (
+    <>
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
       <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-2xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-6">
@@ -231,6 +241,14 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose 
         </div>
       </div>
     </div>
+    {toast.show && (
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: '', type: 'info', show: false })}
+      />
+    )}
+    </>
   );
 };
 

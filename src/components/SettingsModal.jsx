@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import Toast from './Toast';
 
 const SettingsModal = ({ onClose, onProductsUpdated }) => {
   const [activeTab, setActiveTab] = useState('password'); // 'password', 'products', 'printers', or 'stock'
@@ -54,7 +55,14 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
   const [firebaseImages, setFirebaseImages] = useState([]);
   const [isLoadingFirebaseImages, setIsLoadingFirebaseImages] = useState(false);
   const [isCreatingImageRecords, setIsCreatingImageRecords] = useState(false);
-  
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   useEffect(() => {
     const handleClickOutside = (event) => {
@@ -113,7 +121,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
 
   const handleOptimizeAllImages = async () => {
     if (!window.electronAPI || typeof window.electronAPI.optimizeAllProductImages !== 'function') {
-      alert('Görsel optimizasyon özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+      showToast('Görsel optimizasyon özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
 
@@ -137,21 +145,19 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       setLastOptimizeResult(result);
 
       if (result && result.success) {
-        alert(
-          `Görsel optimizasyon tamamlandı.\n\n` +
-          `İşlenen: ${result.processed}\n` +
-          `Atlanan: ${result.skipped}\n` +
-          `Hata: ${result.failed}`
+        showToast(
+          `Görsel optimizasyon tamamlandı. İşlenen: ${result.processed}, Atlanan: ${result.skipped}, Hata: ${result.failed}`,
+          'success'
         );
       } else {
-        alert(
-          'Görsel optimizasyon tamamlanamadı: ' +
-          (result?.error || 'Bilinmeyen hata')
+        showToast(
+          'Görsel optimizasyon tamamlanamadı: ' + (result?.error || 'Bilinmeyen hata'),
+          'error'
         );
       }
     } catch (error) {
       console.error('Görsel optimizasyon hatası:', error);
-      alert('Görsel optimizasyon hatası: ' + error.message);
+      showToast('Görsel optimizasyon hatası: ' + error.message, 'error');
     } finally {
       setIsOptimizingImages(false);
     }
@@ -186,16 +192,16 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
         // Zaten kasa yazıcısıysa, kaldır
         await window.electronAPI.setCashierPrinter(null);
         setCashierPrinter(null);
-        alert('Kasa yazıcısı kaldırıldı');
+        showToast('Kasa yazıcısı kaldırıldı', 'success');
       } else {
         // Kasa yazıcısı olarak ayarla
         await window.electronAPI.setCashierPrinter({ printerName, printerType });
         setCashierPrinter({ printerName, printerType });
-        alert(`${printerName} kasa yazıcısı olarak ayarlandı`);
+        showToast(`${printerName} kasa yazıcısı olarak ayarlandı`, 'success');
       }
     } catch (error) {
       console.error('Kasa yazıcısı ayarlama hatası:', error);
-      alert('Kasa yazıcısı ayarlanırken hata oluştu: ' + error.message);
+      showToast('Kasa yazıcısı ayarlanırken hata oluştu: ' + error.message, 'error');
     }
   };
 
@@ -228,7 +234,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
     console.log('Kategori atama başlatılıyor - Seçilen kategoriler:', selectedCategories);
     
     if (selectedCategories.length === 0) {
-      alert('Lütfen en az bir kategori seçin');
+      showToast('Lütfen en az bir kategori seçin', 'warning');
       return;
     }
     
@@ -323,10 +329,10 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       } else if (removedCount > 0) {
         message = `${removedCount} kategori kaldırıldı`;
       }
-      alert(message || 'Kategori atamaları güncellendi');
+      showToast(message || 'Kategori atamaları güncellendi', 'success');
     } catch (error) {
       console.error('Kategori atama hatası:', error);
-      alert('Kategori atanamadı: ' + error.message);
+      showToast('Kategori atanamadı: ' + error.message, 'error');
       setAssigningCategory(null);
       // Hata durumunda da veritabanını yeniden yükle
       await loadPrinterAssignments();
@@ -344,7 +350,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       // Kategori bazlı kaldırma için categoryId kullan
       const assignment = printerAssignments.find(a => a.category_id === categoryId);
       if (!assignment) {
-        alert('Atama bulunamadı');
+        showToast('Atama bulunamadı', 'error');
         return;
       }
       
@@ -356,13 +362,13 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       
       if (result && result.success) {
         await loadPrinterAssignments();
-        alert('Kategori ataması kaldırıldı');
+        showToast('Kategori ataması kaldırıldı', 'success');
       } else {
-        alert(result?.error || 'Kategori ataması kaldırılamadı');
+        showToast(result?.error || 'Kategori ataması kaldırılamadı', 'error');
       }
     } catch (error) {
       console.error('Kategori ataması kaldırma hatası:', error);
-      alert('Kategori ataması kaldırılamadı: ' + error.message);
+      showToast('Kategori ataması kaldırılamadı: ' + error.message, 'error');
     }
   };
 
@@ -414,13 +420,13 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
     e.preventDefault();
     
     if (!productForm.name || !productForm.category_id || !productForm.price) {
-      alert('Lütfen tüm alanları doldurun');
+      showToast('Lütfen tüm alanları doldurun', 'warning');
       return;
     }
 
     const price = parseFloat(productForm.price);
     if (isNaN(price) || price <= 0) {
-      alert('Geçerli bir fiyat girin');
+      showToast('Geçerli bir fiyat girin', 'warning');
       return;
     }
 
@@ -454,7 +460,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
         onProductsUpdated();
       }
     } catch (error) {
-      alert('Ürün kaydedilemedi: ' + error.message);
+      showToast('Ürün kaydedilemedi: ' + error.message, 'error');
     }
   };
 
@@ -473,7 +479,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       
       // Response kontrolü
       if (!result || !result.success) {
-        alert(result?.error || 'Ürün silinemedi');
+        showToast(result?.error || 'Ürün silinemedi', 'error');
         setDeleteConfirmModal(null);
         return;
       }
@@ -489,7 +495,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       setDeleteConfirmModal(null);
     } catch (error) {
       console.error('Ürün silme hatası:', error);
-      alert('Ürün silinemedi: ' + (error.message || 'Bilinmeyen hata'));
+      showToast('Ürün silinemedi: ' + (error.message || 'Bilinmeyen hata'), 'error');
       setDeleteConfirmModal(null);
     }
   };
@@ -649,12 +655,12 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
         
         setDeleteCategoryModal(null);
       } else {
-        alert(result?.error || 'Kategori silinemedi');
+        showToast(result?.error || 'Kategori silinemedi', 'error');
         setDeleteCategoryModal(null);
       }
     } catch (error) {
       console.error('Kategori silme hatası:', error);
-      alert('Kategori silinemedi: ' + error.message);
+      showToast('Kategori silinemedi: ' + error.message, 'error');
       setDeleteCategoryModal(null);
     }
   };
@@ -666,13 +672,13 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
   // Stock management functions
   const handleStockAdjustment = async () => {
     if (!stockFilterProduct) {
-      alert('Lütfen bir ürün seçin');
+      showToast('Lütfen bir ürün seçin', 'warning');
       return;
     }
     
     const amount = parseInt(stockAdjustmentAmount);
     if (isNaN(amount) || amount <= 0) {
-      alert('Geçerli bir miktar girin');
+      showToast('Geçerli bir miktar girin', 'warning');
       return;
     }
     
@@ -683,7 +689,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       );
       
       if (result && result.success) {
-        alert(`Stok başarıyla ${stockAdjustmentType === 'add' ? 'artırıldı' : 'azaltıldı'}`);
+        showToast(`Stok başarıyla ${stockAdjustmentType === 'add' ? 'artırıldı' : 'azaltıldı'}`, 'success');
         setStockAdjustmentAmount('');
         // Ürünleri yenile
         await loadAllProducts();
@@ -695,11 +701,11 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
           onProductsUpdated();
         }
       } else {
-        alert(result?.error || 'Stok güncellenemedi');
+        showToast(result?.error || 'Stok güncellenemedi', 'error');
       }
     } catch (error) {
       console.error('Stok güncelleme hatası:', error);
-      alert('Stok güncellenemedi: ' + error.message);
+      showToast('Stok güncellenemedi: ' + error.message, 'error');
     }
   };
 
@@ -719,11 +725,11 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
           onProductsUpdated();
         }
       } else {
-        alert(result?.error || 'Stok takibi durumu değiştirilemedi');
+        showToast(result?.error || 'Stok takibi durumu değiştirilemedi', 'error');
       }
     } catch (error) {
       console.error('Stok takibi durumu değiştirme hatası:', error);
-      alert('Stok takibi durumu değiştirilemedi: ' + error.message);
+      showToast('Stok takibi durumu değiştirilemedi: ' + error.message, 'error');
     }
   };
 
@@ -748,7 +754,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
     // Backend'e yeni sıralamayı gönder
     try {
       if (!window.electronAPI || typeof window.electronAPI.reorderCategories !== 'function') {
-        alert('Kategori sıralama özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+        showToast('Kategori sıralama özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
         return;
       }
 
@@ -757,7 +763,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
 
       if (!result || !result.success) {
         console.error('Kategori sıralama hatası:', result);
-        alert(result?.error || 'Kategori sıralaması kaydedilemedi');
+        showToast(result?.error || 'Kategori sıralaması kaydedilemedi', 'error');
         return;
       }
 
@@ -779,7 +785,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
       }
     } catch (error) {
       console.error('Kategori sıralama API hatası:', error);
-      alert('Kategori sıralaması kaydedilemedi: ' + error.message);
+      showToast('Kategori sıralaması kaydedilemedi: ' + error.message, 'error');
     }
   };
 
@@ -1080,7 +1086,7 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                           type="button"
                           onClick={async () => {
                             if (!window.electronAPI || typeof window.electronAPI.selectImageFile !== 'function') {
-                              alert('Dosya seçimi özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+                              showToast('Dosya seçimi özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
                               return;
                             }
                             
@@ -1091,10 +1097,10 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                               if (result.success && result.path) {
                                 setProductForm({ ...productForm, image: result.path });
                               } else if (!result.canceled) {
-                                alert('Dosya seçilemedi: ' + (result.error || 'Bilinmeyen hata'));
+                                showToast('Dosya seçilemedi: ' + (result.error || 'Bilinmeyen hata'), 'error');
                               }
                             } catch (error) {
-                              alert('Dosya seçme hatası: ' + error.message);
+                              showToast('Dosya seçme hatası: ' + error.message, 'error');
                             }
                           }}
                           className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-medium transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap"
@@ -1111,10 +1117,10 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                               if (result.success) {
                                 setFirebaseImages(result.images || []);
                               } else {
-                                alert('Firebase görselleri yüklenemedi: ' + (result.error || 'Bilinmeyen hata'));
+                                showToast('Firebase görselleri yüklenemedi: ' + (result.error || 'Bilinmeyen hata'), 'error');
                               }
                             } catch (error) {
-                              alert('Firebase görselleri yükleme hatası: ' + error.message);
+                              showToast('Firebase görselleri yükleme hatası: ' + error.message, 'error');
                             } finally {
                               setIsLoadingFirebaseImages(false);
                             }
@@ -1187,18 +1193,16 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       setIsCreatingImageRecords(true);
                       const result = await window.electronAPI.createImageRecordsForAllProducts();
                       if (result.success) {
-                        alert(
-                          `✅ Image kayıtları oluşturuldu!\n\n` +
-                          `Oluşturulan: ${result.created}\n` +
-                          `Atlanan: ${result.skipped}\n` +
-                          `Hata: ${result.errors}`
+                        showToast(
+                          `✅ Image kayıtları oluşturuldu! Oluşturulan: ${result.created}, Atlanan: ${result.skipped}, Hata: ${result.errors}`,
+                          'success'
                         );
                       } else {
-                        alert('Image kayıtları oluşturulamadı: ' + (result.error || 'Bilinmeyen hata'));
+                        showToast('Image kayıtları oluşturulamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
                       }
                     } catch (error) {
                       console.error('Image kayıtları oluşturma hatası:', error);
-                      alert('Image kayıtları oluşturma hatası: ' + error.message);
+                      showToast('Image kayıtları oluşturma hatası: ' + error.message, 'error');
                     } finally {
                       setIsCreatingImageRecords(false);
                     }
@@ -1463,17 +1467,17 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                             const result = await window.electronAPI.markCategoryOutOfStock(stockFilterCategory.id);
                             
                             if (result && result.success) {
-                              alert(`✅ ${result.updatedCount} ürün "kalmadı" olarak işaretlendi`);
+                              showToast(`✅ ${result.updatedCount} ürün "kalmadı" olarak işaretlendi`, 'success');
                               await loadAllProducts();
                               if (onProductsUpdated) {
                                 onProductsUpdated();
                               }
                             } else {
-                              alert(result?.error || 'Kategori işaretlenemedi');
+                              showToast(result?.error || 'Kategori işaretlenemedi', 'error');
                             }
                           } catch (error) {
                             console.error('Kategori işaretleme hatası:', error);
-                            alert('Kategori işaretlenemedi: ' + error.message);
+                            showToast('Kategori işaretlenemedi: ' + error.message, 'error');
                           }
                         }}
                         className="w-full px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center space-x-2"
@@ -2392,6 +2396,15 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info', show: false })}
+        />
       )}
     </div>,
     document.body

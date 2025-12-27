@@ -14,6 +14,7 @@ import SplashScreen from './components/SplashScreen';
 import ExitSplash from './components/ExitSplash';
 import UpdateModal from './components/UpdateModal';
 import ExpenseModal from './components/ExpenseModal';
+import Toast from './components/Toast';
 function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [currentView, setCurrentView] = useState('pos'); // 'pos', 'sales', or 'tables'
@@ -38,7 +39,15 @@ function App() {
   const [showExitSplash, setShowExitSplash] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [showExpenseModal, setShowExpenseModal] = useState(false);
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
   const searchInputRef = useRef(null);
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
   const triggerRoleSplash = (role) => {
     setActiveRoleSplash(role);
     setTimeout(() => setActiveRoleSplash(null), 1300);
@@ -207,7 +216,7 @@ function App() {
     
     if (!window.electronAPI || !window.electronAPI.printAdisyon) {
       console.error('printAdisyon API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
-      alert('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+      showToast('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
     
@@ -252,7 +261,7 @@ function App() {
     
     if (!window.electronAPI || !window.electronAPI.createTableOrder) {
       console.error('createTableOrder API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
-      alert('Hata: Masa siparişi API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.');
+      showToast('Hata: Masa siparişi API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
     
@@ -333,7 +342,7 @@ function App() {
       }
     } catch (error) {
       console.error('Masa siparişi kaydedilirken hata:', error);
-      alert('Masa siparişi kaydedilemedi: ' + error.message);
+      showToast('Masa siparişi kaydedilemedi: ' + error.message, 'error');
     }
   };
 
@@ -876,6 +885,15 @@ function App() {
             }
           `}</style>
         </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info', show: false })}
+        />
       )}
     </div>
     </>

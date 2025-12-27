@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import Toast from './Toast';
 
 const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable }) => {
   const [sessionDuration, setSessionDuration] = useState('');
@@ -14,6 +15,14 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   const [pendingCancelQuantity, setPendingCancelQuantity] = useState(null);
   const [showCancelEntireTableModal, setShowCancelEntireTableModal] = useState(false);
   const [cancellingEntireTable, setCancellingEntireTable] = useState(false);
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   if (!order) return null;
 
@@ -107,7 +116,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   // Ürün iptal etme fonksiyonu
   const handleCancelItem = (item) => {
     if (!window.electronAPI || !window.electronAPI.cancelTableOrderItem) {
-      alert('İptal işlemi şu anda kullanılamıyor');
+      showToast('İptal işlemi şu anda kullanılamıyor', 'error');
       return;
     }
     setCancelConfirmItem(item);
@@ -121,7 +130,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     if (!cancelConfirmItem) return;
 
     if (!window.electronAPI || !window.electronAPI.previewCancelReceipt) {
-      alert('Fiş önizleme özelliği şu anda kullanılamıyor');
+      showToast('Fiş önizleme özelliği şu anda kullanılamıyor', 'error');
       return;
     }
 
@@ -131,11 +140,11 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
         setCancelReceiptHTML(result.html);
         setShowCancelReceiptPreview(true);
       } else {
-        alert(result.error || 'Fiş önizlemesi oluşturulamadı');
+        showToast(result.error || 'Fiş önizlemesi oluşturulamadı', 'error');
       }
     } catch (error) {
       console.error('Fiş önizleme hatası:', error);
-      alert('Fiş önizlemesi oluşturulurken bir hata oluştu');
+      showToast('Fiş önizlemesi oluşturulurken bir hata oluştu', 'error');
     }
   };
 
@@ -144,7 +153,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     if (!cancelConfirmItem) return;
 
     if (cancelQuantity <= 0 || cancelQuantity > cancelConfirmItem.quantity) {
-      alert('Geçersiz iptal miktarı');
+      showToast('Geçersiz iptal miktarı', 'warning');
       return;
     }
 
@@ -162,12 +171,12 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   // İptal açıklaması gönder
   const submitCancelReason = async () => {
     if (!cancelReason.trim()) {
-      alert('Lütfen iptal açıklaması yazın');
+      showToast('Lütfen iptal açıklaması yazın', 'warning');
       return;
     }
 
     if (!pendingCancelItemId || !pendingCancelQuantity) {
-      alert('İptal işlemi bulunamadı');
+      showToast('İptal işlemi bulunamadı', 'error');
       setShowCancelReasonModal(false);
       return;
     }
@@ -213,11 +222,11 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
             onItemCancelled();
           }
         } else {
-          alert(result.error || 'İptal açıklaması kaydedilemedi');
+          showToast(result.error || 'İptal açıklaması kaydedilemedi', 'error');
         }
       } catch (error) {
         console.error('İptal açıklaması kaydetme hatası:', error);
-        alert('İptal açıklaması kaydedilirken bir hata oluştu');
+        showToast('İptal açıklaması kaydedilirken bir hata oluştu', 'error');
       } finally {
         setCancellingItemId(null);
       }
@@ -240,11 +249,11 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
             onItemCancelled();
           }
         } else {
-          alert(result.error || 'İptal açıklaması kaydedilemedi');
+          showToast(result.error || 'İptal açıklaması kaydedilemedi', 'error');
         }
       } catch (error) {
         console.error('İptal açıklaması kaydetme hatası:', error);
-        alert('İptal açıklaması kaydedilirken bir hata oluştu');
+        showToast('İptal açıklaması kaydedilirken bir hata oluştu', 'error');
       } finally {
         setCancellingItemId(null);
       }
@@ -838,7 +847,21 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               </div>
             </div>
 
-            <div className="flex items-center justify-center">
+            <div className="flex items-center justify-center space-x-4">
+              <button
+                onClick={() => {
+                  setShowCancelReasonModal(false);
+                  setCancelReason('');
+                  setCancellingItemId(null);
+                }}
+                disabled={cancellingItemId !== null}
+                className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all duration-200 shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+                </svg>
+                <span>Geri Dön</span>
+              </button>
               <button
                 onClick={submitCancelReason}
                 disabled={!cancelReason.trim() || cancellingItemId !== null}
@@ -907,7 +930,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               <button
                 onClick={async () => {
                   if (!window.electronAPI || !window.electronAPI.cancelEntireTableOrder) {
-                    alert('İptal işlemi şu anda kullanılamıyor');
+                    showToast('İptal işlemi şu anda kullanılamıyor', 'error');
                     return;
                   }
 
@@ -921,12 +944,12 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                       }
                       onClose();
                     } else {
-                      alert(result.error || 'Masayı iptal ederken bir hata oluştu');
+                      showToast(result.error || 'Masayı iptal ederken bir hata oluştu', 'error');
                       setCancellingEntireTable(false);
                     }
                   } catch (error) {
                     console.error('Masayı iptal etme hatası:', error);
-                    alert('Masayı iptal ederken bir hata oluştu');
+                    showToast('Masayı iptal ederken bir hata oluştu', 'error');
                     setCancellingEntireTable(false);
                   }
                 }}
@@ -952,6 +975,15 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info', show: false })}
+        />
       )}
     </div>
   );

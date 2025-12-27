@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import PrintToast from './PrintToast';
 import DatePickerDropdown from './DatePickerDropdown';
+import Toast from './Toast';
 
 const SalesHistory = () => {
   const [sales, setSales] = useState([]);
@@ -17,6 +18,14 @@ const SalesHistory = () => {
   const [loadingRecentSales, setLoadingRecentSales] = useState(false);
   const [selectedSaleForAdisyon, setSelectedSaleForAdisyon] = useState(null);
   const [saleToDelete, setSaleToDelete] = useState(null);
+  const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message, type, show: true });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 3000);
+  };
 
   useEffect(() => {
     loadSales();
@@ -152,7 +161,7 @@ const SalesHistory = () => {
   // Satış detaylarını al ve adisyon yazdır
   const handleReprintAdisyon = async (saleId) => {
     if (!window.electronAPI || !window.electronAPI.getSaleDetails || !window.electronAPI.printAdisyon) {
-      alert('API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
+      showToast('API mevcut değil. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
 
@@ -212,7 +221,7 @@ const SalesHistory = () => {
   // Satış detaylarını al ve fişi kasa yazıcısından yazdır
   const handleReprintReceipt = async (saleId) => {
     if (!window.electronAPI || !window.electronAPI.getSaleDetails || !window.electronAPI.printReceipt) {
-      alert('API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
+      showToast('API mevcut değil. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
 
@@ -1090,7 +1099,7 @@ const SalesHistory = () => {
                     setRecentSales(recent || []);
                   } catch (error) {
                     console.error('Son satışlar yüklenemedi:', error);
-                    alert('Son satışlar yüklenemedi');
+                    showToast('Son satışlar yüklenemedi', 'error');
                   } finally {
                     setLoadingRecentSales(false);
                   }
@@ -1224,12 +1233,12 @@ const SalesHistory = () => {
                   <button
                     onClick={async () => {
                       if (!selectedSaleForAdisyon) {
-                        alert('Lütfen bir satış seçin');
+                        showToast('Lütfen bir satış seçin', 'warning');
                         return;
                       }
 
                       if (!window.electronAPI || !window.electronAPI.printAdisyon) {
-                        alert('Adisyon yazdırma özelliği kullanılamıyor');
+                        showToast('Adisyon yazdırma özelliği kullanılamıyor', 'error');
                         return;
                       }
 
@@ -1330,7 +1339,7 @@ const SalesHistory = () => {
               <button
                 onClick={async () => {
                   if (!saleToDelete || !window.electronAPI || !window.electronAPI.deleteSale) {
-                    alert('Silme işlemi gerçekleştirilemedi');
+                    showToast('Silme işlemi gerçekleştirilemedi', 'error');
                     return;
                   }
 
@@ -1348,11 +1357,11 @@ const SalesHistory = () => {
                       setShowDeleteConfirm(false);
                       setSaleToDelete(null);
                     } else {
-                      alert(result.error || 'Satış silinirken bir hata oluştu');
+                      showToast(result.error || 'Satış silinirken bir hata oluştu', 'error');
                     }
                   } catch (error) {
                     console.error('Satış silme hatası:', error);
-                    alert('Satış silinirken bir hata oluştu: ' + error.message);
+                    showToast('Satış silinirken bir hata oluştu: ' + error.message, 'error');
                   } finally {
                     setDeleting(false);
                   }
@@ -1377,6 +1386,15 @@ const SalesHistory = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast Notification */}
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info', show: false })}
+        />
       )}
     </div>
   );

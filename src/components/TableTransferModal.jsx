@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Toast from './Toast';
 
 const TableTransferModal = ({ 
   currentOrder, 
@@ -66,7 +67,7 @@ const TableTransferModal = ({
 
   const handleSourceTableSelect = (table) => {
     if (!hasOrder(table.id)) {
-      alert('Bu masa boş! Lütfen dolu bir masa seçin.');
+      showToast('Bu masa boş! Lütfen dolu bir masa seçin.', 'warning');
       return;
     }
     setSelectedSourceTable(table);
@@ -75,11 +76,11 @@ const TableTransferModal = ({
 
   const handleTargetTableSelect = (table) => {
     if (hasOrder(table.id)) {
-      alert('Bu masa dolu! Lütfen boş bir masa seçin.');
+      showToast('Bu masa dolu! Lütfen boş bir masa seçin.', 'warning');
       return;
     }
     if (table.id === selectedSourceTable?.id) {
-      alert('Aynı masayı seçemezsiniz!');
+      showToast('Aynı masayı seçemezsiniz!', 'warning');
       return;
     }
     setSelectedTargetTable(table);
@@ -87,12 +88,12 @@ const TableTransferModal = ({
 
   const handleConfirmTransfer = async () => {
     if (!selectedSourceTable || !selectedTargetTable) {
-      alert('Lütfen hem kaynak hem de hedef masayı seçin.');
+      showToast('Lütfen hem kaynak hem de hedef masayı seçin.', 'warning');
       return;
     }
 
     if (selectedSourceTable.id === selectedTargetTable.id) {
-      alert('Aynı masayı seçemezsiniz!');
+      showToast('Aynı masayı seçemezsiniz!', 'warning');
       return;
     }
 
@@ -105,6 +106,7 @@ const TableTransferModal = ({
   const allTables = [...insideTables, ...outsideTables, ...packageTablesInside, ...packageTablesOutside];
 
   return (
+    <>
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[2000]">
       <div className="bg-white rounded-2xl shadow-2xl w-[90vw] max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         {/* Header */}
@@ -290,6 +292,14 @@ const TableTransferModal = ({
         </div>
       </div>
     </div>
+    {toast.show && (
+      <Toast
+        message={toast.message}
+        type={toast.type}
+        onClose={() => setToast({ message: '', type: 'info', show: false })}
+      />
+    )}
+    </>
   );
 };
 

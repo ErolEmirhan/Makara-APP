@@ -1,6 +1,6 @@
 {
   "name": "makara-pos",
-  "version": "2.4.7",
+  "version": "2.4.8",
   "description": "MAKARA - Modern POS Uygulaması",
   "main": "electron/main.js",
   "scripts": {
@@ -11,7 +11,9 @@
     "build:electron": "npm run build && electron-builder",
     "build:win": "npm run build && electron-builder --win",
     "build:win:publish": "npm run build && electron-builder --win --publish always",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "version:bump": "node scripts/update-version.js",
+    "deploy": "npm run version:bump && firebase deploy --only hosting"
   },
   "keywords": [
     "electron",

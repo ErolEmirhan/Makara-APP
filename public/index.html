@@ -7,7 +7,11 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="MAKARA">
-  <link rel="manifest" href="/manifest.json">
+  <!-- Cache Control -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
+  <link rel="manifest" href="/manifest.json?v=2.4.10">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -17,6 +21,67 @@
   <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
   
   <script>
+    // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
+    (function() {
+      const APP_VERSION = '2.4.10';
+      const STORAGE_KEY = 'makara_admin_version';
+      
+      // Mevcut versiyonu kontrol et
+      const currentVersion = localStorage.getItem(STORAGE_KEY);
+      
+      // Eğer versiyon değiştiyse veya ilk yükleme ise cache'i temizle
+      if (currentVersion !== APP_VERSION) {
+        console.log('🔄 Yeni versiyon tespit edildi, cache temizleniyor...');
+        
+        // Service Worker'ları unregister et
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(registrations) {
+            for(let registration of registrations) {
+              registration.unregister().then(function(success) {
+                if (success) {
+                  console.log('✅ Service Worker kaldırıldı');
+                }
+              });
+            }
+          });
+        }
+        
+        // Tüm cache'leri temizle
+        if ('caches' in window) {
+          caches.keys().then(function(names) {
+            for (let name of names) {
+              caches.delete(name).then(function(success) {
+                if (success) {
+                  console.log('✅ Cache temizlendi:', name);
+                }
+              });
+            }
+          });
+        }
+        
+        // IndexedDB'yi temizle (isteğe bağlı)
+        if ('indexedDB' in window) {
+          // IndexedDB temizleme işlemi
+          indexedDB.databases().then(databases => {
+            databases.forEach(db => {
+              indexedDB.deleteDatabase(db.name);
+            });
+          });
+        }
+        
+        // Yeni versiyonu kaydet
+        localStorage.setItem(STORAGE_KEY, APP_VERSION);
+        
+        // Sayfayı yeniden yükle (cache olmadan)
+        if (currentVersion) {
+          // Sadece versiyon değiştiyse yeniden yükle (ilk yüklemede değil)
+          setTimeout(() => {
+            window.location.reload(true);
+          }, 500);
+        }
+      }
+    })();
+    
     // Firebase yapılandırması
     const firebaseConfig = {
       apiKey: "AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA",
@@ -43,6 +108,13 @@
     let tablesUnsubscribe = null; // Masalar için real-time listener
     let activeTablesUnsubscribe = null; // Aktif masa sayısı için real-time listener
     let allStaticTables = {}; // Tüm masaları sakla (iç, dış, paket)
+    let previousTableStates = {}; // Masa durumlarını takip et (toast için)
+    let isFirstTablesLoad = true; // İlk yükleme kontrolü (toast göstermemek için)
+    let notificationsHistory = []; // Bildirim geçmişi
+    let unreadNotificationsCount = 0; // Okunmamış bildirim sayısı
+    let revenueNotificationSent = false; // Günlük ciro bildirimi gönderildi mi (günlük kontrol için)
+    let lastRevenueNotificationDate = null; // Son bildirim gönderilen tarih
+    let notificationsMuted = false; // Bildirimler sessize alındı mı
 
     try {
       // Ana Firebase zaten başlatılmış mı kontrol et
@@ -104,6 +176,8 @@
       if (dashboard) dashboard.style.display = 'block';
       loadSales();
       startRealtimeListener();
+      // Masaları yükle (aktif masa sayısı için)
+      loadTablesForStats();
     }
 
     function verifyPin() {
@@ -111,10 +185,23 @@
       if (!pinInput) return;
       
       const pin = pinInput.value;
+      const rememberMe = document.getElementById('rememberMe');
+      const shouldRemember = rememberMe && rememberMe.checked;
       
       if (pin === adminPin) {
         isAuthenticated = true;
         sessionStorage.setItem('adminAuthenticated', 'true');
+        
+        // Beni Hatırla seçiliyse localStorage'a kaydet
+        if (shouldRemember) {
+          localStorage.setItem('adminRememberMe', 'true');
+          localStorage.setItem('adminAuthenticated', 'true');
+        } else {
+          // Seçili değilse localStorage'ı temizle
+          localStorage.removeItem('adminRememberMe');
+          localStorage.removeItem('adminAuthenticated');
+        }
+        
         showDashboard();
         pinInput.value = '';
       } else {
@@ -151,11 +238,28 @@
               console.log('✅ Masalar Firebase hazır');
             }
             
-            if (sessionStorage.getItem('adminAuthenticated') === 'true') {
+            // Önce localStorage'ı kontrol et (Beni Hatırla aktifse)
+            if (localStorage.getItem('adminRememberMe') === 'true' && localStorage.getItem('adminAuthenticated') === 'true') {
+              isAuthenticated = true;
+              sessionStorage.setItem('adminAuthenticated', 'true');
+              showDashboard();
+            } else if (sessionStorage.getItem('adminAuthenticated') === 'true') {
               showDashboard();
             } else {
               showLogin();
             }
+            
+            // Bildirim geçmişini yükle
+            loadNotificationsHistory();
+            
+            // Günlük ciro bildirim durumunu yükle
+            loadRevenueNotificationState();
+            
+            // Sessize al durumunu yükle
+            loadNotificationsMuteState();
+            
+            // Push notification izni iste (sayfa yüklendiğinde)
+            requestNotificationPermission();
           }, 500);
         }
       }, 2500);
@@ -172,15 +276,16 @@
         showLoading(true);
         const salesRef = db.collection('sales');
         
-        // Önce sale_date'e göre sıralamayı dene, yoksa timestamp'e göre
+        // created_at veya timestamp'e göre sırala (sale_date string olduğu için doğru sıralama yapmaz)
         let query = salesRef;
         try {
-          query = salesRef.orderBy('sale_date', 'desc').limit(1000);
+          query = salesRef.orderBy('created_at', 'desc').limit(5000);
         } catch (e) {
           try {
-            query = salesRef.orderBy('created_at', 'desc').limit(1000);
+            query = salesRef.orderBy('timestamp', 'desc').limit(5000);
           } catch (e2) {
-            query = salesRef.limit(1000);
+            // Son çare: limit ile al, sonra JavaScript'te sırala
+            query = salesRef.limit(5000);
           }
         }
         
@@ -194,17 +299,20 @@
           let saleDate = data.sale_date;
           let saleTime = data.sale_time;
           
-          // Eğer sale_date yoksa, created_at veya timestamp'ten oluştur
-          if (!saleDate && data.created_at) {
+          // created_at timestamp'ini al (sıralama için)
+          let createdAt = null;
+          if (data.created_at) {
             const timestamp = data.created_at;
-            const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
-            saleDate = date.toLocaleDateString('tr-TR');
-            saleTime = date.toLocaleTimeString('tr-TR');
-          } else if (!saleDate && data.timestamp) {
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          } else if (data.timestamp) {
             const timestamp = data.timestamp;
-            const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
-            saleDate = date.toLocaleDateString('tr-TR');
-            saleTime = date.toLocaleTimeString('tr-TR');
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          }
+          
+          // Eğer sale_date yoksa, created_at veya timestamp'ten oluştur
+          if (!saleDate && createdAt) {
+            saleDate = createdAt.toLocaleDateString('tr-TR');
+            saleTime = createdAt.toLocaleTimeString('tr-TR');
           }
           
           // Items'ı parse et
@@ -243,12 +351,21 @@
             items: items,
             items_array: itemsArray, // Gerçek Firebase verileri
             itemsText: data.items || 'Ürün bulunamadı',
-            isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf'
+            isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
+            created_at: createdAt // Sıralama için timestamp
           });
         });
 
         // Tarih + saate göre sırala (en yeni satış en üstte)
         sales.sort((a, b) => {
+          // Önce created_at timestamp'ini kullan (en doğru sıralama)
+          if (a.created_at && b.created_at) {
+            return b.created_at.getTime() - a.created_at.getTime();
+          }
+          if (a.created_at) return -1; // a daha yeni
+          if (b.created_at) return 1;  // b daha yeni
+          
+          // created_at yoksa sale_date ve sale_time kullan
           if (a.sale_date && b.sale_date) {
             const [dayA, monthA, yearA] = a.sale_date.split('.');
             const [dayB, monthB, yearB] = b.sale_date.split('.');
@@ -265,7 +382,7 @@
                 dateB.setHours(parseInt(hB) || 0, parseInt(mB) || 0, parseInt(sB) || 0, 0);
               }
               
-              const diff = dateB - dateA;
+              const diff = dateB.getTime() - dateA.getTime();
               if (diff !== 0) return diff;
             }
           }
@@ -308,12 +425,13 @@
       const salesRef = db.collection('sales');
       let query = salesRef;
       try {
-        query = salesRef.orderBy('sale_date', 'desc').limit(1000);
+        query = salesRef.orderBy('created_at', 'desc').limit(5000);
       } catch (e) {
         try {
-          query = salesRef.orderBy('created_at', 'desc').limit(1000);
+          query = salesRef.orderBy('timestamp', 'desc').limit(5000);
         } catch (e2) {
-          query = salesRef.limit(1000);
+          // Son çare: limit ile al, sonra JavaScript'te sırala
+          query = salesRef.limit(5000);
         }
       }
       
@@ -322,19 +440,22 @@
         snapshot.forEach((doc) => {
           const data = doc.data();
           
+          // created_at timestamp'ini al (sıralama için)
+          let createdAt = null;
+          if (data.created_at) {
+            const timestamp = data.created_at;
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          } else if (data.timestamp) {
+            const timestamp = data.timestamp;
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          }
+          
           let saleDate = data.sale_date;
           let saleTime = data.sale_time;
           
-          if (!saleDate && data.created_at) {
-            const timestamp = data.created_at;
-            const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
-            saleDate = date.toLocaleDateString('tr-TR');
-            saleTime = date.toLocaleTimeString('tr-TR');
-          } else if (!saleDate && data.timestamp) {
-            const timestamp = data.timestamp;
-            const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
-            saleDate = date.toLocaleDateString('tr-TR');
-            saleTime = date.toLocaleTimeString('tr-TR');
+          if (!saleDate && createdAt) {
+            saleDate = createdAt.toLocaleDateString('tr-TR');
+            saleTime = createdAt.toLocaleTimeString('tr-TR');
           }
           
           let items = [];
@@ -371,18 +492,27 @@
             items: items,
             items_array: itemsArray, // Gerçek Firebase verileri
             itemsText: data.items || 'Ürün bulunamadı',
-            isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf'
+            isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
+            created_at: createdAt // Sıralama için timestamp
           });
         });
 
         sales.sort((a, b) => {
+          // Önce created_at timestamp'ini kullan (en doğru sıralama)
+          if (a.created_at && b.created_at) {
+            return b.created_at.getTime() - a.created_at.getTime();
+          }
+          if (a.created_at) return -1; // a daha yeni
+          if (b.created_at) return 1;  // b daha yeni
+          
+          // created_at yoksa sale_date kullan
           if (!a.sale_date || !b.sale_date) return 0;
           const [dayA, monthA, yearA] = a.sale_date.split('.');
           const [dayB, monthB, yearB] = b.sale_date.split('.');
           if (!dayA || !dayB) return 0;
           const dateA = new Date(yearA, monthA - 1, dayA);
           const dateB = new Date(yearB, monthB - 1, dayB);
-          return dateB - dateA;
+          return dateB.getTime() - dateA.getTime();
         });
 
         allSales = sales; // Tüm satışları sakla
@@ -831,13 +961,205 @@
       return activeCount;
     }
 
-    // Aktif masa sayısını gerçek zamanlı dinle
-    function startActiveTablesListener() {
-      // İlk hesaplama
+    // Masaları yükle (render etmeden, sadece aktif masa sayısı için)
+    function loadTablesForStats() {
+      if (!tablesDb) {
+        console.warn('⚠️ tablesDb bulunamadı - sadece statik masalar oluşturulacak');
+        // Firebase olmasa bile tüm masaları oluştur
+        allStaticTables = {};
+        for (let i = 1; i <= 20; i++) {
+          allStaticTables[`inside-${i}`] = {
+            table_id: `inside-${i}`,
+            table_name: `İçeri ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 20; i++) {
+          allStaticTables[`outside-${i}`] = {
+            table_id: `outside-${i}`,
+            table_name: `Dışarı ${i}`,
+            table_type: 'outside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          allStaticTables[`package-inside-${i}`] = {
+            table_id: `package-inside-${i}`,
+            table_name: `Paket ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          allStaticTables[`package-outside-${i}`] = {
+            table_id: `package-outside-${i}`,
+            table_name: `Paket ${i}`,
+            table_type: 'outside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        updateActiveTablesCount(calculateActiveTablesCount());
+        
+        // İstatistikleri güncelle (eğer satışlar yüklendiyse)
+        if (allSales && allSales.length > 0) {
+          updateStats(allSales);
+        }
+        return;
+      }
+
+      console.log('✅ Masalar yükleniyor (istatistikler için)...');
+
+      // TÜM masaları statik olarak oluştur
+      allStaticTables = {};
+      
+      // İçeri masalar (1-20)
+      for (let i = 1; i <= 20; i++) {
+        const tableId = `inside-${i}`;
+        allStaticTables[tableId] = {
+          table_id: tableId,
+          table_name: `İçeri ${i}`,
+          table_type: 'inside',
+          table_number: i,
+          is_occupied: false,
+          total_amount: 0,
+          items: []
+        };
+      }
+      
+      // Dışarı masalar (1-20)
+      for (let i = 1; i <= 20; i++) {
+        const tableId = `outside-${i}`;
+        allStaticTables[tableId] = {
+          table_id: tableId,
+          table_name: `Dışarı ${i}`,
+          table_type: 'outside',
+          table_number: i,
+          is_occupied: false,
+          total_amount: 0,
+          items: []
+        };
+      }
+      
+      // Paket masaları - İçeri (1-5)
+      for (let i = 1; i <= 5; i++) {
+        const tableId = `package-inside-${i}`;
+        allStaticTables[tableId] = {
+          table_id: tableId,
+          table_name: `Paket ${i}`,
+          table_type: 'inside',
+          table_number: i,
+          is_occupied: false,
+          total_amount: 0,
+          items: []
+        };
+      }
+      
+      // Paket masaları - Dışarı (1-5)
+      for (let i = 1; i <= 5; i++) {
+        const tableId = `package-outside-${i}`;
+        allStaticTables[tableId] = {
+          table_id: tableId,
+          table_name: `Paket ${i}`,
+          table_type: 'outside',
+          table_number: i,
+          is_occupied: false,
+          total_amount: 0,
+          items: []
+        };
+      }
+
+      console.log(`📋 Toplam ${Object.keys(allStaticTables).length} statik masa oluşturuldu`);
+
+      // İlk aktif masa sayısını güncelle
       updateActiveTablesCount(calculateActiveTablesCount());
       
-      // Not: Aktif masa sayısı renderAllTables() ve Firebase listener'ında otomatik güncelleniyor
-      // Burada sadece ilk hesaplamayı yapıyoruz
+      // İlk yükleme sonrasında istatistikleri güncelle (eğer satışlar yüklendiyse)
+      if (allSales && allSales.length > 0) {
+        updateStats(allSales);
+      }
+
+      // Firebase'den masaları dinle (sadece aktif masa sayısı için)
+      const tablesRef = tablesDb.collection('tables');
+      console.log('📡 Firebase collection dinleniyor: tables (istatistikler için)');
+      
+      // Eğer zaten bir listener varsa, yeni bir tane oluşturma (renderTables'da oluşturulacak)
+      if (!activeTablesUnsubscribe) {
+        activeTablesUnsubscribe = tablesRef.onSnapshot((snapshot) => {
+          console.log(`📊 Masalar snapshot alındı (istatistikler için): ${snapshot.size} Firebase verisi bulundu`);
+          
+          // Firebase'den gelen verileri statik masalarla birleştir
+          snapshot.forEach((doc) => {
+            const firebaseData = doc.data();
+            const tableId = doc.id;
+            
+            if (allStaticTables[tableId]) {
+              const previousIsOccupied = previousTableStates[tableId] !== undefined ? previousTableStates[tableId] : (allStaticTables[tableId].is_occupied || false);
+              
+              allStaticTables[tableId].is_occupied = firebaseData.is_occupied === true || 
+                                                  firebaseData.is_occupied === 'true' || 
+                                                  firebaseData.is_occupied === 1 ||
+                                                  (firebaseData.status && (firebaseData.status === 'occupied' || firebaseData.status === 'dolu')) ||
+                                                  (firebaseData.items && Array.isArray(firebaseData.items) && firebaseData.items.length > 0);
+              allStaticTables[tableId].total_amount = parseFloat(firebaseData.total_amount || 0);
+              allStaticTables[tableId].items = Array.isArray(firebaseData.items) ? firebaseData.items : [];
+              allStaticTables[tableId].order_id = firebaseData.order_id || null;
+              allStaticTables[tableId].order_date = firebaseData.order_date || null;
+              allStaticTables[tableId].order_time = firebaseData.order_time || null;
+              allStaticTables[tableId].order_note = firebaseData.order_note || null;
+              
+              // Yeni sipariş kontrolü: Boştan doluya geçiş (ilk yüklemede gösterme)
+              const currentIsOccupied = allStaticTables[tableId].is_occupied;
+              if (!isFirstTablesLoad && !previousIsOccupied && currentIsOccupied) {
+                // Yeni sipariş geldi - toast göster
+                const tableName = allStaticTables[tableId].table_name || tableId;
+                showToast('success', 'Yeni Sipariş', `${tableName} için sipariş girildi`);
+              }
+              
+              // Durumu kaydet
+              previousTableStates[tableId] = currentIsOccupied;
+            }
+          });
+          
+          // İlk yükleme tamamlandı
+          if (isFirstTablesLoad) {
+            isFirstTablesLoad = false;
+          }
+
+          // Aktif masa sayısını güncelle
+          updateActiveTablesCount(calculateActiveTablesCount());
+          
+          // İstatistikleri güncelle (ciroya aktif masalar eklenecek)
+          if (allSales && allSales.length > 0) {
+            updateStats(allSales);
+          }
+        }, (error) => {
+          console.error('Masalar yüklenirken hata (istatistikler için):', error);
+        });
+      }
+    }
+
+    // Aktif masa sayısını gerçek zamanlı dinle
+    function startActiveTablesListener() {
+      // Masaları yükle (eğer henüz yüklenmediyse)
+      if (Object.keys(allStaticTables).length === 0) {
+        loadTablesForStats();
+      } else {
+        // Zaten yüklendiyse sadece sayıyı güncelle
+        updateActiveTablesCount(calculateActiveTablesCount());
+      }
     }
 
     // Aktif masa sayısını güncelle
@@ -849,27 +1171,147 @@
     }
 
     // İstatistikleri güncelle
-    function updateStats(sales) {
-      const today = new Date().toLocaleDateString('tr-TR');
-      // Masrafları hariç tut
-      const todaySales = sales.filter(s => 
-        s.sale_date === today && 
-        !s.isExpense && 
-        s.payment_method !== 'Masraf'
-      );
-      const todayRevenue = todaySales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+    // Tarih string'ini Date objesine çevir (dd.mm.yyyy formatı)
+    function parseSaleDate(dateString) {
+      if (!dateString || dateString === 'Bilinmeyen') return null;
+      const parts = dateString.split('.');
+      if (parts.length !== 3) return null;
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1; // Ay 0-indexed
+      const year = parseInt(parts[2], 10);
+      return new Date(year, month, day);
+    }
+    
+    // İki tarihin aynı gün olup olmadığını kontrol et
+    function isSameDay(date1, date2) {
+      if (!date1 || !date2) return false;
+      return date1.getFullYear() === date2.getFullYear() &&
+             date1.getMonth() === date2.getMonth() &&
+             date1.getDate() === date2.getDate();
+    }
+    
+    // İş günü başlangıcını al (gece 3'ten başlar)
+    function getBusinessDayStart(date) {
+      const businessDay = new Date(date);
+      // Eğer saat 3'ten önceyse, dün gece 3'ü al
+      if (businessDay.getHours() < 3) {
+        businessDay.setDate(businessDay.getDate() - 1);
+      }
+      businessDay.setHours(3, 0, 0, 0);
+      return businessDay;
+    }
+    
+    // İş günü bitişini al (gece 3'e kadar)
+    function getBusinessDayEnd(date) {
+      const businessDay = new Date(date);
+      // Eğer saat 3'ten önceyse, bugün gece 3'ü al (iş günü bugün bitiyor)
+      // Eğer saat 3'ten sonraysa, yarın gece 3'ü al (iş günü yarın bitiyor)
+      if (businessDay.getHours() < 3) {
+        businessDay.setHours(3, 0, 0, 0);
+      } else {
+        businessDay.setDate(businessDay.getDate() + 1);
+        businessDay.setHours(3, 0, 0, 0);
+      }
+      return businessDay;
+    }
+    
+    // Satış tarih ve saatini birleştirerek Date objesi oluştur
+    function parseSaleDateTime(saleDate, saleTime) {
+      if (!saleDate) return null;
       
-      // Nakit ve kart tutarlarını hesapla
+      const date = parseSaleDate(saleDate);
+      if (!date) return null;
+      
+      // Eğer sale_time varsa saati ekle
+      if (saleTime) {
+        const timeParts = saleTime.split(':');
+        if (timeParts.length >= 2) {
+          const hours = parseInt(timeParts[0], 10) || 0;
+          const minutes = parseInt(timeParts[1], 10) || 0;
+          const seconds = timeParts.length >= 3 ? parseInt(timeParts[2], 10) || 0 : 0;
+          date.setHours(hours, minutes, seconds, 0);
+        }
+      }
+      
+      return date;
+    }
+    
+    // Bir satışın mevcut iş günü içinde olup olmadığını kontrol et (gece 3'ten gece 3'e)
+    function isInCurrentBusinessDay(saleDate, saleTime) {
+      const saleDateTime = parseSaleDateTime(saleDate, saleTime);
+      if (!saleDateTime) return false;
+      
+      const now = new Date();
+      const businessDayStart = getBusinessDayStart(now);
+      const businessDayEnd = getBusinessDayEnd(now);
+      
+      return saleDateTime >= businessDayStart && saleDateTime < businessDayEnd;
+    }
+    
+    // Aktif masalardaki toplam tutarı hesapla
+    function calculateActiveTablesRevenue() {
+      let totalRevenue = 0;
+      let cashRevenue = 0;
+      let cardRevenue = 0;
+      
+      Object.values(allStaticTables).forEach(table => {
+        // Sadece dolu masaları say
+        const isOccupied = table.is_occupied === true || 
+                          table.is_occupied === 'true' || 
+                          table.is_occupied === 1 ||
+                          (table.status && (table.status === 'occupied' || table.status === 'dolu')) ||
+                          (table.items && Array.isArray(table.items) && table.items.length > 0);
+        
+        if (isOccupied && table.total_amount) {
+          const amount = parseFloat(table.total_amount || 0);
+          totalRevenue += amount;
+          
+          // Ödeme yöntemini kontrol et (eğer masa verisinde varsa)
+          // Masa verisinde payment_method yoksa varsayılan olarak Nakit sayılır
+          const paymentMethod = table.payment_method || 'Nakit';
+          if (paymentMethod === 'Kart') {
+            cardRevenue += amount;
+          } else {
+            cashRevenue += amount;
+          }
+        }
+      });
+      
+      return { total: totalRevenue, cash: cashRevenue, card: cardRevenue };
+    }
+    
+    function updateStats(sales) {
+      // Masrafları hariç tut - iş günü içindeki satışlar (gece 3'ten gece 3'e)
+      const todaySales = sales.filter(s => {
+        if (s.isExpense || s.payment_method === 'Masraf') return false;
+        return isInCurrentBusinessDay(s.sale_date, s.sale_time);
+      });
+      const completedRevenue = todaySales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+      
+      // Nakit ve kart tutarlarını hesapla (tamamlanmış satışlardan)
       const cashSales = todaySales.filter(s => s.payment_method === 'Nakit');
       const cardSales = todaySales.filter(s => s.payment_method === 'Kart' || (s.payment_method !== 'Nakit' && s.payment_method !== 'Masraf'));
       const cashTotal = cashSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       const cardTotal = cardSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       
-      // Günlük masrafları hesapla
-      const todayExpenses = sales.filter(s => 
-        s.sale_date === today && 
-        (s.isExpense || s.payment_method === 'Masraf')
-      );
+      // Aktif masalardaki toplam tutarı hesapla
+      const activeTablesRevenue = calculateActiveTablesRevenue();
+      
+      // Günlük ciro = Tamamlanmış satışlar + Aktif masalar
+      const todayRevenue = completedRevenue + activeTablesRevenue.total;
+      
+      // Günlük ciro 50.000 TL'yi geçtiyse push notification gönder
+      checkRevenueNotification(todayRevenue);
+      
+      // Nakit ve kart tutarlarına aktif masaları ekle
+      const totalCash = cashTotal + activeTablesRevenue.cash;
+      const totalCard = cardTotal + activeTablesRevenue.card;
+      
+      // Günlük masrafları hesapla - iş günü içindeki masraflar (gece 3'ten gece 3'e)
+      const todayExpenses = sales.filter(s => {
+        if (!s.isExpense && s.payment_method !== 'Masraf') return false;
+        return isInCurrentBusinessDay(s.sale_date, s.sale_time);
+      });
       const todayExpenseTotal = todayExpenses.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       
       const statsGrid = document.getElementById('statsGrid');
@@ -887,11 +1329,11 @@
           <div class="payment-breakdown-card">
             <div class="payment-breakdown-item">
               <span class="payment-breakdown-label">💵 Nakit:</span>
-              <span class="payment-breakdown-value">₺${cashTotal.toFixed(2)}</span>
+              <span class="payment-breakdown-value">₺${totalCash.toFixed(2)}</span>
             </div>
             <div class="payment-breakdown-item">
               <span class="payment-breakdown-label">💳 Kart:</span>
-              <span class="payment-breakdown-value">₺${cardTotal.toFixed(2)}</span>
+              <span class="payment-breakdown-value">₺${totalCard.toFixed(2)}</span>
             </div>
           </div>
         </div>
@@ -1575,6 +2017,71 @@
               `).join('')}
             </div>
           </div>
+
+          <!-- Tüm Ürünler Satış ve Ciro Tablosu -->
+          <div class="report-card" style="margin-top: 24px;">
+            <div class="products-table-header">
+              <h3 class="products-table-title">
+                <span>📊</span>
+                <span class="products-table-title-text">Tüm Ürünler Satış ve Ciro Raporu</span>
+              </h3>
+              <div class="products-table-period">
+                ${periodInfo}
+              </div>
+            </div>
+            <div style="overflow-x: auto;">
+              <table class="products-sales-table">
+                <thead>
+                  <tr>
+                    <th class="col-rank">#</th>
+                    <th class="col-product">Ürün Adı</th>
+                    <th class="col-quantity">Adet</th>
+                    <th class="col-revenue">Ciro</th>
+                    <th class="col-percentage">%</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${productEntries.length > 0 ? productEntries
+                    .sort(([, a], [, b]) => b.revenue - a.revenue)
+                    .map(([product, stats], index) => {
+                      const revenuePercentage = totalRevenue > 0 ? (stats.revenue / totalRevenue * 100) : 0;
+                      return `
+                        <tr>
+                          <td class="col-rank">${index + 1}</td>
+                          <td class="col-product">${product}</td>
+                          <td class="col-quantity">${stats.count.toLocaleString('tr-TR')}</td>
+                          <td class="col-revenue">₺${stats.revenue.toFixed(2)}</td>
+                          <td class="col-percentage">
+                            <div class="percentage-cell">
+                              <div class="percentage-bar">
+                                <div class="percentage-fill" style="width: ${revenuePercentage}%"></div>
+                              </div>
+                              <span class="percentage-text">${revenuePercentage.toFixed(1)}%</span>
+                            </div>
+                          </td>
+                        </tr>
+                      `;
+                    }).join('') : `
+                    <tr>
+                      <td colspan="5" class="empty-state-cell">
+                        <div class="empty-icon-large">📦</div>
+                        <div class="empty-title">Henüz ürün satışı yok</div>
+                        <div class="empty-subtitle">Satış yapıldıkça bu tablo dolacak</div>
+                      </td>
+                    </tr>
+                  `}
+                </tbody>
+                <tfoot>
+                  <tr class="table-footer">
+                    <td colspan="2" class="footer-label">TOPLAM</td>
+                    <td class="footer-quantity">${productEntries.reduce((sum, [, stats]) => sum + stats.count, 0).toLocaleString('tr-TR')}</td>
+                    <td class="footer-revenue">₺${productEntries.reduce((sum, [, stats]) => sum + stats.revenue, 0).toFixed(2)}</td>
+                    <td class="footer-percentage">100%</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
         </div>
       `;
 
@@ -1809,6 +2316,8 @@
           const tableId = firebaseData.table_id || doc.id;
           
           if (allStaticTables[tableId]) {
+            const previousIsOccupied = previousTableStates[tableId] !== undefined ? previousTableStates[tableId] : (allStaticTables[tableId].is_occupied || false);
+            
             // Firebase'den gelen verileri statik masaya ekle
             allStaticTables[tableId].is_occupied = firebaseData.is_occupied === true || 
                                                    firebaseData.is_occupied === 'true' || 
@@ -1821,8 +2330,24 @@
             allStaticTables[tableId].order_time = firebaseData.order_time || null;
             allStaticTables[tableId].order_note = firebaseData.order_note || null;
             console.log(`✅ Masa güncellendi: ${tableId} - Dolu: ${allStaticTables[tableId].is_occupied}, Tutar: ${allStaticTables[tableId].total_amount}`);
+            
+            // Yeni sipariş kontrolü: Boştan doluya geçiş (ilk yüklemede gösterme)
+            const currentIsOccupied = allStaticTables[tableId].is_occupied;
+            if (!isFirstTablesLoad && !previousIsOccupied && currentIsOccupied) {
+              // Yeni sipariş geldi - toast göster
+              const tableName = allStaticTables[tableId].table_name || tableId;
+              showToast('success', 'Yeni Sipariş', `${tableName} için sipariş girildi`);
+            }
+            
+            // Durumu kaydet
+            previousTableStates[tableId] = currentIsOccupied;
           }
         });
+        
+        // İlk yükleme tamamlandı
+        if (isFirstTablesLoad) {
+          isFirstTablesLoad = false;
+        }
         
         // Aktif masa sayısını güncelle (sadece iç ve dış masalar)
         updateActiveTablesCount(calculateActiveTablesCount());
@@ -2190,6 +2715,37 @@
 
     // Toast Notification Fonksiyonları
     function showToast(type, title, message) {
+      // Bildirimi geçmişe ekle
+      const notification = {
+        id: Date.now(),
+        type: type,
+        title: title,
+        message: message,
+        timestamp: new Date(),
+        read: false
+      };
+      notificationsHistory.unshift(notification); // En yeni başa ekle
+      unreadNotificationsCount++;
+      updateNotificationsBadge();
+      
+      // Geçmişi localStorage'a kaydet (son 100 bildirim)
+      if (notificationsHistory.length > 100) {
+        notificationsHistory = notificationsHistory.slice(0, 100);
+      }
+      try {
+        localStorage.setItem('notificationsHistory', JSON.stringify(notificationsHistory.map(n => ({
+          ...n,
+          timestamp: n.timestamp.toISOString()
+        }))));
+      } catch (e) {
+        console.warn('Bildirim geçmişi kaydedilemedi:', e);
+      }
+      
+      // Eğer sessize alındıysa, toast gösterme, sadece geçmişe ekle
+      if (notificationsMuted) {
+        return;
+      }
+      
       // Mevcut toast'ı kaldır
       const existingToast = document.getElementById('toastNotification');
       if (existingToast) {
@@ -2239,10 +2795,11 @@
 
       document.body.appendChild(toast);
 
-      // Otomatik kapat (3 saniye)
+      // Otomatik kapat (varsayılan 3 saniye, masa siparişi için 2 saniye)
+      const autoCloseTime = type === 'success' && message.includes('sipariş girildi') ? 2000 : 3000;
       setTimeout(() => {
         hideToast();
-      }, 3000);
+      }, autoCloseTime);
     }
 
     function hideToast() {
@@ -2252,6 +2809,405 @@
         setTimeout(() => {
           toast.remove();
         }, 300);
+      }
+    }
+
+    // Push Notification İzni İste
+    async function requestNotificationPermission() {
+      if (!('Notification' in window)) {
+        console.log('Bu tarayıcı bildirimleri desteklemiyor');
+        return false;
+      }
+
+      if (Notification.permission === 'granted') {
+        return true;
+      }
+
+      if (Notification.permission !== 'denied') {
+        const permission = await Notification.requestPermission();
+        return permission === 'granted';
+      }
+
+      return false;
+    }
+
+    // Push Notification Gönder
+    async function sendPushNotification(title, message, options = {}) {
+      // Bildirimi geçmişe ekle
+      const notificationData = {
+        id: Date.now(),
+        type: 'info',
+        title: title,
+        message: message,
+        timestamp: new Date(),
+        read: false
+      };
+      notificationsHistory.unshift(notificationData);
+      unreadNotificationsCount++;
+      updateNotificationsBadge();
+      
+      // localStorage'a kaydet
+      try {
+        if (notificationsHistory.length > 100) {
+          notificationsHistory = notificationsHistory.slice(0, 100);
+        }
+        localStorage.setItem('notificationsHistory', JSON.stringify(notificationsHistory.map(n => ({
+          ...n,
+          timestamp: n.timestamp.toISOString()
+        }))));
+      } catch (e) {
+        console.warn('Bildirim geçmişi kaydedilemedi:', e);
+      }
+
+      // Eğer sessize alındıysa, push notification gösterme, sadece geçmişe ekle
+      if (notificationsMuted) {
+        return;
+      }
+
+      if (!('Notification' in window)) {
+        return;
+      }
+
+      const hasPermission = await requestNotificationPermission();
+      if (!hasPermission) {
+        return;
+      }
+
+      const notificationOptions = {
+        body: message,
+        icon: '/patron.png',
+        badge: '/patron.png',
+        tag: 'makara-notification',
+        requireInteraction: false,
+        ...options
+      };
+
+      try {
+        const notification = new Notification(title, notificationOptions);
+
+        // Bildirim tıklandığında
+        notification.onclick = function() {
+          window.focus();
+          notification.close();
+        };
+
+        // Otomatik kapat (5 saniye)
+        setTimeout(() => {
+          notification.close();
+        }, 5000);
+      } catch (error) {
+        console.error('Bildirim gönderilemedi:', error);
+      }
+    }
+
+    // Günlük Ciro Bildirimi Kontrolü
+    function checkRevenueNotification(todayRevenue) {
+      const REVENUE_THRESHOLD = 50000; // 50.000 TL
+      const today = new Date();
+      const todayDateString = today.toDateString();
+
+      // Eğer bugün için daha önce bildirim gönderildiyse, tekrar gönderme
+      if (lastRevenueNotificationDate === todayDateString && revenueNotificationSent) {
+        return;
+      }
+
+      // Eğer ciro 50.000 TL'yi geçtiyse
+      if (todayRevenue >= REVENUE_THRESHOLD && !revenueNotificationSent) {
+        // Bugün için bildirim gönderildi olarak işaretle
+        revenueNotificationSent = true;
+        lastRevenueNotificationDate = todayDateString;
+        
+        // localStorage'a kaydet
+        try {
+          localStorage.setItem('revenueNotificationSent', 'true');
+          localStorage.setItem('lastRevenueNotificationDate', todayDateString);
+        } catch (e) {
+          console.warn('Bildirim durumu kaydedilemedi:', e);
+        }
+
+        // Push notification gönder
+        sendPushNotification(
+          '🎉 Tebrikler!',
+          `Günlük cironuz ₺${todayRevenue.toFixed(2)} ile ₺50.000 TL'yi geçti!`,
+          {
+            badge: '/patron.png',
+            icon: '/patron.png',
+            tag: 'revenue-milestone'
+          }
+        );
+      }
+    }
+
+    // Sayfa yüklendiğinde bildirim durumunu kontrol et
+    function loadRevenueNotificationState() {
+      try {
+        const today = new Date().toDateString();
+        const savedDate = localStorage.getItem('lastRevenueNotificationDate');
+        
+        // Eğer bugün için kayıt varsa
+        if (savedDate === today) {
+          revenueNotificationSent = localStorage.getItem('revenueNotificationSent') === 'true';
+          lastRevenueNotificationDate = savedDate;
+        } else {
+          // Yeni gün, durumu sıfırla
+          revenueNotificationSent = false;
+          lastRevenueNotificationDate = null;
+          localStorage.removeItem('revenueNotificationSent');
+          localStorage.removeItem('lastRevenueNotificationDate');
+        }
+      } catch (e) {
+        console.warn('Bildirim durumu yüklenemedi:', e);
+      }
+    }
+
+    // Bildirim Badge'ini Güncelle
+    function updateNotificationsBadge() {
+      const badge = document.getElementById('notificationsBadge');
+      if (badge) {
+        if (unreadNotificationsCount > 0) {
+          badge.textContent = unreadNotificationsCount > 99 ? '99+' : unreadNotificationsCount;
+          badge.style.display = 'flex';
+        } else {
+          badge.style.display = 'none';
+        }
+      }
+    }
+
+    // Bildirim Geçmişini Yükle (localStorage'dan)
+    function loadNotificationsHistory() {
+      try {
+        const saved = localStorage.getItem('notificationsHistory');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          notificationsHistory = parsed.map(n => ({
+            ...n,
+            timestamp: new Date(n.timestamp),
+            read: n.read || false
+          }));
+          // Okunmamış bildirim sayısını hesapla
+          unreadNotificationsCount = notificationsHistory.filter(n => !n.read).length;
+          updateNotificationsBadge();
+        }
+      } catch (e) {
+        console.warn('Bildirim geçmişi yüklenemedi:', e);
+      }
+    }
+
+    // Bildirim Modal'ını Göster
+    function showNotificationsModal() {
+      const modal = document.getElementById('notificationsModal');
+      if (!modal) return;
+      
+      // Tüm bildirimleri okundu olarak işaretle
+      notificationsHistory.forEach(n => n.read = true);
+      unreadNotificationsCount = 0;
+      updateNotificationsBadge();
+      
+      // Geçmişi güncelle
+      try {
+        localStorage.setItem('notificationsHistory', JSON.stringify(notificationsHistory.map(n => ({
+          ...n,
+          timestamp: n.timestamp.toISOString()
+        }))));
+      } catch (e) {
+        console.warn('Bildirim geçmişi kaydedilemedi:', e);
+      }
+      
+      // Sessize al buton durumunu güncelle
+      updateMuteButtonState();
+      
+      // Modal içeriğini oluştur
+      renderNotificationsModal();
+      modal.style.display = 'flex';
+    }
+
+    // Sessize Al Buton Durumunu Güncelle
+    function updateMuteButtonState() {
+      const muteBtn = document.getElementById('muteNotificationsBtn');
+      const muteIcon = document.getElementById('muteIcon');
+      const muteText = document.getElementById('muteText');
+      const notificationsIcon = document.getElementById('notificationsIcon');
+      
+      if (!muteBtn || !muteIcon || !muteText || !notificationsIcon) return;
+      
+      if (notificationsMuted) {
+        muteIcon.textContent = '🔇';
+        muteText.textContent = 'Sessize Alındı';
+        muteBtn.style.background = '#fee2e2';
+        muteBtn.style.color = '#dc2626';
+        notificationsIcon.textContent = '🔕';
+      } else {
+        muteIcon.textContent = '🔊';
+        muteText.textContent = 'Sessize Al';
+        muteBtn.style.background = '#f3f4f6';
+        muteBtn.style.color = '#6b7280';
+        notificationsIcon.textContent = '🔔';
+      }
+    }
+
+    // Bildirimleri Sessize Al/Aç
+    function toggleNotificationsMute() {
+      notificationsMuted = !notificationsMuted;
+      
+      // localStorage'a kaydet
+      try {
+        localStorage.setItem('notificationsMuted', notificationsMuted ? 'true' : 'false');
+      } catch (e) {
+        console.warn('Sessize al durumu kaydedilemedi:', e);
+      }
+      
+      // Buton durumunu güncelle
+      updateMuteButtonState();
+      
+      // Toast göster (sessize alındıysa - ama bu toast sessize alındığında gösterilmez çünkü showToast içinde kontrol var)
+      // Bu yüzden direkt toast gösterelim
+      if (notificationsMuted) {
+        // Sessize alındı mesajı için özel toast (sessize al kontrolünü bypass et)
+        const existingToast = document.getElementById('toastNotification');
+        if (existingToast) {
+          existingToast.remove();
+        }
+        const toast = document.createElement('div');
+        toast.id = 'toastNotification';
+        toast.style.cssText = `
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          z-index: 10001;
+          background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%);
+          color: white;
+          padding: 20px 24px;
+          border-radius: 16px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          min-width: 280px;
+          animation: toastSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        `;
+        toast.innerHTML = `
+          <div style="font-size: 16px; font-weight: 600;">🔇 Bildirimler sessize alındı</div>
+        `;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+          toast.style.animation = 'toastSlideOut 0.3s ease forwards';
+          setTimeout(() => toast.remove(), 300);
+        }, 2000);
+      } else {
+        const existingToast = document.getElementById('toastNotification');
+        if (existingToast) {
+          existingToast.remove();
+        }
+        const toast = document.createElement('div');
+        toast.id = 'toastNotification';
+        toast.style.cssText = `
+          position: fixed;
+          top: 20px;
+          right: 20px;
+          z-index: 10001;
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+          color: white;
+          padding: 20px 24px;
+          border-radius: 16px;
+          box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+          display: flex;
+          align-items: center;
+          gap: 16px;
+          min-width: 280px;
+          animation: toastSlideIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        `;
+        toast.innerHTML = `
+          <div style="font-size: 16px; font-weight: 600;">🔊 Bildirimler açıldı</div>
+        `;
+        document.body.appendChild(toast);
+        setTimeout(() => {
+          toast.style.animation = 'toastSlideOut 0.3s ease forwards';
+          setTimeout(() => toast.remove(), 300);
+        }, 2000);
+      }
+    }
+
+    // Sessize Al Durumunu Yükle
+    function loadNotificationsMuteState() {
+      try {
+        const saved = localStorage.getItem('notificationsMuted');
+        notificationsMuted = saved === 'true';
+      } catch (e) {
+        console.warn('Sessize al durumu yüklenemedi:', e);
+        notificationsMuted = false;
+      }
+    }
+
+    // Bildirim Modal'ını Kapat
+    function hideNotificationsModal() {
+      const modal = document.getElementById('notificationsModal');
+      if (modal) {
+        modal.style.display = 'none';
+      }
+    }
+
+    // Bildirim Modal İçeriğini Render Et
+    function renderNotificationsModal() {
+      const container = document.getElementById('notificationsList');
+      if (!container) return;
+
+      if (notificationsHistory.length === 0) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 60px 20px; color: #9ca3af;">
+            <div style="font-size: 48px; margin-bottom: 16px;">🔔</div>
+            <div style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #6b7280;">Henüz bildirim yok</div>
+            <div style="font-size: 14px;">Bildirimler burada görünecek</div>
+          </div>
+        `;
+        return;
+      }
+
+      const html = notificationsHistory.map(notification => {
+        const timeAgo = getTimeAgo(notification.timestamp);
+        const icon = notification.type === 'success' 
+          ? '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>'
+          : '<svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>';
+        
+        const bgColor = notification.type === 'success' 
+          ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+          : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+        
+        return `
+          <div class="notification-item" style="background: ${bgColor}; color: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+            <div style="display: flex; align-items: flex-start; gap: 12px;">
+              <div style="width: 36px; height: 36px; background: rgba(255,255,255,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;">
+                ${icon}
+              </div>
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-size: 14px; font-weight: 700; margin-bottom: 6px; opacity: 0.95;">${notification.title}</div>
+                <div style="font-size: 13px; font-weight: 500; line-height: 1.5; opacity: 0.9; margin-bottom: 8px;">${notification.message}</div>
+                <div style="font-size: 11px; opacity: 0.7; font-weight: 600;">${timeAgo}</div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = html;
+    }
+
+    // Zaman farkını hesapla (örn: "2 dakika önce")
+    function getTimeAgo(date) {
+      const now = new Date();
+      const diff = now - date;
+      const seconds = Math.floor(diff / 1000);
+      const minutes = Math.floor(seconds / 60);
+      const hours = Math.floor(minutes / 60);
+      const days = Math.floor(hours / 24);
+
+      if (days > 0) {
+        return `${days} gün önce`;
+      } else if (hours > 0) {
+        return `${hours} saat önce`;
+      } else if (minutes > 0) {
+        return `${minutes} dakika önce`;
+      } else {
+        return 'Az önce';
       }
     }
 
@@ -3151,8 +4107,13 @@
     window.closeDateFilterModal = closeDateFilterModal;
     window.showAnalysisModal = showAnalysisModal;
     window.closeAnalysisModal = closeAnalysisModal;
+    window.showNotificationsModal = showNotificationsModal;
+    window.toggleNotificationsMute = toggleNotificationsMute;
+    window.hideNotificationsModal = hideNotificationsModal;
     window.logout = function() {
       sessionStorage.removeItem('adminAuthenticated');
+      localStorage.removeItem('adminAuthenticated');
+      localStorage.removeItem('adminRememberMe');
       isAuthenticated = false;
       if (realtimeUnsubscribe) {
         realtimeUnsubscribe();
@@ -3230,74 +4191,282 @@
     /* Header kaldırıldı - navbar kullanılıyor */
 
     /* Login - sade, aydınlık */
-    .pin-section {
-      background: var(--bg-subtle);
-      padding: 22px 18px 18px;
-      border-radius: var(--radius-lg);
-      text-align: center;
-      border: 1px solid var(--border-subtle);
+    /* Modern Login Container - Minimal & Elegant */
+    .login-container {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #f8fafc;
+      padding: 20px;
+      z-index: 1000;
     }
 
-    .pin-section h2 {
-      font-size: 18px;
-      font-weight: 600;
-      margin-bottom: 16px;
-      color: var(--text-main);
-    }
-
-    .pin-input {
-      padding: 12px 16px;
-      font-size: 18px;
-      border-radius: 999px;
-      width: 100%;
-      max-width: 260px;
-      text-align: center;
-      margin: 8px auto 4px;
-      font-weight: 600;
-      letter-spacing: 4px;
-      border: 1px solid var(--border-subtle);
+    .login-card {
       background: #ffffff;
-      color: var(--text-main);
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+      border-radius: 20px;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.08), 0 0 0 1px rgba(0, 0, 0, 0.04);
+      overflow: hidden;
+      animation: loginCardSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
     }
 
-    .pin-input::placeholder {
-      color: #c4c4d0;
+    @keyframes loginCardSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
-    .pin-input:focus {
-      outline: none;
-      border-color: var(--primary);
-      box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+    .login-card-header {
+      padding: 48px 40px 32px;
+      text-align: center;
+      background: #ffffff;
+      border-bottom: 1px solid #f1f5f9;
     }
 
-    .pin-btn {
-      padding: 11px 28px;
-      margin-top: 10px;
-      border-radius: 999px;
-      border: none;
-      background: linear-gradient(90deg, var(--primary) 0%, var(--primary-strong) 100%);
-      color: #ffffff;
+    .login-logo {
+      width: 72px;
+      height: 72px;
+      margin: 0 auto 24px;
+      background: #f8fafc;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid #e2e8f0;
+    }
+
+    .login-logo-img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      border-radius: 15px;
+    }
+
+    .login-logo-fallback {
+      font-size: 36px;
+      font-weight: 800;
+      color: #1e293b;
+      letter-spacing: -1px;
+    }
+
+    .login-title {
+      font-size: 28px;
+      font-weight: 800;
+      margin: 0 0 6px 0;
+      color: #0f172a;
+      letter-spacing: -0.5px;
+    }
+
+    .login-subtitle {
       font-size: 14px;
+      font-weight: 500;
+      margin: 0;
+      color: #64748b;
+      letter-spacing: 0.2px;
+    }
+
+    .login-card-body {
+      padding: 32px 40px 40px;
+    }
+
+    .login-form-group {
+      margin-bottom: 20px;
+    }
+
+    .login-label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
       font-weight: 600;
+      color: #475569;
+      margin-bottom: 8px;
+      letter-spacing: 0.2px;
+    }
+
+    .login-icon {
+      color: #64748b;
+      flex-shrink: 0;
+      opacity: 0.7;
+    }
+
+    .login-input {
+      width: 100%;
+      padding: 14px 18px;
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 1px;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      background: #ffffff;
+      color: #0f172a;
+      transition: all 0.2s ease;
+    }
+
+    .login-input::placeholder {
+      color: #94a3b8;
+      letter-spacing: 0;
+      font-weight: 400;
+    }
+
+    .login-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+      background: #ffffff;
+    }
+
+    .login-remember {
+      margin-bottom: 24px;
+    }
+
+    .remember-checkbox-label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
       cursor: pointer;
-      display: inline-flex;
+      user-select: none;
+    }
+
+    .remember-checkbox {
+      display: none;
+    }
+
+    .remember-checkmark {
+      width: 18px;
+      height: 18px;
+      border: 1.5px solid #cbd5e1;
+      border-radius: 5px;
+      background: #ffffff;
+      position: relative;
+      transition: all 0.2s ease;
+      flex-shrink: 0;
+    }
+
+    .remember-checkbox:checked + .remember-checkmark {
+      background: #3b82f6;
+      border-color: #3b82f6;
+    }
+
+    .remember-checkbox:checked + .remember-checkmark::after {
+      content: '';
+      position: absolute;
+      left: 5px;
+      top: 2px;
+      width: 4px;
+      height: 8px;
+      border: solid white;
+      border-width: 0 2px 2px 0;
+      transform: rotate(45deg);
+    }
+
+    .remember-text {
+      font-size: 13px;
+      font-weight: 500;
+      color: #64748b;
+      transition: color 0.2s ease;
+    }
+
+    .remember-checkbox-label:hover .remember-text {
+      color: #475569;
+    }
+
+    .login-btn {
+      width: 100%;
+      padding: 14px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      background: #0f172a;
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.15);
+      transition: all 0.2s ease;
+      letter-spacing: 0.3px;
+    }
+
+    .login-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(15, 23, 42, 0.2);
+      background: #1e293b;
+    }
+
+    .login-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.15);
+    }
+
+    .login-btn-icon {
+      transition: transform 0.2s ease;
+    }
+
+    .login-btn:hover .login-btn-icon {
+      transform: translateX(3px);
+    }
+
+    .login-card-footer {
+      padding: 20px 40px;
+      background: #f8fafc;
+      border-top: 1px solid #f1f5f9;
+      text-align: center;
+    }
+
+    .login-footer-text {
+      display: flex;
       align-items: center;
       justify-content: center;
       gap: 6px;
-      box-shadow: 0 8px 18px rgba(220, 38, 38, 0.25);
-      transition: transform 0.12s ease, box-shadow 0.12s ease, filter 0.12s ease;
+      font-size: 11px;
+      font-weight: 500;
+      color: #94a3b8;
+      letter-spacing: 0.3px;
     }
 
-    .pin-btn:hover {
-      transform: translateY(-1px);
-      box-shadow: 0 12px 26px rgba(220, 38, 38, 0.30);
-      filter: brightness(1.02);
+    .login-footer-text svg {
+      color: #64748b;
+      opacity: 0.6;
     }
 
-    .pin-btn:active {
-      transform: translateY(0);
-      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
+    @media (max-width: 768px) {
+      .login-card {
+        max-width: 100%;
+        border-radius: 16px;
+      }
+
+      .login-card-header {
+        padding: 40px 28px 28px;
+      }
+
+      .login-logo {
+        width: 64px;
+        height: 64px;
+        margin-bottom: 20px;
+      }
+
+      .login-title {
+        font-size: 24px;
+      }
+
+      .login-card-body {
+        padding: 28px 28px 32px;
+      }
+
+      .login-card-footer {
+        padding: 16px 28px;
+      }
     }
 
     /* Dashboard shell */
@@ -3389,7 +4558,8 @@
     }
 
     .refresh-btn,
-    .logout-btn {
+    .logout-btn,
+    .notifications-btn {
       border-radius: 12px;
       padding: 10px 18px;
       font-size: 13px;
@@ -3401,6 +4571,7 @@
       cursor: pointer;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+      position: relative;
     }
 
     .refresh-btn {
@@ -3427,6 +4598,118 @@
       background: linear-gradient(135deg, #db2777 0%, #be185d 100%);
       box-shadow: 0 4px 16px rgba(236, 72, 153, 0.35);
       transform: translateY(-1px);
+    }
+
+    .notifications-btn {
+      border-color: #6366f1;
+      color: #6366f1;
+      background: #ffffff;
+    }
+
+    .notifications-btn:hover {
+      border-color: #4f46e5;
+      background: #eef2ff;
+      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.25);
+      transform: translateY(-1px);
+    }
+
+    .notifications-badge {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 10px;
+      min-width: 18px;
+      height: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+      border: 2px solid #ffffff;
+    }
+
+    /* Bildirimler Modal */
+    .notifications-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      backdrop-filter: blur(4px);
+    }
+
+    .notifications-modal-content {
+      background: white;
+      border-radius: 20px;
+      width: 100%;
+      max-width: 500px;
+      max-height: 80vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 25px 70px rgba(0, 0, 0, 0.4);
+      animation: modalSlideIn 0.3s ease;
+    }
+
+    .notifications-modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 24px;
+      border-bottom: 1px solid #e5e7eb;
+      background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+      border-radius: 20px 20px 0 0;
+    }
+
+    .notifications-list {
+      padding: 20px 24px;
+      overflow-y: auto;
+      flex: 1;
+      max-height: calc(80vh - 80px);
+    }
+
+    .notification-item {
+      transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .notification-item:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2) !important;
+    }
+
+    @keyframes modalSlideIn {
+      from {
+        opacity: 0;
+        transform: translateY(20px) scale(0.95);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+
+    @media (max-width: 768px) {
+      .notifications-modal-content {
+        max-width: 100%;
+        max-height: 90vh;
+        border-radius: 16px;
+      }
+
+      .notifications-modal-header {
+        padding: 16px 20px;
+        border-radius: 16px 16px 0 0;
+      }
+
+      .notifications-list {
+        padding: 16px 20px;
+        max-height: calc(90vh - 70px);
+      }
     }
 
     /* Stats */
@@ -6044,6 +7327,379 @@
       color: var(--text-muted);
     }
 
+    /* Ürün Satış Tablosu Başlık */
+    .products-table-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 16px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .products-table-title {
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 16px;
+      font-weight: 700;
+      color: #1f2937;
+    }
+
+    .products-table-title-text {
+      white-space: nowrap;
+    }
+
+    .products-table-period {
+      font-size: 12px;
+      color: #6b7280;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    @media (max-width: 768px) {
+      .products-table-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+      }
+
+      .products-table-title {
+        font-size: 14px;
+      }
+
+      .products-table-title-text {
+        font-size: 13px;
+      }
+
+      .products-table-period {
+        font-size: 11px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .products-table-title {
+        font-size: 13px;
+      }
+
+      .products-table-title-text {
+        font-size: 12px;
+      }
+
+      .products-table-period {
+        font-size: 10px;
+      }
+    }
+
+    /* Ürün Satış Tablosu */
+    .products-sales-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #ffffff;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      font-size: 13px;
+      table-layout: fixed;
+    }
+
+    .products-sales-table thead {
+      background: linear-gradient(135deg, #1f2937 0%, #374151 100%);
+      color: #ffffff;
+    }
+
+    .products-sales-table thead th {
+      padding: 12px 8px;
+      font-weight: 700;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+      border-bottom: 2px solid #4b5563;
+      white-space: nowrap;
+    }
+
+    .products-sales-table .col-rank {
+      width: 35px;
+      text-align: center;
+    }
+
+    .products-sales-table .col-product {
+      width: auto;
+      text-align: left;
+      min-width: 0;
+    }
+
+    .products-sales-table .col-quantity {
+      width: 60px;
+      text-align: right;
+    }
+
+    .products-sales-table .col-revenue {
+      width: 90px;
+      text-align: right;
+    }
+
+    .products-sales-table .col-percentage {
+      width: 80px;
+      text-align: right;
+    }
+
+    .products-sales-table tbody tr {
+      border-bottom: 1px solid #f3f4f6;
+      transition: all 0.2s ease;
+    }
+
+    .products-sales-table tbody tr:hover {
+      background: linear-gradient(90deg, #f9fafb 0%, #ffffff 100%);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+    }
+
+    .products-sales-table tbody td {
+      padding: 10px 8px;
+      border-right: 1px solid #f3f4f6;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .products-sales-table tbody td:last-child {
+      border-right: none;
+    }
+
+    .products-sales-table .col-rank {
+      color: #6b7280;
+      font-weight: 600;
+      font-size: 11px;
+    }
+
+    .products-sales-table .col-product {
+      font-weight: 600;
+      color: #1f2937;
+      font-size: 12px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 0;
+    }
+
+    .products-sales-table .col-quantity {
+      color: #374151;
+      font-weight: 600;
+      font-size: 12px;
+    }
+
+    .products-sales-table .col-revenue {
+      color: #059669;
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .products-sales-table .col-percentage {
+      padding: 8px;
+    }
+
+    .percentage-cell {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .percentage-bar {
+      flex: 1;
+      max-width: 50px;
+      background: #e5e7eb;
+      border-radius: 3px;
+      height: 6px;
+      overflow: hidden;
+    }
+
+    .percentage-fill {
+      background: linear-gradient(90deg, #10b981 0%, #059669 100%);
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
+
+    .percentage-text {
+      color: #6b7280;
+      font-weight: 600;
+      font-size: 11px;
+      min-width: 35px;
+      text-align: right;
+    }
+
+    .products-sales-table tfoot {
+      background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+      border-top: 2px solid #e5e7eb;
+    }
+
+    .products-sales-table tfoot td {
+      padding: 12px 8px;
+      border-right: 1px solid #e5e7eb;
+      font-size: 12px;
+    }
+
+    .products-sales-table tfoot td:last-child {
+      border-right: none;
+    }
+
+    .table-footer .footer-label {
+      text-align: left;
+      font-weight: 700;
+      color: #1f2937;
+      font-size: 13px;
+    }
+
+    .table-footer .footer-quantity {
+      text-align: right;
+      font-weight: 700;
+      color: #374151;
+      font-size: 12px;
+    }
+
+    .table-footer .footer-revenue {
+      text-align: right;
+      font-weight: 700;
+      color: #059669;
+      font-size: 13px;
+    }
+
+    .table-footer .footer-percentage {
+      text-align: right;
+      font-weight: 700;
+      color: #1f2937;
+      font-size: 12px;
+    }
+
+    .empty-state-cell {
+      text-align: center;
+      padding: 40px 20px !important;
+      color: #9ca3af;
+    }
+
+    .empty-icon-large {
+      font-size: 40px;
+      margin-bottom: 10px;
+    }
+
+    .empty-title {
+      font-weight: 600;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .empty-subtitle {
+      font-size: 12px;
+    }
+
+    @media (max-width: 768px) {
+      .products-sales-table {
+        font-size: 11px;
+      }
+
+      .products-sales-table thead th {
+        padding: 10px 6px;
+        font-size: 10px;
+      }
+
+      .products-sales-table tbody td {
+        padding: 8px 6px;
+        font-size: 11px;
+      }
+
+      .products-sales-table tfoot td {
+        padding: 10px 6px;
+        font-size: 11px;
+      }
+
+      .products-sales-table .col-rank {
+        width: 30px;
+      }
+
+      .products-sales-table .col-quantity {
+        width: 50px;
+      }
+
+      .products-sales-table .col-revenue {
+        width: 75px;
+        font-size: 12px;
+      }
+
+      .products-sales-table .col-percentage {
+        width: 70px;
+      }
+
+      .percentage-bar {
+        max-width: 40px;
+        height: 5px;
+      }
+
+      .percentage-text {
+        font-size: 10px;
+        min-width: 30px;
+      }
+
+      .products-sales-table .col-product {
+        font-size: 11px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .products-sales-table {
+        font-size: 10px;
+      }
+
+      .products-sales-table thead th {
+        padding: 8px 4px;
+        font-size: 9px;
+      }
+
+      .products-sales-table tbody td {
+        padding: 6px 4px;
+        font-size: 10px;
+      }
+
+      .products-sales-table tfoot td {
+        padding: 8px 4px;
+        font-size: 10px;
+      }
+
+      .products-sales-table .col-rank {
+        width: 25px;
+        font-size: 10px;
+      }
+
+      .products-sales-table .col-quantity {
+        width: 45px;
+        font-size: 10px;
+      }
+
+      .products-sales-table .col-revenue {
+        width: 70px;
+        font-size: 11px;
+      }
+
+      .products-sales-table .col-percentage {
+        width: 65px;
+      }
+
+      .percentage-bar {
+        max-width: 35px;
+        height: 4px;
+      }
+
+      .percentage-text {
+        font-size: 9px;
+        min-width: 28px;
+      }
+
+      .products-sales-table .col-product {
+        font-size: 10px;
+      }
+    }
+
     /* Personel kartları */
     .staff-container {
       padding: 10px 0 6px;
@@ -6611,11 +8267,61 @@
   </div>
 
   <div class="container">
-    <div id="loginSection" class="pin-section">
-      <h2>PIN ile Giriş</h2>
-      <input type="password" id="pinInput" class="pin-input" placeholder="PIN Girin" maxlength="10" autofocus>
-      <br>
-      <button onclick="verifyPin()" class="pin-btn">🔓 Giriş Yap</button>
+    <div id="loginSection" class="login-container">
+      <div class="login-card">
+        <div class="login-card-header">
+          <div class="login-logo">
+            <img src="logo.png" alt="MAKARA Logo" class="login-logo-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+            <div class="login-logo-fallback" style="display: none;">M</div>
+          </div>
+          <h1 class="login-title">MAKARA</h1>
+          <p class="login-subtitle">Admin Dashboard</p>
+        </div>
+        
+        <div class="login-card-body">
+          <div class="login-form-group">
+            <label for="pinInput" class="login-label">
+              <svg class="login-icon" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+              </svg>
+              <span>PIN Kodu</span>
+            </label>
+            <input 
+              type="password" 
+              id="pinInput" 
+              class="login-input" 
+              placeholder="PIN kodunuzu girin" 
+              maxlength="10" 
+              autofocus
+              onkeypress="if(event.key === 'Enter') verifyPin()"
+            >
+          </div>
+          
+          <div class="login-remember">
+            <label class="remember-checkbox-label">
+              <input type="checkbox" id="rememberMe" class="remember-checkbox">
+              <span class="remember-checkmark"></span>
+              <span class="remember-text">Beni Hatırla</span>
+            </label>
+          </div>
+          
+          <button onclick="verifyPin()" class="login-btn">
+            <span>Giriş Yap</span>
+            <svg class="login-btn-icon" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
+            </svg>
+          </button>
+        </div>
+        
+        <div class="login-card-footer">
+          <div class="login-footer-text">
+            <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+            </svg>
+            <span>Güvenli Giriş</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <div id="dashboard" class="dashboard">
@@ -6637,6 +8343,13 @@
               </svg>
               <span>Yenile</span>
             </button>
+            <button onclick="showNotificationsModal()" class="notifications-btn" id="notificationsBtn">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/>
+              </svg>
+              <span>Bildirimler</span>
+              <span id="notificationsBadge" class="notifications-badge" style="display: none;">0</span>
+            </button>
             <button onclick="logout()" class="logout-btn">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/>
@@ -6646,6 +8359,28 @@
           </div>
         </div>
       </nav>
+      
+      <!-- Bildirimler Modal -->
+      <div id="notificationsModal" class="notifications-modal" onclick="if(event.target === this) hideNotificationsModal()">
+        <div class="notifications-modal-content">
+          <div class="notifications-modal-header">
+            <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: #1f2937; display: flex; align-items: center; gap: 10px;">
+              <span id="notificationsIcon">🔔</span>
+              <span>Bildirimler</span>
+            </h2>
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <button id="muteNotificationsBtn" onclick="toggleNotificationsMute()" style="background: #f3f4f6; border: none; color: #6b7280; padding: 8px 14px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; transition: all 0.2s;" onmouseover="this.style.background='#e5e7eb'; this.style.color='#374151';" onmouseout="this.style.background='#f3f4f6'; this.style.color='#6b7280';">
+                <span id="muteIcon">🔇</span>
+                <span id="muteText">Sessize Al</span>
+              </button>
+              <button onclick="hideNotificationsModal()" style="background: #f3f4f6; border: none; color: #6b7280; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#e5e7eb'; this.style.color='#374151';" onmouseout="this.style.background='#f3f4f6'; this.style.color='#6b7280';">×</button>
+            </div>
+          </div>
+          <div id="notificationsList" class="notifications-list">
+            <!-- Bildirimler buraya eklenecek -->
+          </div>
+        </div>
+      </div>
       
       <!-- Tab Butonları - En Üstte Modern ve Kurumsal -->
       <div class="tab-buttons-container">

@@ -7594,17 +7594,17 @@ function generateMobileHTML(serverURL) {
     </div>
   </div>
   
-  <!-- Türk Kahvesi Seçenek Modal -->
+  <!-- Türk Kahvesi / Menengiç Kahve Seçenek Modal -->
   <div id="turkishCoffeeModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideTurkishCoffeeModal()">
     <div style="background: white; border-radius: 24px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;">
       <div style="background: linear-gradient(135deg, #92400e 0%, #78350f 100%); color: white; padding: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-          <h2 style="margin: 0; font-size: 22px; font-weight: 900;">Türk Kahvesi Seçimi</h2>
+          <h2 id="turkishCoffeeModalTitle" style="margin: 0; font-size: 22px; font-weight: 900;">Türk Kahvesi Seçimi</h2>
           <button onclick="hideTurkishCoffeeModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; transition: all 0.3s;" onmouseover="this.style.background='rgba(255,255,255,0.3)';" onmouseout="this.style.background='rgba(255,255,255,0.2)';">×</button>
         </div>
       </div>
       <div style="padding: 24px;">
-        <p style="margin: 0 0 20px 0; font-size: 15px; color: #6b7280; font-weight: 600; text-align: center;">Lütfen Türk Kahvesi tercihinizi seçin:</p>
+        <p id="turkishCoffeeModalDescription" style="margin: 0 0 20px 0; font-size: 15px; color: #6b7280; font-weight: 600; text-align: center;">Lütfen Türk Kahvesi tercihinizi seçin:</p>
         <div style="display: flex; flex-direction: column; gap: 12px;">
           <button onclick="selectTurkishCoffeeOption('Sade')" class="turkish-coffee-option" style="padding: 18px 24px; background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border: 2px solid #e5e7eb; border-radius: 16px; font-size: 17px; font-weight: 700; color: #1f2937; cursor: pointer; transition: all 0.3s; text-align: center; display: flex; align-items: center; justify-content: center; gap: 12px;" onmouseover="this.style.background='linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%)'; this.style.borderColor='#92400e'; this.style.transform='translateY(-2px)'; this.style.boxShadow='0 8px 20px rgba(146, 64, 14, 0.15)';" onmouseout="this.style.background='linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)'; this.style.borderColor='#e5e7eb'; this.style.transform='translateY(0)'; this.style.boxShadow='none';">
             <span style="font-size: 24px;">☕</span>
@@ -8720,9 +8720,11 @@ function generateMobileHTML(serverURL) {
         const stock = trackStock && prod.stock !== undefined ? (prod.stock || 0) : null;
         const isOutOfStock = trackStock && stock !== null && stock === 0;
         const isLowStock = trackStock && stock !== null && stock > 0 && stock <= 5;
-        // Türk Kahvesi için özel modal açma
+        // Türk Kahvesi ve Menengiç Kahve için özel modal açma
         const isTurkishCoffee = prod.name.toLowerCase().includes('türk kahvesi') || prod.name.toLowerCase().includes('turk kahvesi');
-        const onClickHandler = isOutOfStock ? '' : (isTurkishCoffee ? 'onclick="showTurkishCoffeeModal(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"' : 'onclick="addToCart(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"');
+        const isMenengicCoffee = prod.name.toLowerCase().includes('menengiç kahve') || prod.name.toLowerCase().includes('menengic kahve');
+        const needsCoffeeModal = isTurkishCoffee || isMenengicCoffee;
+        const onClickHandler = isOutOfStock ? '' : (needsCoffeeModal ? 'onclick="showTurkishCoffeeModal(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"' : 'onclick="addToCart(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"');
         const cardStyle = isOutOfStock ? backgroundStyle + ' opacity: 0.6; cursor: not-allowed; pointer-events: none;' : backgroundStyle;
         
         // Kilit ikonu (sadece stok 0 olduğunda)
@@ -8786,6 +8788,16 @@ function generateMobileHTML(serverURL) {
     
     function showTurkishCoffeeModal(productId, name, price) {
       pendingTurkishCoffeeProduct = { id: productId, name: name, price: price };
+      // Modal başlığını ve açıklamasını güncelle
+      const modalTitle = document.getElementById('turkishCoffeeModalTitle');
+      const modalDescription = document.getElementById('turkishCoffeeModalDescription');
+      const isMenengic = name.toLowerCase().includes('menengiç kahve') || name.toLowerCase().includes('menengic kahve');
+      if (modalTitle) {
+        modalTitle.textContent = isMenengic ? 'Menengiç Kahve Seçimi' : 'Türk Kahvesi Seçimi';
+      }
+      if (modalDescription) {
+        modalDescription.textContent = isMenengic ? 'Lütfen Menengiç Kahve tercihinizi seçin:' : 'Lütfen Türk Kahvesi tercihinizi seçin:';
+      }
       document.getElementById('turkishCoffeeModal').style.display = 'flex';
     }
     
@@ -8814,8 +8826,13 @@ function generateMobileHTML(serverURL) {
         }
       }
       
-      // Ürün ismini seçeneğe göre güncelle: "Sade Türk Kahvesi", "Orta Türk Kahvesi", "Şekerli Türk Kahvesi"
-      const productName = option + ' Türk Kahvesi';
+      // Ürün ismini seçeneğe göre güncelle
+      // Eğer Menengiç Kahve ise "Sade Menengiç Kahve", "Orta Menengiç Kahve", "Şekerli Menengiç Kahve"
+      // Eğer Türk Kahvesi ise "Sade Türk Kahvesi", "Orta Türk Kahvesi", "Şekerli Türk Kahvesi"
+      const originalName = pendingTurkishCoffeeProduct.name.toLowerCase();
+      const isMenengic = originalName.includes('menengiç kahve') || originalName.includes('menengic kahve');
+      const coffeeType = isMenengic ? 'Menengiç Kahve' : 'Türk Kahvesi';
+      const productName = option + ' ' + coffeeType;
       
       const existing = cart.find(item => item.id === pendingTurkishCoffeeProduct.id && item.name === productName);
       if (existing) {

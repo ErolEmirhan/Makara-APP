@@ -1,6 +1,6 @@
 {
   "name": "makara-pos",
-  "version": "2.4.8",
+  "version": "2.5.0",
   "description": "MAKARA - Modern POS Uygulaması",
   "main": "electron/main.js",
   "scripts": {
@@ -8,9 +8,10 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on tcp:5173 && electron .",
     "build": "vite build",
+    "clean": "node -e \"const fs = require('fs'); const path = require('path'); const os = require('os'); function rmDir(dir) { if (fs.existsSync(dir)) { fs.readdirSync(dir).forEach(f => { const curPath = path.join(dir, f); if (fs.lstatSync(curPath).isDirectory()) rmDir(curPath); else fs.unlinkSync(curPath); }); fs.rmdirSync(dir); } } try { rmDir('release'); console.log('Release klasörü temizlendi'); } catch(e) { console.log('Temizleme atlandı (normal):', e.message); } try { const buildDir = path.join(os.homedir(), '..', 'Makara-APP-Builds'); if (fs.existsSync(buildDir)) rmDir(buildDir); } catch(e) {} \"",
     "build:electron": "npm run build && electron-builder",
-    "build:win": "npm run build && electron-builder --win",
-    "build:win:publish": "npm run build && electron-builder --win --publish always",
+    "build:win": "npm run clean && npm run build && electron-builder --win",
+    "build:win:publish": "npm run clean && npm run build && electron-builder --win --publish always",
     "preview": "vite preview",
     "version:bump": "node scripts/update-version.js",
     "deploy": "npm run version:bump && firebase deploy --only hosting"
@@ -46,12 +47,12 @@
     "vite": "^5.0.11",
     "wait-on": "^7.2.0"
   },
-  "build": {
-    "appId": "com.makara.pos",
-    "productName": "MAKARA POS",
-    "directories": {
-      "output": "release"
-    },
+    "build": {
+      "appId": "com.makara.pos",
+      "productName": "MAKARA POS",
+      "directories": {
+        "output": "../Makara-APP-Builds"
+      },
     "files": [
       "dist/**/*",
       "electron/**/*",

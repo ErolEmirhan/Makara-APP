@@ -29,7 +29,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     name: `İçeri ${i + 1}`
   }));
 
-  const outsideTables = Array.from({ length: 20 }, (_, i) => ({
+  const outsideTables = Array.from({ length: 24 }, (_, i) => ({
     id: `outside-${i + 1}`,
     number: i + 1,
     type: 'outside',

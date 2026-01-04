@@ -9800,7 +9800,7 @@ function startAPIServer() {
         hasOrder: hasPendingOrder
       });
     }
-    for (let i = 1; i <= 20; i++) {
+    for (let i = 1; i <= 24; i++) {
       const tableId = `outside-${i}`;
       const hasPendingOrder = (db.tableOrders || []).some(
         o => o.table_id === tableId && o.status === 'pending'

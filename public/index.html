@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.10">
+  <link rel="manifest" href="/manifest.json?v=2.4.12">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.10';
+      const APP_VERSION = '2.4.12';
       const STORAGE_KEY = 'makara_admin_version';
       
       // Mevcut versiyonu kontrol et
@@ -115,6 +115,10 @@
     let revenueNotificationSent = false; // Günlük ciro bildirimi gönderildi mi (günlük kontrol için)
     let lastRevenueNotificationDate = null; // Son bildirim gönderilen tarih
     let notificationsMuted = false; // Bildirimler sessize alındı mı
+    let onlineApp = null; // Online siparişler Firebase app
+    let onlineDb = null; // Online siparişler Firestore
+    let onlineOrdersUnsubscribe = null; // Online siparişler real-time listener
+    let onlineOrders = []; // Online siparişler listesi
 
     try {
       // Ana Firebase zaten başlatılmış mı kontrol et
@@ -145,6 +149,30 @@
         console.error('❌ Masalar Firebase başlatma hatası:', tablesError);
       }
       
+      // Online siparişler için ayrı Firebase başlat (makaraonline-5464e)
+      const onlineFirebaseConfig = {
+        apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
+        authDomain: "makaraonline-5464e.firebaseapp.com",
+        projectId: "makaraonline-5464e",
+        storageBucket: "makaraonline-5464e.firebasestorage.app",
+        messagingSenderId: "1041589485836",
+        appId: "1:1041589485836:web:06119973a19da0a14f0929",
+        measurementId: "G-MKPPB635ZZ"
+      };
+      
+      try {
+        onlineApp = firebase.initializeApp(onlineFirebaseConfig, 'onlineOrders');
+        onlineDb = firebase.firestore(onlineApp);
+        console.log('✅ Online Siparişler Firebase başarıyla başlatıldı (makaraonline-5464e)');
+        
+        // Online siparişleri dinle (badge için)
+        // Fonksiyon tanımlandıktan sonra çağrılacak (sayfa yüklendikten sonra)
+        // Şimdilik sadece bağlantıyı hazırla, listener window.load event'inde başlatılacak
+      } catch (onlineError) {
+        console.error('❌ Online Siparişler Firebase başlatma hatası:', onlineError);
+        console.error('Hata detayları:', onlineError.message, onlineError.code);
+      }
+      
       document.getElementById('errorMessage')?.remove();
     } catch (error) {
       console.error('❌ Firebase başlatma hatası:', error);
@@ -155,8 +183,53 @@
       document.body.insertBefore(errorDiv, document.body.firstChild);
     }
 
-    // PIN girişi
-    const adminPin = '1234';
+    // PIN girişi - Firebase'den yüklenecek (2 şifre desteği)
+    let adminPins = ['Mfp14531789.', '102030']; // Varsayılan şifreler (Firebase'den yüklenene kadar)
+    
+    // Firebase'den şifreleri yükle
+    async function loadAdminPins() {
+      try {
+        const pinDoc = await db.collection('admin').doc('pin').get();
+        if (pinDoc.exists && pinDoc.data().passwords && Array.isArray(pinDoc.data().passwords)) {
+          adminPins = pinDoc.data().passwords;
+          console.log('✅ Admin şifreleri Firebase\'den yüklendi');
+        } else {
+          // İlk kullanım - varsayılan şifreleri Firebase'e kaydet
+          await db.collection('admin').doc('pin').set({
+            passwords: adminPins,
+            updated_at: firebase.firestore.FieldValue.serverTimestamp()
+          });
+          console.log('✅ Varsayılan şifreler Firebase\'e kaydedildi');
+        }
+      } catch (error) {
+        console.error('❌ Şifre yükleme hatası:', error);
+        // Hata durumunda varsayılan şifreleri kullan
+      }
+    }
+    
+    // Şifreyi Firebase'e kaydet (mevcut şifreyi yeni şifre ile değiştir)
+    async function saveAdminPin(currentPin, newPin) {
+      try {
+        // Mevcut şifreyi bul ve değiştir
+        const pinIndex = adminPins.indexOf(currentPin);
+        if (pinIndex === -1) {
+          console.error('❌ Mevcut şifre bulunamadı');
+          return false;
+        }
+        
+        adminPins[pinIndex] = newPin;
+        
+        await db.collection('admin').doc('pin').set({
+          passwords: adminPins,
+          updated_at: firebase.firestore.FieldValue.serverTimestamp()
+        });
+        console.log('✅ Şifre başarıyla güncellendi');
+        return true;
+      } catch (error) {
+        console.error('❌ Şifre kaydetme hatası:', error);
+        return false;
+      }
+    }
 
     function showLogin() {
       const loginSection = document.getElementById('loginSection');
@@ -188,7 +261,8 @@
       const rememberMe = document.getElementById('rememberMe');
       const shouldRemember = rememberMe && rememberMe.checked;
       
-      if (pin === adminPin) {
+      // Şifrelerden herhangi biri ile eşleşiyor mu kontrol et
+      if (adminPins.includes(pin)) {
         isAuthenticated = true;
         sessionStorage.setItem('adminAuthenticated', 'true');
         
@@ -260,6 +334,23 @@
             
             // Push notification izni iste (sayfa yüklendiğinde)
             requestNotificationPermission();
+            
+            // Admin şifrelerini Firebase'den yükle
+            loadAdminPins();
+            
+            // Online siparişler listener'ını başlat (eğer Firebase bağlantısı hazırsa)
+            if (onlineDb) {
+              console.log('📡 Online siparişler listener başlatılıyor (window.load event)...');
+              setTimeout(() => {
+                if (typeof startOnlineOrdersListener === 'function') {
+                  startOnlineOrdersListener();
+                } else {
+                  console.warn('⚠️ startOnlineOrdersListener fonksiyonu henüz tanımlanmamış');
+                }
+              }, 1000);
+            } else {
+              console.warn('⚠️ Online Firebase bağlantısı hazır değil, listener başlatılamadı');
+            }
           }, 500);
         }
       }, 2500);
@@ -821,9 +912,12 @@
                       <h3 class="sale-id">Satış #${sale.sale_id || sale.id}</h3>
                       <p class="sale-time">${sale.sale_time || ''}</p>
                       <div class="sale-badges">
-                        <span class="badge badge-${sale.payment_method === 'Nakit' ? 'cash' : 'card'}">
-                          ${sale.payment_method === 'Nakit' ? '💵 Nakit' : '💳 Kart'}
-                        </span>
+                        ${sale.payment_method && sale.payment_method.includes('Online Satış') 
+                          ? `<span class="badge badge-online">🌐 ${sale.payment_method}</span>`
+                          : `<span class="badge badge-${sale.payment_method === 'Nakit' ? 'cash' : 'card'}">
+                              ${sale.payment_method === 'Nakit' ? '💵 Nakit' : '💳 Kart'}
+                            </span>`
+                        }
                         ${sale.staff_name ? `<span class="badge badge-staff">👤 ${sale.staff_name}</span>` : ''}
                         ${sale.table_name ? `<span class="badge badge-table">🪑 ${sale.table_name}${sale.table_type ? ` (${sale.table_type})` : ''}</span>` : ''}
                       </div>
@@ -1289,8 +1383,21 @@
       const completedRevenue = todaySales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       
       // Nakit ve kart tutarlarını hesapla (tamamlanmış satışlardan)
-      const cashSales = todaySales.filter(s => s.payment_method === 'Nakit');
-      const cardSales = todaySales.filter(s => s.payment_method === 'Kart' || (s.payment_method !== 'Nakit' && s.payment_method !== 'Masraf'));
+      // Online Satış (Nakit) -> Nakit'e ekle
+      // Online Satış (Kart) -> Kart'a ekle
+      // Online Satış -> Kart'a ekle (varsayılan)
+      const cashSales = todaySales.filter(s => 
+        s.payment_method === 'Nakit' || 
+        s.payment_method === 'Online Satış (Nakit)'
+      );
+      const cardSales = todaySales.filter(s => 
+        s.payment_method === 'Kart' || 
+        s.payment_method === 'Online Satış (Kart)' ||
+        s.payment_method === 'Online Satış' ||
+        (s.payment_method !== 'Nakit' && 
+         s.payment_method !== 'Online Satış (Nakit)' && 
+         s.payment_method !== 'Masraf')
+      );
       const cashTotal = cashSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       const cardTotal = cardSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       
@@ -1573,6 +1680,21 @@
       }
     }
 
+    function toggleStaffDateFilterModal(event) {
+      if (event) event.stopPropagation();
+      const modal = document.getElementById('staffDateFilterModal');
+      if (modal) {
+        modal.classList.toggle('show');
+      }
+    }
+
+    function closeStaffDateFilterModal() {
+      const modal = document.getElementById('staffDateFilterModal');
+      if (modal) {
+        modal.classList.remove('show');
+      }
+    }
+
     // Detaylı Raporlama render et
     function renderReports() {
       const container = document.getElementById('reportsContainer');
@@ -1680,6 +1802,17 @@
       });
 
       const totalRevenue = reportSales.reduce((sum, sale) => sum + parseFloat(sale.total_amount), 0);
+
+      // Online satışları filtrele ve ciro hesapla
+      const onlineSales = reportSales.filter(sale => 
+        sale.payment_method && (
+          sale.payment_method.includes('Online Satış') || 
+          sale.payment_method === 'Online Satış' ||
+          sale.payment_method === 'Online Satış (Kart)' ||
+          sale.payment_method === 'Online Satış (Nakit)'
+        )
+      );
+      const onlineRevenue = onlineSales.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
 
       // Seçilen zaman dilimindeki masrafları hesapla
       let periodExpenses = allSales.filter(sale => 
@@ -1836,6 +1969,36 @@
                     </linearGradient>
                   </defs>
                   <path d="M0,200 Q50,150 100,120 T200,80 L200,200 Z" fill="url(#expenseGradient)"/>
+                </svg>
+              </div>
+            </div>
+            <div class="period-online-revenue-card">
+              <div class="period-card-background" style="background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #6d28d9 100%);"></div>
+              <div class="period-card-icon" style="color: rgba(255, 255, 255, 0.95);">
+                <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="width: 32px; height: 32px;">
+                  <path d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+              <div class="period-revenue-content">
+                <div class="period-revenue-label" style="color: rgba(255, 255, 255, 0.95);">
+                  <span class="period-label-icon">🌐</span>
+                  <span>Seçilen Zaman Dilimi Online Cirosu</span>
+                </div>
+                <div class="period-revenue-period" style="color: rgba(255, 255, 255, 0.8);">${periodInfo}</div>
+                <div class="period-revenue-amount" style="color: #ffffff; font-size: 32px; font-weight: 800; text-shadow: 0 2px 8px rgba(0,0,0,0.2);">₺${onlineRevenue.toFixed(2)}</div>
+                <div style="margin-top: 8px; font-size: 13px; color: rgba(255, 255, 255, 0.85); font-weight: 500;">
+                  ${onlineSales.length} online satış
+                </div>
+              </div>
+              <div class="period-card-decoration">
+                <svg viewBox="0 0 200 200" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="onlineRevenueGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" style="stop-color:rgba(255,255,255,0.2);stop-opacity:1" />
+                      <stop offset="100%" style="stop-color:rgba(255,255,255,0);stop-opacity:1" />
+                    </linearGradient>
+                  </defs>
+                  <path d="M0,200 Q50,150 100,120 T200,80 L200,200 Z" fill="url(#onlineRevenueGradient)"/>
                 </svg>
               </div>
             </div>
@@ -3138,6 +3301,264 @@
       }
     }
 
+    // Online Siparişler Real-time Listener
+    function startOnlineOrdersListener() {
+      if (!onlineDb) {
+        console.warn('⚠️ Online Firebase bağlantısı yok, online siparişler dinlenemiyor');
+        return;
+      }
+      
+      console.log('📡 Online siparişler listener başlatılıyor...');
+      
+      // Önceki listener'ı temizle
+      if (onlineOrdersUnsubscribe) {
+        onlineOrdersUnsubscribe();
+        onlineOrdersUnsubscribe = null;
+      }
+      
+      // Sadece pending status'ündeki siparişleri dinle
+      // Not: orderBy composite index gerektirebilir, bu yüzden sadece where kullanıp client-side'da sıralama yapıyoruz
+      const ordersRef = onlineDb.collection('orders');
+      const query = ordersRef.where('status', '==', 'pending');
+      
+      console.log('📡 Firebase query oluşturuldu: orders collection, status == pending');
+      
+      onlineOrdersUnsubscribe = query.onSnapshot((snapshot) => {
+        onlineOrders = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          
+          // Tarih formatla - TablePanel'deki gibi createdAt (camelCase) kullanılıyor
+          let formattedDate = '';
+          let formattedTime = '';
+          let sortTimestamp = null;
+          
+          if (data.createdAt) {
+            const timestamp = data.createdAt.toDate ? data.createdAt.toDate() : new Date(data.createdAt.seconds * 1000);
+            formattedDate = timestamp.toLocaleDateString('tr-TR');
+            formattedTime = timestamp.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+            sortTimestamp = timestamp.getTime();
+          } else if (data.created_at) {
+            const timestamp = data.created_at.toDate ? data.created_at.toDate() : new Date(data.created_at.seconds * 1000);
+            formattedDate = timestamp.toLocaleDateString('tr-TR');
+            formattedTime = timestamp.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+            sortTimestamp = timestamp.getTime();
+          } else if (data.timestamp) {
+            const timestamp = data.timestamp.toDate ? data.timestamp.toDate() : new Date(data.timestamp.seconds * 1000);
+            formattedDate = timestamp.toLocaleDateString('tr-TR');
+            formattedTime = timestamp.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' });
+            sortTimestamp = timestamp.getTime();
+          }
+          
+          onlineOrders.push({
+            id: doc.id,
+            ...data,
+            customer_name: data.name || data.customer_name || '',
+            customer_phone: data.phone || data.customer_phone || '',
+            customer_address: data.address || data.customer_address || '',
+            total_amount: data.total || data.total_amount || 0,
+            formattedDate,
+            formattedTime,
+            _sortTimestamp: sortTimestamp || 0
+          });
+        });
+        
+        // Client-side'da tarihe göre sırala (en yeni önce)
+        onlineOrders.sort((a, b) => {
+          if (b._sortTimestamp && a._sortTimestamp) {
+            return b._sortTimestamp - a._sortTimestamp;
+          }
+          return 0;
+        });
+        
+        console.log('📦 Online siparişler güncellendi:', onlineOrders.length, 'sipariş');
+        
+        // Badge güncelle
+        updateOnlineOrdersBadge();
+        
+        // Eğer modal açıksa, listeyi güncelle
+        const modal = document.getElementById('onlineOrdersModal');
+        if (modal && modal.style.display === 'flex') {
+          renderOnlineOrders();
+        }
+      }, (error) => {
+        console.error('❌ Online siparişler dinleme hatası:', error);
+        console.error('Hata detayları:', error.message, error.code);
+      });
+    }
+    
+    // Online Siparişler Badge Güncelle (kaldırıldı - badge gösterilmiyor)
+    function updateOnlineOrdersBadge() {
+      // Badge kaldırıldı - artık gösterilmiyor
+    }
+    
+    // Online Siparişler Modal'ını Göster
+    function showOnlineOrdersModal() {
+      const modal = document.getElementById('onlineOrdersModal');
+      if (!modal) {
+        console.error('❌ Online siparişler modal bulunamadı');
+        return;
+      }
+      
+      console.log('📦 Online siparişler modal açılıyor, mevcut sipariş sayısı:', onlineOrders.length);
+      
+      // Online siparişleri render et
+      renderOnlineOrders();
+      modal.style.display = 'flex';
+    }
+    
+    // Online Siparişler Modal'ını Kapat
+    function hideOnlineOrdersModal() {
+      const modal = document.getElementById('onlineOrdersModal');
+      if (modal) {
+        modal.style.display = 'none';
+      }
+    }
+    
+    // Online Siparişleri Render Et
+    function renderOnlineOrders() {
+      const container = document.getElementById('onlineOrdersList');
+      if (!container) {
+        console.error('❌ Online siparişler container bulunamadı');
+        return;
+      }
+      
+      console.log('📦 Online siparişler render ediliyor, sipariş sayısı:', onlineOrders.length);
+      
+      if (!onlineDb) {
+        console.warn('⚠️ Online Firebase bağlantısı yok');
+        container.innerHTML = `
+          <div style="text-align: center; padding: 40px 20px; color: #6b7280;">
+            <div style="font-size: 48px; margin-bottom: 16px;">⚠️</div>
+            <div style="font-size: 16px; font-weight: 600;">Firebase bağlantısı kurulamadı</div>
+            <div style="font-size: 12px; color: #9ca3af; margin-top: 8px;">Sayfayı yenileyin</div>
+          </div>
+        `;
+        return;
+      }
+      
+      if (onlineOrders.length === 0) {
+        console.log('📦 Henüz online sipariş yok');
+        container.innerHTML = `
+          <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
+            <div style="font-size: 64px; margin-bottom: 16px;">🌐</div>
+            <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Henüz online sipariş bulunmuyor</div>
+            <div style="font-size: 14px; color: #9ca3af;">Yeni siparişler burada görünecek</div>
+          </div>
+        `;
+        return;
+      }
+      
+      let html = '';
+      onlineOrders.forEach((order, index) => {
+        const customerName = order.customer_name || order.name || 'İsimsiz Müşteri';
+        const customerPhone = order.customer_phone || order.phone || '-';
+        // Telefon numarasını temizle (sadece rakamlar ve +)
+        const cleanPhone = customerPhone.replace(/[^\d+]/g, '');
+        const phoneLink = cleanPhone && cleanPhone !== '-' ? `tel:${cleanPhone}` : '#';
+        const totalAmount = parseFloat(order.total_amount || order.total || 0).toFixed(2);
+        const orderDate = order.formattedDate || '';
+        const orderTime = order.formattedTime || '';
+        const orderId = order.id || `order-${index}`;
+        
+        // Ürün listesi
+        const items = order.items || [];
+        const itemsHtml = items.length > 0 
+          ? items.map(item => {
+              const itemName = item.name || item.product_name || 'Bilinmeyen Ürün';
+              const quantity = item.quantity || 1;
+              const price = parseFloat(item.price || 0).toFixed(2);
+              const itemTotal = (parseFloat(item.price || 0) * (item.quantity || 1)).toFixed(2);
+              return `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #f3f4f6;">
+                  <div style="flex: 1;">
+                    <div style="font-size: 14px; font-weight: 500; color: #111827; margin-bottom: 4px;">
+                      ${itemName}
+                    </div>
+                    <div style="font-size: 12px; color: #6b7280;">
+                      ${quantity} adet × ₺${price}
+                    </div>
+                  </div>
+                  <div style="font-size: 15px; font-weight: 600; color: #059669; margin-left: 16px;">
+                    ₺${itemTotal}
+                  </div>
+                </div>
+              `;
+            }).join('')
+          : '<div style="padding: 12px 0; color: #9ca3af; font-size: 14px;">Ürün bulunamadı</div>';
+        
+        // Sipariş notu
+        const orderNote = order.note || order.orderNote || order.order_note || null;
+        const noteHtml = orderNote 
+          ? `
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #f3f4f6;">
+              <div style="font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">
+                Sipariş Notu
+              </div>
+              <div style="font-size: 14px; color: #374151; line-height: 1.6; background: #f9fafb; padding: 12px; border-radius: 6px; border-left: 3px solid #8b5cf6;">
+                ${orderNote}
+              </div>
+            </div>
+          `
+          : '';
+        
+        html += `
+          <div class="online-order-card" data-order-id="${orderId}" style="background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%); border-radius: 12px; padding: 20px; margin-bottom: 16px; border: 1px solid #e5e7eb; box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; overflow: hidden;" onclick="toggleOrderDetails('${orderId}')">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-size: 17px; font-weight: 700; color: #111827; margin-bottom: 10px; line-height: 1.3;">
+                  ${customerName}
+                </div>
+                <a href="${phoneLink}" onclick="event.stopPropagation(); return true;" style="font-size: 14px; color: #3b82f6; margin-bottom: 6px; line-height: 1.5; display: flex; align-items: center; gap: 6px; text-decoration: none; transition: color 0.2s ease; cursor: pointer;" onmouseover="this.style.color='#2563eb'; this.style.textDecoration='underline';" onmouseout="this.style.color='#3b82f6'; this.style.textDecoration='none';">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="flex-shrink: 0;">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                  </svg>
+                  ${customerPhone}
+                </a>
+                <div style="font-size: 20px; font-weight: 700; color: #059669; margin-top: 10px; display: flex; align-items: center; gap: 6px;">
+                  <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  ₺${totalAmount}
+                </div>
+              </div>
+              <div style="text-align: right; margin-left: 24px; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                <div style="font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px;">
+                  ${orderDate}
+                </div>
+                <div style="font-size: 18px; font-weight: 700; color: #1f2937; white-space: nowrap;">
+                  ${orderTime}
+                </div>
+                <div style="margin-top: 8px; transition: transform 0.3s ease;" id="arrow-${orderId}">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #6b7280;">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+            
+            <!-- Genişleyen Detay Bölümü -->
+            <div id="details-${orderId}" style="max-height: 0; overflow: hidden; transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease; padding-top: 0;">
+              <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e5e7eb;">
+                <div style="font-size: 13px; font-weight: 600; color: #6b7280; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                  </svg>
+                  Ürünler (${items.length})
+                </div>
+                <div style="background: #ffffff; border-radius: 8px; padding: 4px 0;">
+                  ${itemsHtml}
+                </div>
+                ${noteHtml}
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      
+      container.innerHTML = html;
+    }
+
     // Bildirim Modal'ını Kapat
     function hideNotificationsModal() {
       const modal = document.getElementById('notificationsModal');
@@ -3272,11 +3693,112 @@
       }
     }
 
+    // Personel detayları için zaman filtresi
+    let staffDateFilter = 'all'; // 'all', 'yesterday', 'week', 'month', 'custom'
+    let staffCustomDateRange = { start: null, end: null };
+
+    function setStaffDateFilter(filter) {
+      staffDateFilter = filter;
+      renderStaffDetails();
+    }
+
+    function setStaffCustomDateRange() {
+      const startInput = document.getElementById('staffCustomDateStart');
+      const endInput = document.getElementById('staffCustomDateEnd');
+      
+      if (startInput && endInput && startInput.value && endInput.value) {
+        staffCustomDateRange.start = new Date(startInput.value);
+        staffCustomDateRange.end = new Date(endInput.value);
+        staffCustomDateRange.end.setHours(23, 59, 59, 999);
+        staffDateFilter = 'custom';
+        renderStaffDetails();
+      }
+    }
+
+    function filterStaffSalesByDate(sales) {
+      if (staffDateFilter === 'all') return sales;
+      
+      const now = new Date();
+      now.setHours(23, 59, 59, 999);
+      
+      if (staffDateFilter === 'yesterday') {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        yesterday.setHours(0, 0, 0, 0);
+        return sales.filter(sale => {
+          if (!sale.sale_date || sale.sale_date === 'Bilinmeyen') return false;
+          const [day, month, year] = sale.sale_date.split('.');
+          if (!day || !month || !year) return false;
+          const saleDate = new Date(year, month - 1, day);
+          saleDate.setHours(0, 0, 0, 0);
+          return saleDate >= yesterday && saleDate <= now;
+        });
+      } else if (staffDateFilter === 'week') {
+        const weekAgo = new Date(now);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        weekAgo.setHours(0, 0, 0, 0);
+        return sales.filter(sale => {
+          if (!sale.sale_date || sale.sale_date === 'Bilinmeyen') return false;
+          const [day, month, year] = sale.sale_date.split('.');
+          if (!day || !month || !year) return false;
+          const saleDate = new Date(year, month - 1, day);
+          saleDate.setHours(0, 0, 0, 0);
+          return saleDate >= weekAgo && saleDate <= now;
+        });
+      } else if (staffDateFilter === 'month') {
+        const monthAgo = new Date(now);
+        monthAgo.setMonth(monthAgo.getMonth() - 1);
+        monthAgo.setHours(0, 0, 0, 0);
+        return sales.filter(sale => {
+          if (!sale.sale_date || sale.sale_date === 'Bilinmeyen') return false;
+          const [day, month, year] = sale.sale_date.split('.');
+          if (!day || !month || !year) return false;
+          const saleDate = new Date(year, month - 1, day);
+          saleDate.setHours(0, 0, 0, 0);
+          return saleDate >= monthAgo && saleDate <= now;
+        });
+      } else if (staffDateFilter === 'custom' && staffCustomDateRange.start && staffCustomDateRange.end) {
+        return sales.filter(sale => {
+          if (!sale.sale_date || sale.sale_date === 'Bilinmeyen') return false;
+          const [day, month, year] = sale.sale_date.split('.');
+          if (!day || !month || !year) return false;
+          const saleDate = new Date(year, month - 1, day);
+          saleDate.setHours(0, 0, 0, 0);
+          return saleDate >= staffCustomDateRange.start && saleDate <= staffCustomDateRange.end;
+        });
+      }
+      
+      return sales;
+    }
+
     function renderStaffDetails() {
       const container = document.getElementById('staffContainer');
       if (!container) return;
 
-      const reportSales = allSales.filter(sale => !sale.isExpense);
+      let reportSales = allSales.filter(sale => !sale.isExpense);
+      reportSales = filterStaffSalesByDate(reportSales);
+      
+      // Toplam istatistikler
+      const totalRevenue = reportSales.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
+      const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
+      const totalProductSales = {};
+      
+      reportSales.forEach(sale => {
+        if (sale.items_array && Array.isArray(sale.items_array)) {
+          sale.items_array.forEach(item => {
+            if (item.isGift) return;
+            const productName = item.product_name;
+            if (targetProducts.includes(productName)) {
+              if (!totalProductSales[productName]) {
+                totalProductSales[productName] = { count: 0, revenue: 0 };
+              }
+              totalProductSales[productName].count += (item.quantity || 0);
+              totalProductSales[productName].revenue += (parseFloat(item.price || 0) * (item.quantity || 0));
+            }
+          });
+        }
+      });
+      
       const staffStats = {};
       
       reportSales.forEach(sale => {
@@ -3370,71 +3892,154 @@
         return;
       }
 
+      // Zaman dilimi bilgisi
+      const filterLabels = {
+        'all': 'Tüm Zamanlar',
+        'yesterday': 'Dün',
+        'week': 'Son 1 Hafta',
+        'month': 'Son 1 Ay',
+        'custom': staffCustomDateRange.start && staffCustomDateRange.end 
+          ? `${staffCustomDateRange.start.toLocaleDateString('tr-TR')} - ${staffCustomDateRange.end.toLocaleDateString('tr-TR')}`
+          : 'Özel Tarih Aralığı'
+      };
+
       let html = `
         <div class="staff-container">
-          <h2 class="staff-title">👥 Personel Detayları</h2>
-          <div class="staff-grid">
-            ${sortedStaff.map((staff, index) => {
-              const topProducts = Object.entries(staff.products)
-                .map(([name, data]) => [name, typeof data === 'object' ? data.count : data])
-                .sort(([, a], [, b]) => b - a)
-                .slice(0, 3);
-              
-              return `
-                <div class="staff-card">
-                  <div class="staff-header">
-                    <div class="staff-avatar ${index === 0 ? 'gold' : index === 1 ? 'silver' : index === 2 ? 'bronze' : ''}">
-                      ${index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤'}
-                    </div>
-                    <div class="staff-info">
-                      <h3 class="staff-name">${staff.name}</h3>
-                      <p class="staff-sales-count">${staff.totalSales} satış yaptı</p>
-                    </div>
+          <div class="staff-header-section">
+            <h2 class="staff-title">👥 Personel Detayları</h2>
+            <div class="staff-date-filter-wrapper">
+              <button class="staff-date-filter-trigger" onclick="toggleStaffDateFilterModal(event)">
+                <span>📅</span>
+                <span>${filterLabels[staffDateFilter] || 'Tarih Seç'}</span>
+                <span class="date-filter-arrow">▼</span>
+              </button>
+              <div id="staffDateFilterModal" class="date-filter-modal">
+                <div class="date-filter-modal-content">
+                  <div class="date-filter-option ${staffDateFilter === 'yesterday' ? 'active' : ''}" onclick="setStaffDateFilter('yesterday'); closeStaffDateFilterModal();">
+                    <span class="date-filter-icon">📆</span>
+                    <span>Dün</span>
                   </div>
-                  
-                  <div class="staff-stats-grid">
-                    <div class="staff-stat-card green">
-                      <p class="staff-stat-label">Toplam Ciro</p>
-                      <p class="staff-stat-value">₺${staff.totalRevenue.toFixed(2)}</p>
-                    </div>
-                    <div class="staff-stat-card blue">
-                      <p class="staff-stat-label">Ortalama Satış</p>
-                      <p class="staff-stat-value">₺${staff.averageSale.toFixed(2)}</p>
-                    </div>
-                    <div class="staff-stat-card purple">
-                      <p class="staff-stat-label">Toplam Satış</p>
-                      <p class="staff-stat-value">${staff.totalSales}</p>
-                    </div>
-                    <div class="staff-stat-card orange">
-                      <p class="staff-stat-label">Toplam Ürün</p>
-                      <p class="staff-stat-value">${staff.totalItemsSold || 0}</p>
-                      ${staff.totalGiftItems > 0 ? `<p class="staff-stat-sub">(${staff.totalGiftItems} ikram)</p>` : ''}
-                    </div>
+                  <div class="date-filter-option ${staffDateFilter === 'week' ? 'active' : ''}" onclick="setStaffDateFilter('week'); closeStaffDateFilterModal();">
+                    <span class="date-filter-icon">📆</span>
+                    <span>Son 1 Hafta</span>
                   </div>
-                  
-                  ${topProducts.length > 0 ? `
-                    <div class="staff-top-products">
-                      <h4 class="staff-top-products-title">En Çok Sattığı Ürünler</h4>
-                      <div class="staff-products-list">
-                        ${topProducts.map(([productName, countOrData], idx) => {
-                          const productData = typeof countOrData === 'object' ? countOrData : { count: countOrData, revenue: 0 };
-                          const count = productData.count || 0;
-                          const revenue = productData.revenue || 0;
-                          
-                          return `
-                            <div class="staff-product-item">
-                              <div class="staff-product-rank">${idx + 1}</div>
-                              <div class="staff-product-info">
-                                <span class="staff-product-name">${productName}</span>
-                                ${revenue > 0 ? `<span class="staff-product-revenue">₺${revenue.toFixed(2)} kazandırdı</span>` : ''}
-                              </div>
-                              <span class="staff-product-count">${count} adet</span>
-                            </div>
-                          `;
-                        }).join('')}
+                  <div class="date-filter-option ${staffDateFilter === 'month' ? 'active' : ''}" onclick="setStaffDateFilter('month'); closeStaffDateFilterModal();">
+                    <span class="date-filter-icon">📅</span>
+                    <span>Son 1 Ay</span>
+                  </div>
+                  <div class="date-filter-option ${staffDateFilter === 'all' ? 'active' : ''}" onclick="setStaffDateFilter('all'); closeStaffDateFilterModal();">
+                    <span class="date-filter-icon">📊</span>
+                    <span>Tüm Zamanlar</span>
+                  </div>
+                  <div class="date-filter-divider"></div>
+                  <div class="date-filter-option ${staffDateFilter === 'custom' ? 'active' : ''}" onclick="document.getElementById('staffCustomDateRangeSection').style.display = 'block';">
+                    <span class="date-filter-icon">🗓️</span>
+                    <span>Özel Tarih Aralığı</span>
+                  </div>
+                  <div id="staffCustomDateRangeSection" class="custom-date-range-section" style="display: ${staffDateFilter === 'custom' ? 'block' : 'none'};">
+                    <div class="custom-date-inputs">
+                      <div class="custom-date-input-group">
+                        <label>Başlangıç:</label>
+                        <input type="date" id="staffCustomDateStart" value="${staffCustomDateRange.start ? staffCustomDateRange.start.toISOString().split('T')[0] : ''}" class="custom-date-input">
+                      </div>
+                      <div class="custom-date-input-group">
+                        <label>Bitiş:</label>
+                        <input type="date" id="staffCustomDateEnd" value="${staffCustomDateRange.end ? staffCustomDateRange.end.toISOString().split('T')[0] : ''}" class="custom-date-input">
                       </div>
                     </div>
-                  ` : ''}
+                    <button class="custom-date-apply-btn" onclick="setStaffCustomDateRange();">Uygula</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Toplam İstatistikler -->
+          <div class="staff-summary-cards">
+            <div class="staff-summary-card revenue-card">
+              <div class="summary-icon">💰</div>
+              <div class="summary-content">
+                <div class="summary-label">Toplam Ciro</div>
+                <div class="summary-value">₺${totalRevenue.toFixed(2)}</div>
+              </div>
+            </div>
+            ${targetProducts.map(productName => {
+              const sales = totalProductSales[productName] || { count: 0, revenue: 0 };
+              const config = {
+                'Limonata': { icon: '🍋', color: '#fef3c7', textColor: '#92400e' },
+                'Filtre Kahve': { icon: '☕', color: '#ddd6fe', textColor: '#5b21b6' },
+                'Salep': { icon: '🥛', color: '#fce7f3', textColor: '#9f1239' }
+              }[productName];
+              
+              return `
+                <div class="staff-summary-card product-card" style="background: ${config.color};">
+                  <div class="summary-icon">${config.icon}</div>
+                  <div class="summary-content">
+                    <div class="summary-label" style="color: ${config.textColor};">${productName}</div>
+                    <div class="summary-value" style="color: ${config.textColor};">${sales.count} adet</div>
+                    <div class="summary-sub" style="color: ${config.textColor};">₺${sales.revenue.toFixed(2)}</div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+          
+          <div class="staff-grid">
+            ${sortedStaff.map((staff, index) => {
+              // Belirli ürünlerin satışlarını hesapla
+              const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
+              const productSales = {};
+              
+              targetProducts.forEach(productName => {
+                const productData = staff.products[productName];
+                if (productData) {
+                  productSales[productName] = {
+                    count: typeof productData === 'object' ? productData.count : productData,
+                    revenue: typeof productData === 'object' ? productData.revenue : 0
+                  };
+                } else {
+                  productSales[productName] = { count: 0, revenue: 0 };
+                }
+              });
+              
+              // Ürün ikonları ve renkleri
+              const productConfig = {
+                'Limonata': { icon: '🍋', color: '#fef3c7', textColor: '#92400e', gradient: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)' },
+                'Filtre Kahve': { icon: '☕', color: '#ddd6fe', textColor: '#5b21b6', gradient: 'linear-gradient(135deg, #ddd6fe 0%, #c4b5fd 100%)' },
+                'Salep': { icon: '🥛', color: '#fce7f3', textColor: '#9f1239', gradient: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)' }
+              };
+              
+              return `
+                <div class="staff-card-compact">
+                  <div class="staff-header-compact">
+                    <div class="staff-avatar-compact ${index === 0 ? 'rank-gold' : index === 1 ? 'rank-silver' : index === 2 ? 'rank-bronze' : 'rank-default'}">
+                      ${index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤'}
+                    </div>
+                    <div class="staff-info-compact">
+                      <h3 class="staff-name-compact">${staff.name}</h3>
+                      <div class="staff-meta-compact">
+                        <span>${staff.totalSales} satış</span>
+                        <span>•</span>
+                        <span>₺${staff.totalRevenue.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <div class="staff-products-compact">
+                    ${targetProducts.map(productName => {
+                      const sales = productSales[productName] || { count: 0, revenue: 0 };
+                      const config = productConfig[productName];
+                      
+                      return `
+                        <div class="staff-product-compact" style="border-left: 3px solid ${config.color};">
+                          <span class="product-icon-compact">${config.icon}</span>
+                          <span class="product-name-compact">${productName}</span>
+                          <span class="product-count-compact">${sales.count} adet</span>
+                          ${sales.revenue > 0 ? `<span class="product-revenue-compact">₺${sales.revenue.toFixed(2)}</span>` : ''}
+                        </div>
+                      `;
+                    }).join('')}
+                  </div>
                 </div>
               `;
             }).join('')}
@@ -4099,6 +4704,83 @@
 
     // Global fonksiyonlar
     window.verifyPin = verifyPin;
+    window.showChangePasswordModal = showChangePasswordModal;
+    window.hideChangePasswordModal = hideChangePasswordModal;
+    window.changePassword = changePassword;
+    
+    // Şifre Değiştirme Modal Fonksiyonları
+    function showChangePasswordModal() {
+      const modal = document.getElementById('changePasswordModal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      // Input'ları temizle
+      document.getElementById('currentPasswordInput').value = '';
+      document.getElementById('newPasswordInput').value = '';
+      document.getElementById('confirmPasswordInput').value = '';
+      // İlk input'a focus
+      setTimeout(() => {
+        document.getElementById('currentPasswordInput').focus();
+      }, 100);
+    }
+    
+    function hideChangePasswordModal() {
+      const modal = document.getElementById('changePasswordModal');
+      if (modal) {
+        modal.style.display = 'none';
+      }
+    }
+    
+    async function changePassword() {
+      const currentPassword = document.getElementById('currentPasswordInput').value;
+      const newPassword = document.getElementById('newPasswordInput').value;
+      const confirmPassword = document.getElementById('confirmPasswordInput').value;
+      
+      // Validasyon
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        showToast('error', 'Hata', 'Lütfen tüm alanları doldurun');
+        return;
+      }
+      
+      // Mevcut şifre şifrelerden biri mi kontrol et
+      if (!adminPins.includes(currentPassword)) {
+        showToast('error', 'Hata', 'Mevcut şifre hatalı!');
+        document.getElementById('currentPasswordInput').value = '';
+        document.getElementById('currentPasswordInput').focus();
+        return;
+      }
+      
+      if (newPassword.length < 4) {
+        showToast('error', 'Hata', 'Yeni şifre en az 4 karakter olmalıdır');
+        return;
+      }
+      
+      if (newPassword !== confirmPassword) {
+        showToast('error', 'Hata', 'Yeni şifreler eşleşmiyor!');
+        document.getElementById('confirmPasswordInput').value = '';
+        document.getElementById('confirmPasswordInput').focus();
+        return;
+      }
+      
+      if (newPassword === currentPassword) {
+        showToast('error', 'Hata', 'Yeni şifre mevcut şifre ile aynı olamaz!');
+        return;
+      }
+      
+      // Şifreyi Firebase'e kaydet (mevcut şifreyi yeni şifre ile değiştir)
+      const success = await saveAdminPin(currentPassword, newPassword);
+      
+      if (success) {
+        showToast('success', 'Başarılı', 'Şifre başarıyla değiştirildi!');
+        hideChangePasswordModal();
+        // Giriş ekranındaki PIN input'unu temizle
+        const pinInput = document.getElementById('pinInput');
+        if (pinInput) {
+          pinInput.value = '';
+        }
+      } else {
+        showToast('error', 'Hata', 'Şifre değiştirilirken bir hata oluştu. Lütfen tekrar deneyin.');
+      }
+    }
     window.loadSales = loadSales;
     window.setActiveTab = setActiveTab;
     window.setReportDateFilter = setReportDateFilter;
@@ -4110,6 +4792,35 @@
     window.showNotificationsModal = showNotificationsModal;
     window.toggleNotificationsMute = toggleNotificationsMute;
     window.hideNotificationsModal = hideNotificationsModal;
+    window.showOnlineOrdersModal = showOnlineOrdersModal;
+    window.hideOnlineOrdersModal = hideOnlineOrdersModal;
+    window.setStaffDateFilter = setStaffDateFilter;
+    window.setStaffCustomDateRange = setStaffCustomDateRange;
+    window.toggleStaffDateFilterModal = toggleStaffDateFilterModal;
+    window.closeStaffDateFilterModal = closeStaffDateFilterModal;
+    window.toggleOrderDetails = function(orderId) {
+      const detailsDiv = document.getElementById('details-' + orderId);
+      const arrowDiv = document.getElementById('arrow-' + orderId);
+      const card = document.querySelector(`[data-order-id="${orderId}"]`);
+      
+      if (!detailsDiv || !arrowDiv || !card) return;
+      
+      const isExpanded = detailsDiv.style.maxHeight && detailsDiv.style.maxHeight !== '0px';
+      
+      if (isExpanded) {
+        // Kapat
+        detailsDiv.style.maxHeight = '0px';
+        detailsDiv.style.paddingTop = '0';
+        arrowDiv.style.transform = 'rotate(0deg)';
+        card.style.boxShadow = '0 2px 8px rgba(0,0,0,0.06)';
+      } else {
+        // Aç
+        detailsDiv.style.maxHeight = '1000px';
+        detailsDiv.style.paddingTop = '20px';
+        arrowDiv.style.transform = 'rotate(180deg)';
+        card.style.boxShadow = '0 4px 16px rgba(0,0,0,0.12)';
+      }
+    };
     window.logout = function() {
       sessionStorage.removeItem('adminAuthenticated');
       localStorage.removeItem('adminAuthenticated');
@@ -4417,6 +5128,131 @@
       transform: translateX(3px);
     }
 
+    .change-password-btn {
+      width: 100%;
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      border: 1.5px solid #e2e8f0;
+      border-radius: 10px;
+      background: white;
+      color: #64748b;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+      margin-top: 12px;
+    }
+
+    .change-password-btn:hover {
+      background: #f8fafc;
+      border-color: #cbd5e1;
+      color: #475569;
+      transform: translateY(-1px);
+    }
+
+    .change-password-btn:active {
+      transform: translateY(0);
+    }
+
+    .change-password-btn svg {
+      width: 16px;
+      height: 16px;
+    }
+
+    /* Şifre Değiştirme Modal */
+    .change-password-modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
+      z-index: 10000;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .change-password-modal-content {
+      background: white;
+      border-radius: 20px;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      overflow: hidden;
+      animation: slideUpScale 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .change-password-modal-header {
+      padding: 24px 28px;
+      border-bottom: 1px solid #f1f5f9;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #f8fafc;
+    }
+
+    .change-password-modal-body {
+      padding: 28px;
+    }
+
+    .change-password-input {
+      width: 100%;
+      padding: 12px 16px;
+      font-size: 15px;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      background: white;
+      color: #1f2937;
+      transition: all 0.2s ease;
+      box-sizing: border-box;
+    }
+
+    .change-password-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.1);
+    }
+
+    .change-password-input::placeholder {
+      color: #94a3b8;
+    }
+
+    .change-password-submit-btn {
+      width: 100%;
+      padding: 14px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+      color: white;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+      transition: all 0.2s ease;
+    }
+
+    .change-password-submit-btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 16px rgba(59, 130, 246, 0.4);
+      background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+    }
+
+    .change-password-submit-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+    }
+
     .login-card-footer {
       padding: 20px 40px;
       background: #f8fafc;
@@ -4665,6 +5501,12 @@
       border-bottom: 1px solid #e5e7eb;
       background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
       border-radius: 20px 20px 0 0;
+    }
+
+    .online-order-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1) !important;
+      border-color: #d1d5db;
     }
 
     .notifications-list {
@@ -5125,6 +5967,12 @@
       background: #eff6ff;
       color: #1d4ed8;
       border-color: #bfdbfe;
+    }
+
+    .badge-online {
+      background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%);
+      color: white;
+      border-color: #7c3aed;
     }
 
     .badge-staff {
@@ -6262,14 +7110,15 @@
     /* Seçilen Zaman Dilimi Ciro ve Masraf Container */
     .period-revenue-container {
       display: grid;
-      grid-template-columns: repeat(2, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       gap: 18px;
       margin-bottom: 28px;
     }
 
     /* Seçilen Zaman Dilimi Ciro Kartı */
     .period-revenue-card,
-    .period-expense-card {
+    .period-expense-card,
+    .period-online-revenue-card {
       position: relative;
       background: linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%);
       border-radius: 20px;
@@ -6285,8 +7134,14 @@
       box-shadow: 0 10px 40px rgba(239, 68, 68, 0.3), 0 4px 16px rgba(239, 68, 68, 0.2);
     }
 
+    .period-online-revenue-card {
+      background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 50%, #6d28d9 100%);
+      border: 1px solid rgba(139, 92, 246, 0.3);
+    }
+
     .period-revenue-card:hover,
-    .period-expense-card:hover {
+    .period-expense-card:hover,
+    .period-online-revenue-card:hover {
       transform: translateY(-4px) scale(1.02);
       box-shadow: 0 16px 48px rgba(16, 185, 129, 0.4), 0 8px 24px rgba(16, 185, 129, 0.3);
     }
@@ -6306,8 +7161,14 @@
       transition: opacity 0.4s ease;
     }
 
+    .period-online-revenue-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 12px 32px rgba(139, 92, 246, 0.4);
+    }
+
     .period-revenue-card:hover .period-card-background,
-    .period-expense-card:hover .period-card-background {
+    .period-expense-card:hover .period-card-background,
+    .period-online-revenue-card:hover .period-card-background {
       opacity: 1;
     }
 
@@ -7705,17 +8566,488 @@
       padding: 10px 0 6px;
     }
 
-    .staff-title {
-      font-size: 18px;
+    .staff-header-section {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      gap: 16px;
+    }
+
+    .staff-date-filter-wrapper {
+      position: relative;
+    }
+
+    .staff-date-filter-trigger {
+      background: white;
+      border: 2px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 10px 16px;
+      font-size: 14px;
       font-weight: 600;
-      color: var(--text-main);
-      margin-bottom: 16px;
+      color: #374151;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .staff-date-filter-trigger:hover {
+      border-color: #d1d5db;
+      background: #f9fafb;
+    }
+
+    /* Toplam İstatistikler */
+    .staff-summary-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+
+    .staff-summary-card {
+      background: white;
+      border-radius: 14px;
+      padding: 18px;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      transition: all 0.3s ease;
+    }
+
+    .staff-summary-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+
+    .staff-summary-card.revenue-card {
+      background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+      border-color: #6ee7b7;
+    }
+
+    .summary-icon {
+      font-size: 32px;
+      flex-shrink: 0;
+    }
+
+    .summary-content {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .summary-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .summary-value {
+      font-size: 20px;
+      font-weight: 700;
+      color: #111827;
+      line-height: 1.2;
+    }
+
+    .summary-sub {
+      font-size: 13px;
+      font-weight: 600;
+      margin-top: 2px;
+      opacity: 0.9;
+    }
+
+    /* Kompakt Personel Kartları */
+    .staff-card-compact {
+      background: white;
+      border-radius: 14px;
+      padding: 16px;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+      transition: all 0.3s ease;
+    }
+
+    .staff-card-compact:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      border-color: #d1d5db;
+    }
+
+    .staff-header-compact {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 14px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #f3f4f6;
+    }
+
+    .staff-avatar-compact {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      flex-shrink: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+
+    .staff-avatar-compact.rank-gold {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border: 2px solid #fbbf24;
+    }
+
+    .staff-avatar-compact.rank-silver {
+      background: linear-gradient(135deg, #e5e7eb 0%, #d1d5db 100%);
+      border: 2px solid #9ca3af;
+    }
+
+    .staff-avatar-compact.rank-bronze {
+      background: linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%);
+      border: 2px solid #fb923c;
+    }
+
+    .staff-avatar-compact.rank-default {
+      background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+      border: 2px solid #818cf8;
+    }
+
+    .staff-info-compact {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .staff-name-compact {
+      font-size: 16px;
+      font-weight: 700;
+      color: #111827;
+      margin: 0 0 4px 0;
+      line-height: 1.3;
+    }
+
+    .staff-meta-compact {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #6b7280;
+      font-weight: 500;
+    }
+
+    .staff-products-compact {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .staff-product-compact {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      background: #f9fafb;
+      border-radius: 10px;
+      transition: all 0.2s ease;
+    }
+
+    .staff-product-compact:hover {
+      background: #f3f4f6;
+    }
+
+    .product-icon-compact {
+      font-size: 18px;
+      flex-shrink: 0;
+    }
+
+    .product-name-compact {
+      flex: 1;
+      font-size: 13px;
+      font-weight: 600;
+      color: #374151;
+      min-width: 0;
+    }
+
+    .product-count-compact {
+      font-size: 12px;
+      font-weight: 600;
+      color: #6b7280;
+      white-space: nowrap;
+    }
+
+    .product-revenue-compact {
+      font-size: 13px;
+      font-weight: 700;
+      color: #059669;
+      white-space: nowrap;
+    }
+
+    .staff-title {
+      font-size: 24px;
+      font-weight: 700;
+      color: #1f2937;
+      margin-bottom: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
     }
 
     .staff-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 24px;
+    }
+
+    /* Modern Personel Kartı */
+    .staff-card-modern {
+      background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%);
+      border-radius: 20px;
+      border: 1px solid #e5e7eb;
+      padding: 24px;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.06);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow: hidden;
+      position: relative;
+    }
+
+    .staff-card-modern:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+      border-color: #d1d5db;
+    }
+
+    .staff-header-modern {
+      display: flex;
+      align-items: center;
       gap: 16px;
+      padding-bottom: 20px;
+      border-bottom: 2px solid #f3f4f6;
+      margin-bottom: 20px;
+      position: relative;
+    }
+
+    .staff-avatar-modern {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 28px;
+      flex-shrink: 0;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      transition: transform 0.3s ease;
+    }
+
+    .staff-card-modern:hover .staff-avatar-modern {
+      transform: scale(1.05);
+    }
+
+    .staff-avatar-modern.rank-gold {
+      background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+      border: 2px solid #fbbf24;
+    }
+
+    .staff-avatar-modern.rank-silver {
+      background: linear-gradient(135deg, #e5e7eb 0%, #d1d5db 100%);
+      border: 2px solid #9ca3af;
+    }
+
+    .staff-avatar-modern.rank-bronze {
+      background: linear-gradient(135deg, #ffedd5 0%, #fed7aa 100%);
+      border: 2px solid #fb923c;
+    }
+
+    .staff-avatar-modern.rank-default {
+      background: linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%);
+      border: 2px solid #818cf8;
+    }
+
+    .staff-info-modern {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .staff-name-modern {
+      font-size: 20px;
+      font-weight: 700;
+      color: #111827;
+      margin: 0 0 4px 0;
+      line-height: 1.3;
+    }
+
+    .staff-sales-count-modern {
+      font-size: 13px;
+      color: #6b7280;
+      margin: 0;
+      font-weight: 500;
+    }
+
+    .staff-revenue-badge {
+      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      color: white;
+      padding: 10px 16px;
+      border-radius: 12px;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+      flex-shrink: 0;
+    }
+
+    .revenue-badge-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      opacity: 0.9;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 2px;
+    }
+
+    .revenue-badge-value {
+      display: block;
+      font-size: 18px;
+      font-weight: 800;
+    }
+
+    .staff-stats-grid-modern {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+      margin-bottom: 24px;
+    }
+
+    .staff-stat-card-modern {
+      border-radius: 14px;
+      padding: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      transition: all 0.3s ease;
+      border: 1px solid transparent;
+    }
+
+    .staff-stat-card-modern:hover {
+      transform: translateY(-2px);
+    }
+
+    .stat-green-modern {
+      background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
+      border-color: #6ee7b7;
+    }
+
+    .stat-blue-modern {
+      background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+      border-color: #93c5fd;
+    }
+
+    .stat-icon-modern {
+      font-size: 24px;
+      flex-shrink: 0;
+    }
+
+    .stat-content-modern {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .staff-stat-label-modern {
+      font-size: 12px;
+      color: #6b7280;
+      margin: 0 0 4px 0;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .staff-stat-value-modern {
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+      margin: 0;
+    }
+
+    .staff-products-section {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 2px solid #f3f4f6;
+    }
+
+    .staff-products-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #111827;
+      margin: 0 0 16px 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .staff-products-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+
+    .staff-product-card-modern {
+      border-radius: 14px;
+      padding: 14px;
+      border: 2px solid;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 8px;
+      transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .staff-product-card-modern:hover {
+      transform: translateY(-3px) scale(1.02);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.15);
+    }
+
+    .product-icon-modern {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      margin-bottom: 4px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .product-info-modern {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      width: 100%;
+    }
+
+    .product-name-modern {
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.3;
+    }
+
+    .product-count-modern {
+      font-size: 12px;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+
+    .product-revenue-modern {
+      font-size: 14px;
+      font-weight: 700;
+      margin-top: 4px;
     }
 
     .staff-card {
@@ -7924,6 +9256,10 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
 
+      .period-revenue-container {
+        grid-template-columns: 1fr;
+      }
+
       .payment-breakdown-card {
         flex-direction: column;
         align-items: stretch;
@@ -7938,6 +9274,41 @@
         flex-direction: column;
         align-items: stretch;
         gap: 12px;
+      }
+
+      .staff-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .staff-header-modern {
+        flex-wrap: wrap;
+      }
+
+      .staff-revenue-badge {
+        width: 100%;
+        margin-top: 12px;
+      }
+
+      .staff-products-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .staff-header-section {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .staff-date-filter-trigger {
+        width: 100%;
+        justify-content: center;
+      }
+
+      .staff-summary-cards {
+        grid-template-columns: 1fr;
+      }
+
+      .staff-grid {
+        grid-template-columns: 1fr;
       }
 
       .analysis-modal-content {
@@ -7968,7 +9339,8 @@
       }
 
       .period-revenue-card,
-      .period-expense-card {
+      .period-expense-card,
+      .period-online-revenue-card {
         padding: 20px 18px;
         border-radius: 18px;
       }
@@ -8291,7 +9663,7 @@
               id="pinInput" 
               class="login-input" 
               placeholder="PIN kodunuzu girin" 
-              maxlength="10" 
+              maxlength="30" 
               autofocus
               onkeypress="if(event.key === 'Enter') verifyPin()"
             >
@@ -8311,6 +9683,13 @@
               <path stroke-linecap="round" stroke-linejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6"/>
             </svg>
           </button>
+          
+          <button onclick="showChangePasswordModal()" class="change-password-btn">
+            <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+            </svg>
+            <span>Şifre Değiştir</span>
+          </button>
         </div>
         
         <div class="login-card-footer">
@@ -8320,6 +9699,68 @@
             </svg>
             <span>Güvenli Giriş</span>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Şifre Değiştirme Modal -->
+    <div id="changePasswordModal" class="change-password-modal" onclick="if(event.target === this) hideChangePasswordModal()">
+      <div class="change-password-modal-content">
+        <div class="change-password-modal-header">
+          <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: #1f2937; display: flex; align-items: center; gap: 10px;">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+            </svg>
+            <span>Şifre Değiştir</span>
+          </h2>
+          <button onclick="hideChangePasswordModal()" style="background: #f3f4f6; border: none; color: #6b7280; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#e5e7eb'; this.style.color='#374151';" onmouseout="this.style.background='#f3f4f6'; this.style.color='#6b7280';">×</button>
+        </div>
+        <div class="change-password-modal-body">
+          <div style="margin-bottom: 20px;">
+            <label for="currentPasswordInput" style="display: block; font-size: 13px; font-weight: 600; color: #4b5563; margin-bottom: 8px;">
+              Mevcut Şifre
+            </label>
+            <input 
+              type="password" 
+              id="currentPasswordInput" 
+              class="change-password-input" 
+              placeholder="Mevcut şifrenizi girin"
+              maxlength="30"
+              onkeypress="if(event.key === 'Enter') document.getElementById('newPasswordInput').focus()"
+            >
+          </div>
+          <div style="margin-bottom: 20px;">
+            <label for="newPasswordInput" style="display: block; font-size: 13px; font-weight: 600; color: #4b5563; margin-bottom: 8px;">
+              Yeni Şifre
+            </label>
+            <input 
+              type="password" 
+              id="newPasswordInput" 
+              class="change-password-input" 
+              placeholder="Yeni şifrenizi girin"
+              maxlength="30"
+              onkeypress="if(event.key === 'Enter') changePassword()"
+            >
+          </div>
+          <div style="margin-bottom: 24px;">
+            <label for="confirmPasswordInput" style="display: block; font-size: 13px; font-weight: 600; color: #4b5563; margin-bottom: 8px;">
+              Yeni Şifre (Tekrar)
+            </label>
+            <input 
+              type="password" 
+              id="confirmPasswordInput" 
+              class="change-password-input" 
+              placeholder="Yeni şifrenizi tekrar girin"
+              maxlength="30"
+              onkeypress="if(event.key === 'Enter') changePassword()"
+            >
+          </div>
+          <button onclick="changePassword()" class="change-password-submit-btn">
+            <span>Şifreyi Değiştir</span>
+            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/>
+            </svg>
+          </button>
         </div>
       </div>
     </div>
@@ -8343,12 +9784,11 @@
               </svg>
               <span>Yenile</span>
             </button>
-            <button onclick="showNotificationsModal()" class="notifications-btn" id="notificationsBtn">
+            <button onclick="showOnlineOrdersModal()" class="notifications-btn" id="onlineOrdersBtn">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M14.857 17.082a23.848 23.848 0 005.454-1.31A8.967 8.967 0 0118 9.75v-.7V9A6 6 0 006 9v.75a8.967 8.967 0 01-2.312 6.022c1.733.64 3.56 1.085 5.455 1.31m5.714 0a24.255 24.255 0 01-5.714 0m5.714 0a3 3 0 11-5.714 0"/>
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
               </svg>
-              <span>Bildirimler</span>
-              <span id="notificationsBadge" class="notifications-badge" style="display: none;">0</span>
+              <span>Online</span>
             </button>
             <button onclick="logout()" class="logout-btn">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
@@ -8360,24 +9800,20 @@
         </div>
       </nav>
       
-      <!-- Bildirimler Modal -->
-      <div id="notificationsModal" class="notifications-modal" onclick="if(event.target === this) hideNotificationsModal()">
-        <div class="notifications-modal-content">
+      <!-- Online Siparişler Modal -->
+      <div id="onlineOrdersModal" class="notifications-modal" onclick="if(event.target === this) hideOnlineOrdersModal()" style="display: none;">
+        <div class="notifications-modal-content" style="max-width: 900px; max-height: 90vh;">
           <div class="notifications-modal-header">
             <h2 style="margin: 0; font-size: 20px; font-weight: 700; color: #1f2937; display: flex; align-items: center; gap: 10px;">
-              <span id="notificationsIcon">🔔</span>
-              <span>Bildirimler</span>
+              <span>🌐</span>
+              <span>Online Siparişler</span>
             </h2>
             <div style="display: flex; align-items: center; gap: 10px;">
-              <button id="muteNotificationsBtn" onclick="toggleNotificationsMute()" style="background: #f3f4f6; border: none; color: #6b7280; padding: 8px 14px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; font-weight: 600; transition: all 0.2s;" onmouseover="this.style.background='#e5e7eb'; this.style.color='#374151';" onmouseout="this.style.background='#f3f4f6'; this.style.color='#6b7280';">
-                <span id="muteIcon">🔇</span>
-                <span id="muteText">Sessize Al</span>
-              </button>
-              <button onclick="hideNotificationsModal()" style="background: #f3f4f6; border: none; color: #6b7280; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#e5e7eb'; this.style.color='#374151';" onmouseout="this.style.background='#f3f4f6'; this.style.color='#6b7280';">×</button>
+              <button onclick="hideOnlineOrdersModal()" style="background: #f3f4f6; border: none; color: #6b7280; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; transition: all 0.2s;" onmouseover="this.style.background='#e5e7eb'; this.style.color='#374151';" onmouseout="this.style.background='#f3f4f6'; this.style.color='#6b7280';">×</button>
             </div>
           </div>
-          <div id="notificationsList" class="notifications-list">
-            <!-- Bildirimler buraya eklenecek -->
+          <div id="onlineOrdersList" class="notifications-list" style="max-height: calc(90vh - 100px); overflow-y: auto;">
+            <!-- Online siparişler buraya eklenecek -->
           </div>
         </div>
       </div>

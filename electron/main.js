@@ -4635,6 +4635,24 @@ function generateReceiptHTML(receiptData) {
           <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName}</span>
         </div>
         ` : ''}
+        ${receiptData.customer_name ? `
+        <div>
+          <span>Müşteri:</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.customer_name}</span>
+        </div>
+        ` : ''}
+        ${receiptData.customer_phone ? `
+        <div>
+          <span>Telefon:</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.customer_phone}</span>
+        </div>
+        ` : ''}
+        ${receiptData.customer_address ? `
+        <div>
+          <span>Adres:</span>
+          <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.customer_address}</span>
+        </div>
+        ` : ''}
         <div>
           <span>Tarih:</span>
           <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_date || new Date().toLocaleDateString('tr-TR')}</span>
@@ -5115,7 +5133,11 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
         orderNote: adisyonData.orderNote || null,
         tableName: adisyonData.tableName || null,
         tableType: adisyonData.tableType || null,
-        cashierOnly: true
+        cashierOnly: true,
+        // Online sipariş müşteri bilgileri
+        customer_name: adisyonData.customer_name || null,
+        customer_phone: adisyonData.customer_phone || null,
+        customer_address: adisyonData.customer_address || null
       };
       
       // Kasa yazıcısından fiyatlı fiş yazdır

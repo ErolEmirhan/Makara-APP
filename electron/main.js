@@ -6976,9 +6976,6 @@ function generateMobileHTML(serverURL) {
     .toast.error {
       border-left: 4px solid #ef4444;
     }
-    .toast.info {
-      border-left: 4px solid #3b82f6;
-    }
     .toast-icon {
       width: 50px;
       height: 50px;
@@ -6995,10 +6992,6 @@ function generateMobileHTML(serverURL) {
     }
     .toast.error .toast-icon {
       background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-      color: white;
-    }
-    .toast.info .toast-icon {
-      background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
       color: white;
     }
     .toast-content {
@@ -7767,9 +7760,6 @@ function generateMobileHTML(serverURL) {
     let tables = [];
     let currentTableType = 'inside';
     let orderNote = '';
-    let isSendingOrder = false;
-    let lastOrderTime = 0;
-    const ORDER_DEBOUNCE_DELAY = 2000; // 2 saniye gecikme
     
     // PIN oturum yönetimi (1 saat)
     const SESSION_DURATION = 60 * 60 * 1000;
@@ -8993,8 +8983,6 @@ function generateMobileHTML(serverURL) {
         toastIcon.innerHTML = '<svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>';
       } else if (type === 'error') {
         toastIcon.innerHTML = '<svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"/></svg>';
-      } else if (type === 'info') {
-        toastIcon.innerHTML = '<svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>';
       }
       
       toast.classList.add('show');
@@ -9354,19 +9342,6 @@ function generateMobileHTML(serverURL) {
     }
     
     async function sendOrder() {
-      // Debounce kontrolü: Eğer zaten bir sipariş gönderiliyorsa veya çok kısa süre içinde tekrar tıklanmışsa engelle
-      const now = Date.now();
-      if (isSendingOrder) {
-        showToast('info', 'Bekleyin', 'Sipariş gönderiliyor, lütfen bekleyin...');
-        return;
-      }
-      
-      if (now - lastOrderTime < ORDER_DEBOUNCE_DELAY) {
-        const remainingTime = Math.ceil((ORDER_DEBOUNCE_DELAY - (now - lastOrderTime)) / 1000);
-        showToast('info', 'Lütfen Bekleyin', 'Sipariş göndermek için ' + remainingTime + ' saniye bekleyin.');
-        return;
-      }
-      
       if (!selectedTable || cart.length === 0) { 
         showToast('error', 'Eksik Bilgi', 'Lütfen masa seçin ve ürün ekleyin');
         return; 
@@ -9374,21 +9349,6 @@ function generateMobileHTML(serverURL) {
       if (!currentStaff) { 
         showToast('error', 'Giriş Gerekli', 'Lütfen giriş yapın');
         return; 
-      }
-      
-      // Sipariş gönderme işlemini başlat
-      isSendingOrder = true;
-      lastOrderTime = now;
-      
-      // Butonu devre dışı bırak
-      const sendBtn = document.querySelector('.send-btn');
-      let originalText = '';
-      if (sendBtn) {
-        sendBtn.disabled = true;
-        sendBtn.style.opacity = '0.6';
-        sendBtn.style.cursor = 'not-allowed';
-        originalText = sendBtn.innerHTML;
-        sendBtn.innerHTML = '<span style="display: inline-flex; align-items: center; gap: 8px;"><svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5" class="animate-spin" style="animation: spin 1s linear infinite;"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>Gönderiliyor...</span>';
       }
       
       // İkram edilen ürünleri toplamdan çıkar
@@ -9448,15 +9408,6 @@ function generateMobileHTML(serverURL) {
       } catch (error) { 
         console.error('Sipariş gönderme hatası:', error); 
         showToast('error', 'Bağlantı Hatası', 'Sunucuya bağlanılamadı. Lütfen tekrar deneyin.');
-      } finally {
-        // İşlem tamamlandığında butonu tekrar aktif et
-        isSendingOrder = false;
-        if (sendBtn && originalText) {
-          sendBtn.disabled = false;
-          sendBtn.style.opacity = '1';
-          sendBtn.style.cursor = 'pointer';
-          sendBtn.innerHTML = originalText;
-        }
       }
     }
   </script>

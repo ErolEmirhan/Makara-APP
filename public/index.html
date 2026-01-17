@@ -1416,14 +1416,14 @@
         };
       }
       
-      // Dışarı masalar (1-24)
+      // Dışarı masalar (61-84)
       for (let i = 1; i <= 24; i++) {
         const tableId = `outside-${i}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `Dışarı ${i}`,
+          table_name: `Dışarı ${i + 60}`,
           table_type: 'outside',
-          table_number: i,
+          table_number: i + 60,
           is_occupied: false,
           total_amount: 0,
           items: []
@@ -3025,14 +3025,14 @@
         };
       }
       
-      // Dışarı masalar (1-24)
+      // Dışarı masalar (61-84)
       for (let i = 1; i <= 24; i++) {
         const tableId = `outside-${i}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `Dışarı ${i}`,
+          table_name: `Dışarı ${i + 60}`,
           table_type: 'outside',
-          table_number: i,
+          table_number: i + 60,
           is_occupied: false,
           total_amount: 0,
           items: []

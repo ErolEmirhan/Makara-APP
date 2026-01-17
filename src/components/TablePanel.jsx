@@ -58,9 +58,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
 
   const outsideTables = Array.from({ length: 24 }, (_, i) => ({
     id: `outside-${i + 1}`,
-    number: i + 1,
+    number: i + 61,
     type: 'outside',
-    name: `Dışarı ${i + 1}`
+    name: `Dışarı ${i + 61}`
   }));
 
   // Paket masaları (hem içeri hem dışarı için)
@@ -396,9 +396,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         const number = parseInt(tableId.replace('outside-', ''));
         table = {
           id: tableId,
-          number: number,
+          number: number + 60,
           type: 'outside',
-          name: `Dışarı ${number}`
+          name: `Dışarı ${number + 60}`
         };
       } else if (tableId.startsWith('package-')) {
         const parts = tableId.split('-');

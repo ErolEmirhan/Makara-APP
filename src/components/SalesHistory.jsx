@@ -27,6 +27,251 @@ const SalesHistory = () => {
     }, 3000);
   };
 
+  // Tarih/saat string'ini Date objesine çevir
+  const parseDateTime = (dateStr, timeStr) => {
+    if (!dateStr || !timeStr) return null;
+    try {
+      const [day, month, year] = dateStr.split('.');
+      const [hour, minute, second] = timeStr.split(':');
+      return new Date(year, month - 1, day, hour || 0, minute || 0, second || 0);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // Kısmi ödemeleri grupla (masa sonlandığı ana kadar olan ödemeler)
+  const groupPartialPayments = (sales) => {
+    const grouped = {};
+    const standalone = [];
+
+    // Önce tüm satışları tarih/saat'e göre sırala (en eski önce)
+    const sortedSales = [...sales].sort((a, b) => {
+      const dateA = `${a.sale_date || ''} ${a.sale_time || ''}`;
+      const dateB = `${b.sale_date || ''} ${b.sale_time || ''}`;
+      return dateA.localeCompare(dateB);
+    });
+
+    // Aynı masa için satışları grupla (masa sonlandığı ana kadar)
+    const tableGroups = {};
+    
+    sortedSales.forEach(sale => {
+      // Sadece masa satışlarını işle (table_name varsa)
+      if (sale.table_name && sale.sale_date && sale.sale_time && sale.payment_method) {
+        const tableKey = `${sale.table_name || ''}_${sale.table_type || ''}`;
+        
+        if (!tableGroups[tableKey]) {
+          tableGroups[tableKey] = [];
+        }
+        
+        tableGroups[tableKey].push(sale);
+      } else {
+        // Masa satışı değilse, olduğu gibi ekle
+        standalone.push(sale);
+      }
+    });
+
+    // Her masa için oturumları belirle (masa sonlandığı ana kadar)
+    Object.keys(tableGroups).forEach(tableKey => {
+      const tableSales = tableGroups[tableKey];
+      const sessions = [];
+      let currentSession = [];
+
+      for (let i = 0; i < tableSales.length; i++) {
+        const sale = tableSales[i];
+        const saleDateTime = parseDateTime(sale.sale_date, sale.sale_time);
+        
+        // Masa kapanış satışını tespit et
+        // Masa kapanış satışı (complete-table-order) genellikle çok sayıda ürün içerir (tüm sipariş)
+        const itemCount = sale.items_array && Array.isArray(sale.items_array) 
+          ? sale.items_array.length 
+          : (sale.items ? sale.items.split(',').length : 0);
+        
+        // Masa kapanış satışı kriterleri:
+        // 1. 2 veya daha fazla ürün içeriyorsa (tüm sipariş genellikle 2+ ürün)
+        // Bu, masa sonlandığında yapılan complete-table-order satışıdır
+        // Kısmi ödemeler genellikle 1 ürün içerir
+        const isTableClosingSale = itemCount >= 2;
+        
+        if (currentSession.length === 0) {
+          // İlk satış, yeni oturum başlat
+          currentSession.push(sale);
+        } else {
+          // Önceki satışın tarih/saatini al
+          const prevSale = currentSession[currentSession.length - 1];
+          const prevDateTime = parseDateTime(prevSale.sale_date, prevSale.sale_time);
+          
+          // Önceki satış masa kapanış satışı mıydı?
+          const prevItemCount = prevSale.items_array && Array.isArray(prevSale.items_array) 
+            ? prevSale.items_array.length 
+            : (prevSale.items ? prevSale.items.split(',').length : 0);
+          const prevIsTableClosingSale = prevItemCount >= 2;
+          
+          // Eğer önceki satış masa kapanış satışıysa (2+ ürün), yeni oturum başlat
+          // (Masa sonlandı, yeni müşteri oturdu)
+          if (prevIsTableClosingSale) {
+            // Mevcut oturumu kaydet
+            sessions.push([...currentSession]);
+            // Yeni oturum başlat
+            currentSession = [sale];
+          } else if (saleDateTime && prevDateTime) {
+            // İki satış arasındaki farkı hesapla (dakika cinsinden)
+            const diffMinutes = (saleDateTime - prevDateTime) / (1000 * 60);
+            
+            // Eğer 30 dakikadan fazla geçtiyse, yeni oturum başlat
+            // (Masa sonlandı, yeni müşteri oturdu)
+            if (diffMinutes > 30) {
+              // Mevcut oturumu kaydet
+              sessions.push([...currentSession]);
+              // Yeni oturum başlat
+              currentSession = [sale];
+            } else {
+              // Aynı oturum, ekle
+              currentSession.push(sale);
+            }
+          } else {
+            // Tarih/saat parse edilemediyse, aynı oturuma ekle
+            currentSession.push(sale);
+          }
+        }
+      }
+      
+      // Son oturumu da ekle
+      if (currentSession.length > 0) {
+        sessions.push(currentSession);
+      }
+
+      // Her oturumu grupla (sadece birden fazla satış varsa)
+      sessions.forEach((session, sessionIndex) => {
+        // Eğer oturumda sadece 1 satış varsa, gruplama yapma, standalone'a ekle
+        if (session.length === 1) {
+          standalone.push(session[0]);
+          return;
+        }
+        
+        // Oturum anahtarı: masa + oturum indeksi
+        const sessionKey = `${tableKey}_session_${sessionIndex}`;
+        
+        if (session.length > 0) {
+          const firstSale = session[0];
+          const lastSale = session[session.length - 1];
+          
+          grouped[sessionKey] = {
+            id: firstSale.id, // İlk satışın id'si
+            table_name: firstSale.table_name,
+            table_type: firstSale.table_type,
+            sale_date: firstSale.sale_date, // İlk ödeme tarihi
+            sale_time: firstSale.sale_time, // İlk ödeme saati
+            last_sale_date: lastSale.sale_date, // Son ödeme tarihi
+            last_sale_time: lastSale.sale_time, // Son ödeme saati
+            payment_methods: new Set(), // Tüm ödeme yöntemleri
+            total_amount: 0,
+            items_array: [],
+            staff_names: new Set(),
+            original_sales: [] // Orijinal satışları sakla
+          };
+          
+          // Tüm satışları birleştir
+          session.forEach(sale => {
+            // Toplam tutarı ekle
+            grouped[sessionKey].total_amount += parseFloat(sale.total_amount || 0);
+            
+            // Ödeme yöntemini ekle
+            grouped[sessionKey].payment_methods.add(sale.payment_method);
+            
+            // Items array'i birleştir
+            if (sale.items_array && Array.isArray(sale.items_array)) {
+              grouped[sessionKey].items_array.push(...sale.items_array);
+            } else if (sale.items) {
+              // Eğer items_array yoksa items string'inden parse etmeye çalış
+              if (!grouped[sessionKey].items_strings) {
+                grouped[sessionKey].items_strings = [];
+              }
+              grouped[sessionKey].items_strings.push(sale.items);
+            }
+            
+            // Personel isimlerini ekle
+            if (sale.staff_name) {
+              grouped[sessionKey].staff_names.add(sale.staff_name);
+            }
+            
+            // Orijinal satışı sakla
+            grouped[sessionKey].original_sales.push(sale);
+          });
+        }
+      });
+    });
+
+    // Gruplanmış satışları formatla
+    const groupedSales = Object.values(grouped).map(group => {
+      // Eğer items_array varsa onu kullan, yoksa items_strings'den birleştir
+      let itemsText = '';
+      if (group.items_array && group.items_array.length > 0) {
+        // Aynı ürünleri birleştir (toplam miktar)
+        const itemMap = {};
+        group.items_array.forEach(item => {
+          const itemKey = `${item.product_id || item.product_name}_${item.price}`;
+          if (!itemMap[itemKey]) {
+            itemMap[itemKey] = {
+              product_id: item.product_id,
+              product_name: item.product_name,
+              price: item.price,
+              quantity: 0,
+              isGift: item.isGift || false
+            };
+          }
+          itemMap[itemKey].quantity += (item.quantity || 0);
+          // Eğer bir item ikram ise, tümü ikram olarak işaretle
+          if (item.isGift) {
+            itemMap[itemKey].isGift = true;
+          }
+        });
+        
+        // Birleştirilmiş ürünleri string'e çevir
+        itemsText = Object.values(itemMap).map(item => {
+          const giftText = item.isGift ? ' (İKRAM)' : '';
+          return `${item.product_name} x${item.quantity}${giftText}`;
+        }).join(', ');
+        
+        // items_array'i de birleştirilmiş haliyle güncelle
+        group.items_array = Object.values(itemMap);
+      } else if (group.items_strings && group.items_strings.length > 0) {
+        itemsText = group.items_strings.join(', ');
+      }
+
+      // Ödeme yöntemlerini birleştir
+      const paymentMethods = Array.from(group.payment_methods);
+      const paymentMethodText = paymentMethods.length > 1 
+        ? `${paymentMethods.join(' + ')} (Toplam)` 
+        : paymentMethods[0] || 'Bilinmiyor';
+
+      return {
+        id: group.id,
+        table_name: group.table_name,
+        table_type: group.table_type,
+        sale_date: group.sale_date, // İlk ödeme tarihi
+        sale_time: group.sale_time, // İlk ödeme saati
+        last_sale_date: group.last_sale_date, // Son ödeme tarihi
+        last_sale_time: group.last_sale_time, // Son ödeme saati
+        payment_method: paymentMethodText,
+        total_amount: group.total_amount,
+        items: itemsText,
+        items_array: group.items_array || [],
+        staff_name: Array.from(group.staff_names).join(', ') || null,
+        isGrouped: true, // Gruplanmış olduğunu işaretle
+        original_sales: group.original_sales // Orijinal satışları sakla
+      };
+    });
+
+    // Gruplanmış ve standalone satışları birleştir ve tarih/saat'e göre sırala
+    const allSales = [...groupedSales, ...standalone].sort((a, b) => {
+      const dateA = `${a.sale_date} ${a.sale_time}`;
+      const dateB = `${b.sale_date} ${b.sale_time}`;
+      return dateB.localeCompare(dateA); // Yeni önce
+    });
+
+    return allSales;
+  };
+
   useEffect(() => {
     loadSales();
     loadStaff();
@@ -120,9 +365,12 @@ const SalesHistory = () => {
   };
 
   // Filtrelenmiş satışlar
-  const filteredSales = selectedDate 
+  const rawFilteredSales = selectedDate 
     ? sales.filter(sale => sale.sale_date === selectedDate)
     : sales;
+
+  // Kısmi ödemeleri grupla
+  const filteredSales = groupPartialPayments(rawFilteredSales);
 
   // Tarihe göre gruplanmış satışlar
   const { grouped: salesByDate, sortedDates } = groupSalesByDate(filteredSales);
@@ -295,9 +543,12 @@ const SalesHistory = () => {
 
   const renderReports = () => {
     // Filtrelenmiş satışları kullan - masrafları hariç tut
-    const reportSales = (selectedDate 
+    const rawReportSales = (selectedDate 
       ? sales.filter(sale => sale.sale_date === selectedDate)
       : sales).filter(sale => !sale.isExpense && sale.payment_method !== 'Masraf');
+    
+    // Kısmi ödemeleri grupla
+    const reportSales = groupPartialPayments(rawReportSales).filter(sale => !sale.isExpense && sale.payment_method !== 'Masraf');
 
     if (reportSales.length === 0) {
       return (
@@ -741,9 +992,12 @@ const SalesHistory = () => {
 
   const renderStaffDetails = () => {
     // Filtrelenmiş satışları kullan
-    const reportSales = selectedDate 
+    const rawReportSales = selectedDate 
       ? sales.filter(sale => sale.sale_date === selectedDate)
       : sales;
+    
+    // Kısmi ödemeleri grupla
+    const reportSales = groupPartialPayments(rawReportSales);
 
     // Personel bazlı istatistikleri hesapla - Gerçek verilerle (item bazlı personel bilgileri)
     const staffStats = {};
@@ -1096,7 +1350,9 @@ const SalesHistory = () => {
                   setLoadingRecentSales(true);
                   try {
                     const recent = await window.electronAPI.getRecentSales(12);
-                    setRecentSales(recent || []);
+                    // Kısmi ödemeleri grupla
+                    const groupedSales = groupPartialPayments(recent || []);
+                    setRecentSales(groupedSales);
                   } catch (error) {
                     console.error('Son satışlar yüklenemedi:', error);
                     showToast('Son satışlar yüklenemedi', 'error');
@@ -1165,13 +1421,25 @@ const SalesHistory = () => {
                         >
                           <div className="flex items-center space-x-3 mb-2">
                             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                              sale.payment_method === 'Nakit'
+                              sale.payment_method && sale.payment_method.includes('Nakit')
                                 ? 'bg-gradient-to-r from-green-500 to-emerald-500'
-                                : 'bg-gradient-to-r from-blue-500 to-cyan-500'
+                                : sale.payment_method && sale.payment_method.includes('Kredi Kartı')
+                                ? 'bg-gradient-to-r from-blue-500 to-cyan-500'
+                                : sale.isGrouped
+                                ? 'bg-gradient-to-r from-purple-500 to-pink-500'
+                                : 'bg-gradient-to-r from-gray-500 to-gray-600'
                             }`}>
-                              {sale.payment_method === 'Nakit' ? (
+                              {sale.payment_method && sale.payment_method.includes('Nakit') ? (
                                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                                </svg>
+                              ) : sale.payment_method && sale.payment_method.includes('Kredi Kartı') ? (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                                </svg>
+                              ) : sale.isGrouped ? (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
                                 </svg>
                               ) : (
                                 <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1182,9 +1450,16 @@ const SalesHistory = () => {
                             <div className="flex-1">
                               <p className="font-bold text-gray-800">
                                 {sale.table_name ? `${sale.table_type === 'inside' ? 'İç' : 'Dış'} Masa ${sale.table_name}` : 'Hızlı Satış'}
+                                {sale.isGrouped && (
+                                  <span className="ml-2 text-xs font-normal text-purple-600 bg-purple-100 px-2 py-0.5 rounded">
+                                    (Kısmi Ödemeler)
+                                  </span>
+                                )}
                               </p>
                               <p className="text-sm text-gray-600">
-                                {sale.sale_date} {sale.sale_time}
+                                {sale.isGrouped && sale.last_sale_date && sale.last_sale_time
+                                  ? `${sale.sale_date} ${sale.sale_time} - ${sale.last_sale_date} ${sale.last_sale_time}`
+                                  : `${sale.sale_date} ${sale.sale_time}`}
                                 {sale.staff_name && ` • ${sale.staff_name}`}
                               </p>
                             </div>
@@ -1246,6 +1521,7 @@ const SalesHistory = () => {
                         setPrintToast({ status: 'printing', message: 'Adisyon yazdırılıyor...' });
 
                         // Satış item'larını adisyon formatına çevir
+                        // Gruplanmış satışlar için birleştirilmiş items_array kullan
                         const adisyonItems = (selectedSaleForAdisyon.items_array || []).map(item => ({
                           id: item.product_id,
                           name: item.product_name,
@@ -1255,13 +1531,23 @@ const SalesHistory = () => {
                           staff_name: item.staff_name || null
                         }));
 
+                        // Gruplanmış satışlar için son ödeme tarih/saatini kullan
+                        const saleDate = selectedSaleForAdisyon.isGrouped && selectedSaleForAdisyon.last_sale_date
+                          ? selectedSaleForAdisyon.last_sale_date
+                          : selectedSaleForAdisyon.sale_date;
+                        const saleTime = selectedSaleForAdisyon.isGrouped && selectedSaleForAdisyon.last_sale_time
+                          ? selectedSaleForAdisyon.last_sale_time
+                          : selectedSaleForAdisyon.sale_time;
+
                         const adisyonData = {
                           items: adisyonItems,
                           tableName: selectedSaleForAdisyon.table_name || null,
                           tableType: selectedSaleForAdisyon.table_type || null,
-                          orderNote: null,
-                          sale_date: selectedSaleForAdisyon.sale_date,
-                          sale_time: selectedSaleForAdisyon.sale_time,
+                          orderNote: selectedSaleForAdisyon.isGrouped 
+                            ? `Kısmi Ödemeler (${selectedSaleForAdisyon.original_sales?.length || 0} ödeme)` 
+                            : null,
+                          sale_date: saleDate,
+                          sale_time: saleTime,
                           staff_name: selectedSaleForAdisyon.staff_name || null,
                           cashierOnly: true // Sadece kasa yazıcısından fiyatlı fiş
                         };
@@ -1345,9 +1631,23 @@ const SalesHistory = () => {
 
                   setDeleting(true);
                   try {
-                    const result = await window.electronAPI.deleteSale(saleToDelete.id);
+                    let allSuccess = true;
                     
-                    if (result.success) {
+                    // Eğer gruplanmış satışsa, tüm orijinal satışları sil
+                    if (saleToDelete.isGrouped && saleToDelete.original_sales && saleToDelete.original_sales.length > 0) {
+                      // Tüm orijinal satışları sil
+                      const deletePromises = saleToDelete.original_sales.map(sale => 
+                        window.electronAPI.deleteSale(sale.id)
+                      );
+                      const results = await Promise.all(deletePromises);
+                      allSuccess = results.every(r => r.success);
+                    } else {
+                      // Normal satışı sil
+                      const result = await window.electronAPI.deleteSale(saleToDelete.id);
+                      allSuccess = result.success;
+                    }
+                    
+                    if (allSuccess) {
                       // Satışı listeden kaldır
                       setRecentSales(prev => prev.filter(s => s.id !== saleToDelete.id));
                       // Eğer seçili satış silindiyse seçimi temizle
@@ -1356,8 +1656,9 @@ const SalesHistory = () => {
                       }
                       setShowDeleteConfirm(false);
                       setSaleToDelete(null);
+                      showToast('Satış başarıyla silindi', 'success');
                     } else {
-                      showToast(result.error || 'Satış silinirken bir hata oluştu', 'error');
+                      showToast('Satış silinirken bir hata oluştu', 'error');
                     }
                   } catch (error) {
                     console.error('Satış silme hatası:', error);

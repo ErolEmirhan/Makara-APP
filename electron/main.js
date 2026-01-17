@@ -149,7 +149,8 @@ let db = {
     adminPin: '1234',
     cashierPrinter: null // { printerName, printerType } - Kasa yazıcısı ayarı
   },
-  printerAssignments: [] // { printerName, printerType, category_id }
+  printerAssignments: [], // { printerName, printerType, category_id }
+  couriers: [] // { id, name, password }
 };
 
 function initDatabase() {
@@ -180,6 +181,7 @@ function initDatabase() {
       if (!db.tableOrders) db.tableOrders = [];
       if (!db.tableOrderItems) db.tableOrderItems = [];
       if (!db.printerAssignments) db.printerAssignments = [];
+      if (!db.couriers) db.couriers = [];
     } catch (error) {
       console.error('Veritabanı yüklenemedi, yeni oluşturuluyor:', error);
       initDefaultData();
@@ -2145,8 +2147,8 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
   };
 });
 
-// Tüm masayı iptal et - hiçbir kayıt tutmadan, sanki hiç açılmamış gibi
-ipcMain.handle('cancel-entire-table-order', async (event, orderId) => {
+// Tüm masayı iptal et - açıklama zorunlu, Firebase'e kayıt tutulacak
+ipcMain.handle('cancel-entire-table-order', async (event, orderId, cancelReason = null) => {
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
     return { success: false, error: 'Sipariş bulunamadı' };
@@ -2156,16 +2158,68 @@ ipcMain.handle('cancel-entire-table-order', async (event, orderId) => {
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
+  // İptal açıklaması kontrolü - açıklama yoksa hata döndür
+  if (!cancelReason || cancelReason.trim() === '') {
+    return { success: false, requiresReason: true, error: 'İptal açıklaması zorunludur' };
+  }
+
+  cancelReason = cancelReason.trim();
+
   const tableId = order.table_id;
 
-  // Tüm sipariş item'larını bul ve sil
+  // Tüm sipariş item'larını bul
   const orderItems = db.tableOrderItems.filter(oi => oi.order_id === orderId);
   
-  // Stok iadesi yapma - hiçbir şey değişmeyecek
-  // Fiş yazdırma - hiçbir şey yazdırılmayacak
-  // Firebase kaydı - hiçbir kayıt tutulmayacak
+  // Stok iadesi yap (ikram edilen ürünler hariç)
+  for (const item of orderItems) {
+    if (!item.isGift) {
+      await increaseProductStock(item.product_id, item.quantity);
+    }
+  }
+
+  // Firebase'e iptal kayıtları ekle - tüm ürünler için
+  if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
+    try {
+      const now = new Date();
+      const cancelDate = now.toLocaleDateString('tr-TR');
+      const cancelTime = getFormattedTime(now);
+      
+      const orderStaffName = order.staff_name || null;
+      
+      const cancelRef = firebaseCollection(firestore, 'cancels');
+      
+      // Her ürün için ayrı iptal kaydı oluştur
+      for (const item of orderItems) {
+        await firebaseAddDoc(cancelRef, {
+          item_id: item.id,
+          order_id: order.id,
+          table_id: order.table_id,
+          table_name: order.table_name,
+          table_type: order.table_type,
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          price: item.price,
+          cancel_reason: cancelReason,
+          cancel_date: cancelDate,
+          cancel_time: cancelTime,
+          staff_id: null, // Desktop'tan yapıldığı için staff_id yok
+          staff_name: null,
+          staff_is_manager: false,
+          order_staff_name: orderStaffName,
+          source: 'desktop',
+          is_entire_table_cancel: true, // Tüm masa iptali olduğunu işaretle
+          created_at: firebaseServerTimestamp()
+        });
+      }
+      
+      console.log(`✅ Tüm masa iptal kayıtları Firebase'e başarıyla kaydedildi (${orderItems.length} ürün)`);
+    } catch (error) {
+      console.error('❌ Firebase\'e tüm masa iptal kayıtları kaydedilemedi:', error);
+    }
+  }
   
-  // Sadece siparişi ve item'ları sil
+  // Siparişi ve item'ları sil
   const orderIndex = db.tableOrders.findIndex(o => o.id === orderId);
   if (orderIndex !== -1) {
     db.tableOrders.splice(orderIndex, 1);
@@ -2205,7 +2259,7 @@ ipcMain.handle('cancel-entire-table-order', async (event, orderId) => {
   return { success: true };
 });
 
-ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit') => {
+ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit', campaignPercentage = null) => {
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
     return { success: false, error: 'Sipariş bulunamadı' };
@@ -2218,6 +2272,21 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
   // Ödeme yöntemi kontrolü
   if (!paymentMethod || (paymentMethod !== 'Nakit' && paymentMethod !== 'Kredi Kartı')) {
     return { success: false, error: 'Geçerli bir ödeme yöntemi seçilmedi' };
+  }
+
+  // Kampanya indirimi hesapla
+  const originalAmount = order.total_amount;
+  let finalAmount = originalAmount;
+  let discountAmount = 0;
+  
+  if (campaignPercentage && campaignPercentage > 0 && campaignPercentage <= 100) {
+    discountAmount = (originalAmount * campaignPercentage) / 100;
+    finalAmount = originalAmount - discountAmount;
+    // Negatif tutar kontrolü
+    if (finalAmount < 0) {
+      finalAmount = 0;
+      discountAmount = originalAmount;
+    }
   }
 
   // Sipariş durumunu tamamlandı olarak işaretle
@@ -2252,10 +2321,13 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
     ? Object.keys(staffCounts).reduce((a, b) => staffCounts[a] > staffCounts[b] ? a : b)
     : null;
 
-  // Satış ekle (seçilen ödeme yöntemi ile)
+  // Satış ekle (kampanya indirimi uygulanmış tutar ile)
   db.sales.push({
     id: saleId,
-    total_amount: order.total_amount,
+    total_amount: finalAmount, // Kampanya sonrası tutar
+    original_amount: campaignPercentage ? originalAmount : null, // Kampanya varsa orijinal tutar
+    campaign_percentage: campaignPercentage || null, // Kampanya yüzdesi
+    discount_amount: discountAmount > 0 ? discountAmount : null, // İndirim tutarı
     payment_method: paymentMethod,
     sale_date: saleDate,
     sale_time: saleTime,
@@ -2302,7 +2374,10 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
 
       await firebaseAddDoc(salesRef, {
         sale_id: saleId,
-        total_amount: order.total_amount,
+        total_amount: finalAmount, // Kampanya sonrası tutar
+        original_amount: campaignPercentage ? originalAmount : null, // Kampanya varsa orijinal tutar
+        campaign_percentage: campaignPercentage || null, // Kampanya yüzdesi
+        discount_amount: discountAmount > 0 ? discountAmount : null, // İndirim tutarı
         payment_method: paymentMethod,
         sale_date: saleDate,
         sale_time: saleTime,
@@ -2346,6 +2421,51 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
       tableId: order.table_id,
       hasOrder: false
     });
+  }
+
+  // Masa sonlandırma sonrası otomatik olarak kasa yazıcısından fiş yazdır
+  try {
+    const cashierPrinter = db.settings.cashierPrinter;
+    
+    if (cashierPrinter && cashierPrinter.printerName) {
+      const receiptItems = orderItems.map(item => ({
+        id: item.product_id,
+        name: item.product_name,
+        quantity: item.quantity,
+        price: item.price,
+        isGift: item.isGift || false
+      }));
+
+      const receiptData = {
+        sale_id: saleId,
+        totalAmount: finalAmount,
+        original_amount: campaignPercentage ? originalAmount : null,
+        campaign_percentage: campaignPercentage || null,
+        discount_amount: discountAmount > 0 ? discountAmount : null,
+        paymentMethod: paymentMethod,
+        sale_date: saleDate,
+        sale_time: saleTime,
+        tableName: order.table_name,
+        tableType: order.table_type,
+        items: receiptItems,
+        orderNote: order.order_note || null,
+        cashierOnly: true // Sadece kasa yazıcısından yazdır
+      };
+
+      // Arka planda yazdır, hata olsa bile devam et
+      printToPrinter(
+        cashierPrinter.printerName,
+        cashierPrinter.printerType,
+        receiptData,
+        false, // isProductionReceipt = false (tam fiş)
+        null
+      ).catch(err => {
+        console.error('Masa sonlandırma sonrası fiş yazdırma hatası:', err);
+      });
+    }
+  } catch (error) {
+    console.error('Masa sonlandırma sonrası fiş yazdırma hatası:', error);
+    // Hata olsa bile devam et
   }
 
   return { success: true, saleId };
@@ -4691,6 +4811,26 @@ function generateReceiptHTML(receiptData) {
       ` : ''}
 
       <div class="total">
+        ${receiptData.campaign_percentage ? `
+        <div>
+          <span>TOPLAM:</span>
+          <span style="text-decoration: line-through; color: #999;">₺${(receiptData.original_amount || receiptData.items.reduce((sum, item) => {
+            if (item.isGift) return sum;
+            return sum + (item.price * item.quantity);
+          }, 0)).toFixed(2)}</span>
+        </div>
+        <div style="font-size: 10px; color: #d97706; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
+          <span>Kampanya: %${receiptData.campaign_percentage}</span>
+          <span>-₺${(receiptData.discount_amount || 0).toFixed(2)}</span>
+        </div>
+        <div>
+          <span>ÖDENECEK:</span>
+          <span>₺${(receiptData.totalAmount || receiptData.items.reduce((sum, item) => {
+            if (item.isGift) return sum;
+            return sum + (item.price * item.quantity);
+          }, 0)).toFixed(2)}</span>
+        </div>
+        ` : `
         <div>
           <span>TOPLAM:</span>
           <span>₺${receiptData.items.reduce((sum, item) => {
@@ -4699,6 +4839,7 @@ function generateReceiptHTML(receiptData) {
             return sum + (item.price * item.quantity);
           }, 0).toFixed(2)}</span>
         </div>
+        `}
         <div style="font-size: 11px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
           <span>Ödeme:</span>
           <span>${receiptData.paymentMethod || 'Nakit'}</span>
@@ -10579,6 +10720,94 @@ ipcMain.handle('generate-qr-code', async () => {
   } catch (error) {
     console.error('QR kod oluşturma hatası:', error);
     return { success: false, error: error.message };
+  }
+});
+
+// Courier Management IPC Handlers
+ipcMain.handle('get-couriers', () => {
+  if (!db.couriers) db.couriers = [];
+  // Şifreleri gizle
+  const couriersWithoutPasswords = db.couriers.map(c => ({
+    id: c.id,
+    name: c.name
+  }));
+  return { success: true, couriers: couriersWithoutPasswords };
+});
+
+ipcMain.handle('add-courier', (event, name, password) => {
+  if (!db.couriers) db.couriers = [];
+  
+  // Aynı şifreyi kontrol et
+  const existingCourier = db.couriers.find(c => c.password === password);
+  if (existingCourier) {
+    return { success: false, error: 'Bu şifre zaten kullanılıyor. Lütfen farklı bir şifre seçin.' };
+  }
+  
+  // Aynı ismi kontrol et
+  const existingName = db.couriers.find(c => c.name.toLowerCase() === name.toLowerCase().trim());
+  if (existingName) {
+    return { success: false, error: 'Bu isimde bir kurye zaten mevcut.' };
+  }
+  
+  const newId = db.couriers.length > 0 
+    ? Math.max(...db.couriers.map(c => c.id)) + 1 
+    : 1;
+  
+  const newCourier = {
+    id: newId,
+    name: name.trim(),
+    password: password.toString()
+  };
+  
+  db.couriers.push(newCourier);
+  saveDatabase();
+  return { success: true, courier: { id: newCourier.id, name: newCourier.name } };
+});
+
+ipcMain.handle('change-courier-password', (event, courierId, newPassword) => {
+  if (!db.couriers) db.couriers = [];
+  
+  const courier = db.couriers.find(c => c.id === courierId);
+  if (!courier) {
+    return { success: false, error: 'Kurye bulunamadı' };
+  }
+  
+  // Aynı şifreyi kontrol et (kendi şifresi hariç)
+  const existingCourier = db.couriers.find(c => c.password === newPassword && c.id !== courierId);
+  if (existingCourier) {
+    return { success: false, error: 'Bu şifre zaten başka bir kurye tarafından kullanılıyor. Lütfen farklı bir şifre seçin.' };
+  }
+  
+  courier.password = newPassword.toString();
+  saveDatabase();
+  return { success: true };
+});
+
+ipcMain.handle('delete-courier', (event, courierId) => {
+  if (!db.couriers) db.couriers = [];
+  
+  const index = db.couriers.findIndex(c => c.id === courierId);
+  if (index === -1) {
+    return { success: false, error: 'Kurye bulunamadı' };
+  }
+  
+  db.couriers.splice(index, 1);
+  saveDatabase();
+  return { success: true };
+});
+
+ipcMain.handle('verify-courier', (event, name, password) => {
+  if (!db.couriers) db.couriers = [];
+  
+  const courier = db.couriers.find(c => 
+    c.name.toLowerCase() === name.toLowerCase().trim() && 
+    c.password === password.toString()
+  );
+  
+  if (courier) {
+    return { success: true, courier: { id: courier.id, name: courier.name } };
+  } else {
+    return { success: false, error: 'Kurye adı veya şifre hatalı' };
   }
 });
 

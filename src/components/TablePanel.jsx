@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, where } from 'firebase/firestore';
+import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, where, getDoc } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
 import TablePartialPaymentModal from './TablePartialPaymentModal';
 import TableTransferModal from './TableTransferModal';
@@ -188,6 +188,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       // Index oluşturmak için: https://console.firebase.google.com/project/makaraonline-5464e/firestore/indexes
       // Şimdilik sadece where kullanıp client-side'da sıralama yapıyoruz (index gerektirmez)
       
+      // Hem pending hem de courier siparişlerini göster (pending için)
       const q = query(ordersRef, where('status', '==', 'pending'));
       
       // Real-time listener
@@ -430,62 +431,136 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
 
     // Önce ödeme yöntemi seçimi modal'ı göster
-    const paymentMethod = await new Promise((resolve) => {
-      const modal = document.createElement('div');
-      modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
-      modal.innerHTML = `
-        <div class="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
-          <h3 class="text-xl font-bold text-gray-800 mb-2">Ödeme Yöntemi Seçin</h3>
-          <p class="text-sm text-gray-600 mb-6">Masa: ${selectedOrder.table_name}</p>
-          <p class="text-lg font-semibold text-gray-800 mb-6">Toplam: ₺${selectedOrder.total_amount.toFixed(2)}</p>
-          <div class="grid grid-cols-2 gap-3 mb-4">
-            <button id="cashBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
-              <div class="flex flex-col items-center space-y-2">
-                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+    const paymentResult = await new Promise((resolve) => {
+      let selectedCampaign = null;
+      let showCampaign = false;
+      
+      const updateModal = () => {
+        const originalAmount = selectedOrder.total_amount;
+        const discount = selectedCampaign ? (originalAmount * selectedCampaign) / 100 : 0;
+        const finalAmount = originalAmount - discount;
+        
+        const campaignSection = showCampaign ? `
+          <div id="campaignSection" class="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 space-y-2 mb-4">
+            <p class="text-center font-semibold text-amber-800 mb-3">Kampanya Seçin</p>
+            <div class="grid grid-cols-3 gap-2">
+              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 10 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="10">%10</button>
+              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 15 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="15">%15</button>
+              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 20 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="20">%20</button>
+              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 25 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="25">%25</button>
+              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 50 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="50">%50</button>
+            </div>
+            ${selectedCampaign ? `
+              <button id="removeCampaignBtn" class="w-full mt-2 py-2 bg-red-100 hover:bg-red-200 text-red-700 font-semibold rounded-lg transition-all">
+                Kampanyayı Kaldır
+              </button>
+            ` : ''}
+          </div>
+        ` : '';
+        
+        const amountDisplay = selectedCampaign ? `
+          <div class="mb-4 space-y-2">
+            <p class="text-sm text-gray-600">Orijinal Tutar</p>
+            <p class="text-xl font-semibold text-gray-400 line-through">₺${originalAmount.toFixed(2)}</p>
+            <p class="text-sm text-amber-700 font-semibold">Kampanya: %${selectedCampaign} İndirim</p>
+            <p class="text-3xl font-bold text-gray-800">₺${finalAmount.toFixed(2)}</p>
+            <p class="text-sm text-green-600 font-semibold">İndirim: -₺${discount.toFixed(2)}</p>
+          </div>
+        ` : `
+          <p class="text-lg font-semibold text-gray-800 mb-6">Toplam: ₺${originalAmount.toFixed(2)}</p>
+        `;
+        
+        modal.innerHTML = `
+          <div class="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
+            <h3 class="text-xl font-bold text-gray-800 mb-2">Ödeme Yöntemi Seçin</h3>
+            <p class="text-sm text-gray-600 mb-4">Masa: ${selectedOrder.table_name}</p>
+            ${amountDisplay}
+            <div class="grid grid-cols-2 gap-3 mb-3">
+              <button id="cashBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  <span>Nakit</span>
+                </div>
+              </button>
+              <button id="cardBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                  </svg>
+                  <span>Kredi Kartı</span>
+                </div>
+              </button>
+            </div>
+            <button id="campaignBtn" class="w-full mb-3 p-4 rounded-xl font-semibold bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+              <div class="flex items-center justify-center space-x-2">
+                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
-                <span>Nakit</span>
+                <span>Kampanya Uygula</span>
               </div>
             </button>
-            <button id="cardBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
-              <div class="flex flex-col items-center space-y-2">
-                <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                </svg>
-                <span>Kredi Kartı</span>
-              </div>
+            ${campaignSection}
+            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">
+              İptal
             </button>
           </div>
-          <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">
-            İptal
-          </button>
-        </div>
-      `;
+        `;
+        
+        // Event listener'ları yeniden ekle
+        modal.querySelector('#cashBtn').onclick = () => {
+          document.body.removeChild(modal);
+          resolve({ paymentMethod: 'Nakit', campaignPercentage: selectedCampaign });
+        };
+        
+        modal.querySelector('#cardBtn').onclick = () => {
+          document.body.removeChild(modal);
+          resolve({ paymentMethod: 'Kredi Kartı', campaignPercentage: selectedCampaign });
+        };
+        
+        modal.querySelector('#campaignBtn').onclick = () => {
+          showCampaign = !showCampaign;
+          updateModal();
+        };
+        
+        if (showCampaign) {
+          modal.querySelectorAll('.campaignBtn').forEach(btn => {
+            btn.onclick = () => {
+              selectedCampaign = parseInt(btn.dataset.percent);
+              updateModal();
+            };
+          });
+          
+          const removeBtn = modal.querySelector('#removeCampaignBtn');
+          if (removeBtn) {
+            removeBtn.onclick = () => {
+              selectedCampaign = null;
+              updateModal();
+            };
+          }
+        }
+        
+        modal.querySelector('#cancelBtn').onclick = () => {
+          document.body.removeChild(modal);
+          resolve(null);
+        };
+      };
       
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
       document.body.appendChild(modal);
-      
-      modal.querySelector('#cashBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve('Nakit');
-      };
-      
-      modal.querySelector('#cardBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve('Kredi Kartı');
-      };
-      
-      modal.querySelector('#cancelBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve(null);
-      };
+      updateModal();
     });
 
-    if (!paymentMethod) {
+    if (!paymentResult) {
       return; // Kullanıcı iptal etti
     }
 
+    const { paymentMethod, campaignPercentage } = paymentResult;
+
     try {
-      const result = await window.electronAPI.completeTableOrder(selectedOrder.id, paymentMethod);
+      const result = await window.electronAPI.completeTableOrder(selectedOrder.id, paymentMethod, campaignPercentage);
       
       if (result.success) {
         // Modal'ı kapat ve siparişleri yenile
@@ -691,14 +766,114 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
   };
 
-  // Ödeme Alındı - Onay modalını göster
+  // Siparişi Onayla - Onay modalını göster
   const handleMarkAsPaid = (order) => {
     if (!order || selectedType !== 'online') return;
     setOrderToMarkAsPaid(order);
     setShowPaymentConfirmModal(true);
   };
 
-  // Ödeme Alındı - Onaylandıktan sonra işaretle
+  // İki koordinat arasındaki mesafeyi hesapla (Haversine formülü - km cinsinden)
+  const calculateDistance = (lat1, lon1, lat2, lon2) => {
+    const R = 6371; // Dünya yarıçapı (km)
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = 
+      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+      Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  };
+
+  // Adresi koordinatlara çevir (Nominatim - OpenStreetMap - ÜCRETSİZ)
+  // Rate limiting için son istek zamanını sakla
+  let lastGeocodeRequest = 0;
+  const GEOCODE_DELAY = 1100; // 1.1 saniye (Nominatim rate limit: 1 istek/saniye)
+  
+  const geocodeAddress = async (address) => {
+    try {
+      // Rate limiting: Son istekten en az 1.1 saniye geçmeli
+      const now = Date.now();
+      const timeSinceLastRequest = now - lastGeocodeRequest;
+      if (timeSinceLastRequest < GEOCODE_DELAY) {
+        await new Promise(resolve => setTimeout(resolve, GEOCODE_DELAY - timeSinceLastRequest));
+      }
+      lastGeocodeRequest = Date.now();
+      
+      // Nominatim (OpenStreetMap) - Ücretsiz, API key gerektirmez
+      // Rate limit: 1 istek/saniye (User-Agent header zorunlu)
+      const nominatimResponse = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}&limit=1&addressdetails=1`,
+        {
+          headers: {
+            'User-Agent': 'Makara-POS-Kurye-Sistemi/1.0',
+            'Accept-Language': 'tr-TR,tr;q=0.9'
+          }
+        }
+      );
+      
+      if (!nominatimResponse.ok) {
+        console.warn('Nominatim isteği başarısız:', nominatimResponse.status);
+        return null;
+      }
+      
+      const nominatimData = await nominatimResponse.json();
+      
+      if (nominatimData && nominatimData.length > 0) {
+        return { 
+          lat: parseFloat(nominatimData[0].lat), 
+          lng: parseFloat(nominatimData[0].lon) 
+        };
+      } else {
+        console.warn('Adres bulunamadı:', address);
+        return null;
+      }
+    } catch (error) {
+      console.error('Geocoding hatası:', error);
+      return null;
+    }
+  };
+
+  // En yakın kuryeyi bul
+  const findNearestCourier = async (targetLat, targetLng) => {
+    if (!onlineFirestore) return null;
+
+    try {
+      // Tüm aktif kuryelerin konumlarını al
+      const locationsRef = collection(onlineFirestore, 'courier_locations');
+      const snapshot = await getDocs(locationsRef);
+      
+      let nearestCourier = null;
+      let minDistance = Infinity;
+
+      snapshot.forEach((docSnap) => {
+        const locationData = docSnap.data();
+        
+        // Sadece online kuryeleri kontrol et
+        if (locationData.isOnline && locationData.latitude && locationData.longitude) {
+          const distance = calculateDistance(
+            targetLat,
+            targetLng,
+            locationData.latitude,
+            locationData.longitude
+          );
+          
+          if (distance < minDistance) {
+            minDistance = distance;
+            nearestCourier = locationData.name;
+          }
+        }
+      });
+
+      return nearestCourier;
+    } catch (error) {
+      console.error('En yakın kurye bulunurken hata:', error);
+      return null;
+    }
+  };
+
+  // Siparişi Onayla - Onaylandıktan sonra en yakın kuryeye gönder
   const confirmMarkAsPaid = async () => {
     if (!orderToMarkAsPaid || selectedType !== 'online') return;
     
@@ -710,13 +885,66 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
 
     try {
-      // Firebase'de sipariş status'unu 'completed' olarak güncelle
+      // Sipariş adresini al
+      const address = orderToMarkAsPaid.customer_address || orderToMarkAsPaid.address || '';
+      
+      if (!address) {
+        showToast('Sipariş adresi bulunamadı', 'error');
+        return;
+      }
+
+      // Adresi koordinatlara çevir
+      // Önce adresin zaten koordinat formatında olup olmadığını kontrol et
+      let coordinates = null;
+      
+      // Koordinat formatı kontrolü: "37.86233187486326, 32.47140102577743" veya benzeri
+      const coordMatch = address.match(/(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/);
+      if (coordMatch) {
+        // Zaten koordinat formatında
+        coordinates = {
+          lat: parseFloat(coordMatch[1]),
+          lng: parseFloat(coordMatch[2])
+        };
+        console.log('Adres zaten koordinat formatında:', coordinates);
+      } else {
+        // Adresi koordinatlara çevir
+        showToast('Adres konumuna çevriliyor...', 'info');
+        coordinates = await geocodeAddress(address);
+        
+        if (!coordinates) {
+          showToast('Adres koordinatlara çevrilemedi. Lütfen daha sonra tekrar deneyin.', 'error');
+          setShowPaymentConfirmModal(false);
+          setOrderToMarkAsPaid(null);
+          return; // Koordinat bulunamazsa işlemi durdur
+        }
+      }
+      
+      // En yakın kuryeyi bul
+      showToast('En yakın kurye aranıyor...', 'info');
+      const nearestCourier = await findNearestCourier(coordinates.lat, coordinates.lng);
+      
+      if (!nearestCourier) {
+        showToast('Aktif kurye bulunamadı. Lütfen kurye ekleyin veya kuryelerin giriş yaptığından emin olun.', 'error');
+        setShowPaymentConfirmModal(false);
+        setOrderToMarkAsPaid(null);
+        return; // Kurye bulunamazsa işlemi durdur
+      }
+      
+      // Siparişi en yakın kuryeye ata
       const orderRef = doc(onlineFirestore, 'orders', orderToMarkAsPaid.id);
       await updateDoc(orderRef, {
-        status: 'completed'
+        status: 'courier',
+        assignedCourierId: nearestCourier,
+        deliveryCoordinates: {
+          latitude: coordinates.lat,
+          longitude: coordinates.lng
+      }
       });
       
-      console.log('Online sipariş ödemesi alındı olarak işaretlendi:', orderToMarkAsPaid.id);
+      console.log(`✅ Sipariş en yakın kuryeye atandı: ${nearestCourier}`, orderToMarkAsPaid.id);
+      showToast(`Sipariş ${nearestCourier} kuryesine atandı`, 'success');
+      
+      console.log('Online sipariş kurye sistemine gönderildi:', orderToMarkAsPaid.id);
       
       // Satış geçmişine kaydet
       if (window.electronAPI && window.electronAPI.createSale) {
@@ -759,7 +987,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         }
       }
       
-      showToast('Ödeme alındı olarak işaretlendi', 'success');
+      showToast('Sipariş kurye sistemine gönderildi', 'success');
       
       // Modal'ları kapat
       setShowPaymentConfirmModal(false);
@@ -1032,7 +1260,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                       </p>
                     </div>
                     
-                    {/* Ödeme Alındı Butonu - Sadece pending siparişler için */}
+                    {/* Siparişi Onayla Butonu - Sadece pending siparişler için */}
                     {order.status === 'pending' && (
                       <button
                         onClick={(e) => {
@@ -1044,7 +1272,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                         </svg>
-                        <span>Ödeme Alındı</span>
+                        <span>Siparişi Onayla</span>
                       </button>
                     )}
                     
@@ -1319,9 +1547,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
 
             {/* Başlık ve Açıklama */}
             <div className="text-center mb-8">
-              <h3 className="text-2xl font-bold text-gray-900 mb-3">Ödeme Alındı</h3>
+              <h3 className="text-2xl font-bold text-gray-900 mb-3">Siparişi Onayla</h3>
               <p className="text-gray-600 leading-relaxed mb-4">
-                Bu online siparişin ödemesinin alındığını onaylamak istediğinizden <span className="font-semibold text-gray-900">emin misiniz?</span>
+                Bu online siparişi onaylayıp kurye sistemine göndermek istediğinizden <span className="font-semibold text-gray-900">emin misiniz?</span>
               </p>
               <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
                 <div className="space-y-2">
@@ -1413,6 +1641,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           </div>
         </div>
       )}
+
     </div>
   );
 };

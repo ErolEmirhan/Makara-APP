@@ -20,8 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelTableOrderItem: (itemId, cancelQuantity, cancelReason) => ipcRenderer.invoke('cancel-table-order-item', itemId, cancelQuantity, cancelReason),
   cancelTableOrderItemsBulk: (itemsToCancel, cancelReason) => ipcRenderer.invoke('cancel-table-order-items-bulk', itemsToCancel, cancelReason),
   previewCancelReceipt: (itemId, cancelQuantity) => ipcRenderer.invoke('preview-cancel-receipt', itemId, cancelQuantity),
-  cancelEntireTableOrder: (orderId) => ipcRenderer.invoke('cancel-entire-table-order', orderId),
-  completeTableOrder: (orderId, paymentMethod) => ipcRenderer.invoke('complete-table-order', orderId, paymentMethod),
+  cancelEntireTableOrder: (orderId, cancelReason) => ipcRenderer.invoke('cancel-entire-table-order', orderId, cancelReason),
+  completeTableOrder: (orderId, paymentMethod, campaignPercentage) => ipcRenderer.invoke('complete-table-order', orderId, paymentMethod, campaignPercentage),
   transferTableOrder: (sourceTableId, targetTableId) => ipcRenderer.invoke('transfer-table-order', sourceTableId, targetTableId),
   // Settings API
   changePassword: (currentPin, newPin) => ipcRenderer.invoke('change-password', currentPin, newPin),
@@ -73,6 +73,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getStaff: () => ipcRenderer.invoke('get-staff'),
   verifyStaffPin: (password) => ipcRenderer.invoke('verify-staff-pin', password),
   setStaffManager: (staffId, isManager) => ipcRenderer.invoke('set-staff-manager', staffId, isManager),
+  // Courier Management API
+  getCouriers: () => ipcRenderer.invoke('get-couriers'),
+  addCourier: (name, password) => ipcRenderer.invoke('add-courier', name, password),
+  changeCourierPassword: (courierId, newPassword) => ipcRenderer.invoke('change-courier-password', courierId, newPassword),
+  deleteCourier: (courierId) => ipcRenderer.invoke('delete-courier', courierId),
+  verifyCourier: (name, password) => ipcRenderer.invoke('verify-courier', name, password),
   // Image optimization API
   optimizeAllProductImages: () => ipcRenderer.invoke('optimize-all-product-images'),
   // Real-time updates

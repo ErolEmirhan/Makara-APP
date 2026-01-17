@@ -16,12 +16,21 @@ service cloud.firestore {
       // Not: Eğer daha güvenli olmasını isterseniz, authentication kontrolü ekleyebilirsiniz
       allow read: if true;
       
-      // Güncelleme: Sadece status alanını güncelleyebilir (POS uygulaması için)
-      // Diğer alanlar değiştirilemez (güvenlik için)
-      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+      // Güncelleme: status, assignedCourierId ve deliveryCoordinates alanlarını güncelleyebilir
+      // (POS uygulaması ve kurye sistemi için)
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'assignedCourierId', 'deliveryCoordinates']);
       
       // Silme sadece authenticated kullanıcılar için (admin paneli için)
       allow delete: if request.auth != null;
+    }
+    
+    // Kurye konumları koleksiyonu
+    match /courier_locations/{courierName} {
+      // Herkes okuyabilir (en yakın kurye bulma için)
+      allow read: if true;
+      
+      // Herkes yazabilir (kuryeler konumlarını güncelleyebilir)
+      allow write: if true;
     }
     
     // Diğer koleksiyonlar için varsayılan kurallar (güvenlik için)
@@ -36,9 +45,10 @@ service cloud.firestore {
 
 1. **`allow create: if true;`** - Web sitenizden herkes sipariş oluşturabilir (online sipariş girişi için)
 2. **`allow read: if true;`** - POS uygulaması ve admin paneli siparişleri okuyabilir (authentication gerektirmez)
-3. **`allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);`** - Sadece `status` alanı güncellenebilir (POS uygulaması "Ödeme Alındı" butonu için). Diğer alanlar değiştirilemez (güvenlik için)
+3. **`allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'assignedCourierId', 'deliveryCoordinates']);`** - `status`, `assignedCourierId` ve `deliveryCoordinates` alanları güncellenebilir (POS uygulaması ve kurye sistemi için). Diğer alanlar değiştirilemez (güvenlik için)
 4. **`allow delete: if request.auth != null;`** - Sadece authenticated kullanıcılar (admin) siparişleri silebilir
-5. **`match /{document=**} { allow read, write: if false; }`** - Diğer tüm koleksiyonlar için varsayılan olarak erişim yok (güvenlik için)
+5. **`match /courier_locations/{courierName}`** - Kurye konumları koleksiyonu: Herkes okuyabilir ve yazabilir (kuryeler konumlarını güncelleyebilir, POS uygulaması en yakın kuryeyi bulabilir)
+6. **`match /{document=**} { allow read, write: if false; }`** - Diğer tüm koleksiyonlar için varsayılan olarak erişim yok (güvenlik için)
 
 ## Daha Güvenli Alternatif (Opsiyonel):
 

@@ -144,14 +144,37 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
           )}
 
           <div className="border-t-2 border-gray-400 pt-2 mt-3">
-            <div className="flex justify-between text-sm font-bold mb-1">
-              <span>TOPLAM:</span>
-              <span>₺{items.reduce((sum, item) => {
-                // İkram edilen ürünleri toplamdan çıkar
-                if (item.isGift) return sum;
-                return sum + (item.price * item.quantity);
-              }, 0).toFixed(2) || '0.00'}</span>
-            </div>
+            {saleInfo.campaign_percentage ? (
+              <>
+                <div className="flex justify-between text-xs font-semibold mb-1">
+                  <span>TOPLAM:</span>
+                  <span className="line-through text-gray-400">₺{(saleInfo.original_amount || items.reduce((sum, item) => {
+                    if (item.isGift) return sum;
+                    return sum + (item.price * item.quantity);
+                  }, 0)).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-xs font-semibold mb-1 text-amber-700">
+                  <span>Kampanya: %{saleInfo.campaign_percentage}</span>
+                  <span>-₺{(saleInfo.discount_amount || 0).toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-sm font-bold mb-1">
+                  <span>ÖDENECEK:</span>
+                  <span>₺{(saleInfo.totalAmount || items.reduce((sum, item) => {
+                    if (item.isGift) return sum;
+                    return sum + (item.price * item.quantity);
+                  }, 0)).toFixed(2)}</span>
+                </div>
+              </>
+            ) : (
+              <div className="flex justify-between text-sm font-bold mb-1">
+                <span>TOPLAM:</span>
+                <span>₺{items.reduce((sum, item) => {
+                  // İkram edilen ürünleri toplamdan çıkar
+                  if (item.isGift) return sum;
+                  return sum + (item.price * item.quantity);
+                }, 0).toFixed(2) || '0.00'}</span>
+              </div>
+            )}
             <div className="flex justify-between text-xs text-gray-600">
               <span>Ödeme:</span>
               <span>{saleInfo.paymentMethod || 'Nakit'}</span>

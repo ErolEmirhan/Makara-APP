@@ -119,6 +119,12 @@
     let onlineDb = null; // Online siparişler Firestore
     let onlineOrdersUnsubscribe = null; // Online siparişler real-time listener
     let onlineOrders = []; // Online siparişler listesi
+    let allCancels = []; // Tüm iptal kayıtları
+    // Lazy loading için değişkenler
+    let salesDisplayedCount = 10; // Gösterilen satış sayısı (10'ar 10'ar)
+    let cancelsDisplayedCount = 2; // Gösterilen iptal sayısı (2'şer 2'şer)
+    let isLoadingMoreSales = false; // Satış yükleme durumu
+    let isLoadingMoreCancels = false; // İptal yükleme durumu
 
     try {
       // Ana Firebase zaten başlatılmış mı kontrol et
@@ -247,10 +253,10 @@
       const dashboard = document.getElementById('dashboard');
       if (loginSection) loginSection.style.display = 'none';
       if (dashboard) dashboard.style.display = 'block';
+      // İlk yüklemede sadece satışları yükle, listener'lar renderCurrentView'da başlatılacak
       loadSales();
-      startRealtimeListener();
-      // Masaları yükle (aktif masa sayısı için)
-      loadTablesForStats();
+      loadCancels(); // Cache'den yüklemeyi dene
+      renderCurrentView(); // Listener'ları başlat
     }
 
     function verifyPin() {
@@ -363,20 +369,43 @@
         return;
       }
 
+      // Önce cache'den kontrol et
+      try {
+        const cachedSales = localStorage.getItem('sales_cache');
+        const cacheTimestamp = localStorage.getItem('sales_cache_timestamp');
+        const now = Date.now();
+        
+        // Cache 2 dakikadan yeni ise kullan (read quota tasarrufu için)
+        if (cachedSales && cacheTimestamp && (now - parseInt(cacheTimestamp)) < 2 * 60 * 1000) {
+          const sales = JSON.parse(cachedSales);
+          allSales = sales;
+          renderCurrentView();
+          updateStats(sales);
+          showLoading(false);
+          
+          // Cache'den yüklendi, arka planda güncelle
+          // Real-time listener zaten güncelleyecek
+          return;
+        }
+      } catch (e) {
+        console.warn('Cache okuma hatası:', e);
+      }
+
       try {
         showLoading(true);
         const salesRef = db.collection('sales');
         
         // created_at veya timestamp'e göre sırala (sale_date string olduğu için doğru sıralama yapmaz)
+        // Limit'i düşürdük: 5000 -> 500 (read quota tasarrufu için)
         let query = salesRef;
         try {
-          query = salesRef.orderBy('created_at', 'desc').limit(5000);
+          query = salesRef.orderBy('created_at', 'desc').limit(500);
         } catch (e) {
           try {
-            query = salesRef.orderBy('timestamp', 'desc').limit(5000);
+            query = salesRef.orderBy('timestamp', 'desc').limit(500);
           } catch (e2) {
             // Son çare: limit ile al, sonra JavaScript'te sırala
-            query = salesRef.limit(5000);
+            query = salesRef.limit(500);
           }
         }
         
@@ -485,6 +514,18 @@
         });
 
         allSales = sales; // Tüm satışları sakla
+        
+        // Cache'e kaydet (read quota tasarrufu için)
+        try {
+          localStorage.setItem('sales_cache', JSON.stringify(sales));
+          localStorage.setItem('sales_cache_timestamp', Date.now().toString());
+        } catch (e) {
+          console.warn('Cache yazma hatası:', e);
+        }
+        
+        // İptal kayıtlarını yükle
+        loadCancels();
+        
         renderCurrentView();
         updateStats(sales);
         showLoading(false);
@@ -505,24 +546,133 @@
       }
     }
 
+    // İptal kayıtlarını yükle (cache ile)
+    async function loadCancels() {
+      if (!db) return;
+      
+      // Önce cache'den kontrol et
+      try {
+        const cachedCancels = localStorage.getItem('cancels_cache');
+        const cacheTimestamp = localStorage.getItem('cancels_cache_timestamp');
+        const now = Date.now();
+        
+        // Cache 5 dakikadan yeni ise kullan
+        if (cachedCancels && cacheTimestamp && (now - parseInt(cacheTimestamp)) < 5 * 60 * 1000) {
+          allCancels = JSON.parse(cachedCancels);
+          if (allSales.length > 0) {
+            updateStats(allSales);
+          }
+          return; // Cache'den yüklendi, Firebase'e gitme
+        }
+      } catch (e) {
+        console.warn('Cache okuma hatası:', e);
+      }
+      
+      try {
+        const cancelsRef = db.collection('cancels');
+        // Son 1000 iptali al (read quota tasarrufu için)
+        const querySnapshot = await cancelsRef.orderBy('created_at', 'desc').limit(1000).get();
+        const cancels = [];
+        
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          cancels.push({
+            id: doc.id,
+            cancel_date: data.cancel_date || '',
+            cancel_time: data.cancel_time || '',
+            quantity: parseFloat(data.quantity || 0),
+            price: parseFloat(data.price || 0),
+            ...data
+          });
+        });
+        
+        allCancels = cancels;
+        
+        // Cache'e kaydet
+        try {
+          localStorage.setItem('cancels_cache', JSON.stringify(cancels));
+          localStorage.setItem('cancels_cache_timestamp', Date.now().toString());
+        } catch (e) {
+          console.warn('Cache yazma hatası:', e);
+        }
+        
+        // İptal kayıtları yüklendikten sonra istatistikleri güncelle
+        if (allSales.length > 0) {
+          updateStats(allSales);
+        }
+      } catch (error) {
+        console.error('İptal kayıtları yükleme hatası:', error);
+        allCancels = [];
+      }
+    }
+    
+    // İptal kayıtlarını real-time dinle (sadece aktif sekmede)
+    let cancelsUnsubscribe = null;
+    function startCancelsListener() {
+      if (!db) return;
+      
+      // Zaten bir listener varsa, yeni bir tane oluşturma
+      if (cancelsUnsubscribe) {
+        return;
+      }
+      
+      const cancelsRef = db.collection('cancels');
+      // Son 1000 iptali dinle (read quota tasarrufu için)
+      cancelsUnsubscribe = cancelsRef.orderBy('created_at', 'desc').limit(1000).onSnapshot((snapshot) => {
+        const cancels = [];
+        snapshot.forEach((doc) => {
+          const data = doc.data();
+          cancels.push({
+            id: doc.id,
+            cancel_date: data.cancel_date || '',
+            cancel_time: data.cancel_time || '',
+            quantity: parseFloat(data.quantity || 0),
+            price: parseFloat(data.price || 0),
+            ...data
+          });
+        });
+        
+        allCancels = cancels;
+        
+        // Cache'e kaydet
+        try {
+          localStorage.setItem('cancels_cache', JSON.stringify(cancels));
+          localStorage.setItem('cancels_cache_timestamp', Date.now().toString());
+        } catch (e) {
+          console.warn('Cache yazma hatası:', e);
+        }
+        
+        // İptal kayıtları güncellendiğinde istatistikleri güncelle
+        // Sadece "Satış Geçmişi" sekmesinde görünürse güncelle
+        if (activeTab === 'sales' && allSales.length > 0) {
+          updateStats(allSales);
+        }
+      }, (error) => {
+        console.error('İptal kayıtları real-time listener hatası:', error);
+      });
+    }
+
     // Real-time dinleme
     function startRealtimeListener() {
       if (!db) return;
       
+      // Zaten bir listener varsa, yeni bir tane oluşturma
       if (realtimeUnsubscribe) {
-        realtimeUnsubscribe();
+        return;
       }
 
       const salesRef = db.collection('sales');
       let query = salesRef;
       try {
-        query = salesRef.orderBy('created_at', 'desc').limit(5000);
+        // Limit'i düşürdük: 5000 -> 500 (read quota tasarrufu için)
+        // Sadece son 500 satışı dinle, geri kalanı cache'den al
+        query = salesRef.orderBy('created_at', 'desc').limit(500);
       } catch (e) {
         try {
-          query = salesRef.orderBy('timestamp', 'desc').limit(5000);
+          query = salesRef.orderBy('timestamp', 'desc').limit(500);
         } catch (e2) {
           // Son çare: limit ile al, sonra JavaScript'te sırala
-          query = salesRef.limit(5000);
+          query = salesRef.limit(500);
         }
       }
       
@@ -607,8 +757,23 @@
         });
 
         allSales = sales; // Tüm satışları sakla
-        renderCurrentView();
-        updateStats(sales);
+        
+        // Cache'e kaydet (read quota tasarrufu için)
+        try {
+          localStorage.setItem('sales_cache', JSON.stringify(sales));
+          localStorage.setItem('sales_cache_timestamp', Date.now().toString());
+        } catch (e) {
+          console.warn('Cache yazma hatası:', e);
+        }
+        
+        // Sadece "Satış Geçmişi" sekmesindeyse görünümü render et ve istatistikleri güncelle
+        if (activeTab === 'sales') {
+          renderCurrentView();
+          updateStats(sales);
+        }
+        // Diğer sekmelerde sadece istatistikleri güncelle (görünümü render etme)
+        // Böylece masa siparişi kaydedildiğinde veya iptal olduğunda anlık güncellenir
+        // Not: updateStats sadece "Satış Geçmişi" sekmesinde görünür, bu yüzden burada çağırmaya gerek yok
       }, (error) => {
         console.error('Real-time listener hatası:', error);
       });
@@ -709,10 +874,15 @@
       return sales; // 'all' için tüm satışlar
     }
 
-    // Satışları render et
-    function renderSales(sales) {
+    // Satışları render et (lazy loading ile)
+    function renderSales(sales, resetCount = false) {
       const container = document.getElementById('salesContainer');
       if (!container) return;
+
+      // Tarih filtresi değiştiğinde sayacı sıfırla
+      if (resetCount) {
+        salesDisplayedCount = 10;
+      }
 
       // Tarih filtresine göre filtrele
       const filteredSales = filterSalesByDateForHistory(sales);
@@ -791,9 +961,55 @@
         return;
       }
 
-      // Tarihe göre grupla (filtrelenmiş satışlar üzerinde)
-      const salesByDate = {};
+      // Tüm satışları düz bir listeye çevir (tarih grupları olmadan, lazy loading için)
+      const allSalesFlat = [];
       filteredSales.forEach(sale => {
+        allSalesFlat.push({
+          ...sale,
+          sale_date_for_group: sale.sale_date || 'Bilinmeyen'
+        });
+      });
+
+      // Satışları sırala (en yeni önce)
+      allSalesFlat.sort((a, b) => {
+        // Önce tarih
+        const dateA = a.sale_date || 'Bilinmeyen';
+        const dateB = b.sale_date || 'Bilinmeyen';
+        if (dateA !== dateB) {
+          if (dateA === 'Bilinmeyen') return 1;
+          if (dateB === 'Bilinmeyen') return -1;
+          const [dayA, monthA, yearA] = dateA.split('.');
+          const [dayB, monthB, yearB] = dateB.split('.');
+          if (!dayA || !dayB) return 0;
+          const dateObjA = new Date(yearA, monthA - 1, dayA);
+          const dateObjB = new Date(yearB, monthB - 1, dayB);
+          if (dateObjB.getTime() !== dateObjA.getTime()) {
+            return dateObjB.getTime() - dateObjA.getTime();
+          }
+        }
+        
+        // Sonra saat
+        if (a.sale_time && b.sale_time) {
+          const [hA, mA, sA] = a.sale_time.split(':').map(Number);
+          const [hB, mB, sB] = b.sale_time.split(':').map(Number);
+          const timeA = (hA || 0) * 3600 + (mA || 0) * 60 + (sA || 0);
+          const timeB = (hB || 0) * 3600 + (mB || 0) * 60 + (sB || 0);
+          if (timeB !== timeA) return timeB - timeA;
+        }
+        
+        // Son olarak sale_id
+        const idA = parseInt(a.sale_id || a.id || 0);
+        const idB = parseInt(b.sale_id || b.id || 0);
+        return idB - idA;
+      });
+
+      // Lazy loading: Sadece gösterilecek kadar satış al
+      const salesToDisplay = allSalesFlat.slice(0, salesDisplayedCount);
+      const hasMore = allSalesFlat.length > salesDisplayedCount;
+
+      // Gösterilecek satışları tarihe göre grupla
+      const salesByDate = {};
+      salesToDisplay.forEach(sale => {
         const date = sale.sale_date || 'Bilinmeyen';
         if (!salesByDate[date]) {
           salesByDate[date] = [];
@@ -812,6 +1028,7 @@
         const dateB = new Date(yearB, monthB - 1, dayB);
         return dateB - dateA;
       });
+      
       sortedDates.forEach(date => {
         let daySales = salesByDate[date];
         
@@ -941,7 +1158,73 @@
         `;
       });
 
+      // "Daha fazla yükle" butonu veya scroll indicator
+      if (hasMore) {
+        html += `
+          <div id="salesLoadMore" style="text-align: center; padding: 20px; margin-top: 20px;">
+            <button onclick="loadMoreSales()" style="padding: 12px 24px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+              Daha Fazla Yükle (${allSalesFlat.length - salesDisplayedCount} kaldı)
+            </button>
+          </div>
+        `;
+      }
+
       container.innerHTML = html;
+      
+      // Scroll event listener ekle (otomatik yükleme için)
+      setupSalesScrollListener();
+    }
+
+    // Daha fazla satış yükle
+    function loadMoreSales() {
+      if (isLoadingMoreSales) return;
+      isLoadingMoreSales = true;
+      
+      const loadMoreBtn = document.getElementById('salesLoadMore');
+      if (loadMoreBtn) {
+        loadMoreBtn.innerHTML = '<div style="padding: 12px; color: #6b7280;">Yükleniyor...</div>';
+      }
+      
+      // 10'ar 10'ar artır
+      salesDisplayedCount += 10;
+      
+      // Kısa bir gecikme sonra render et (smooth loading için)
+      setTimeout(() => {
+        renderSales(allSales, false);
+        isLoadingMoreSales = false;
+      }, 300);
+    }
+
+    // Satış geçmişi için scroll listener
+    function setupSalesScrollListener() {
+      // Eski listener'ı kaldır
+      window.removeEventListener('scroll', handleSalesScroll);
+      window.removeEventListener('scroll', handleSalesScroll, true);
+      
+      // Yeni listener ekle (window scroll için)
+      window.addEventListener('scroll', handleSalesScroll, true);
+    }
+
+    // Satış scroll handler
+    function handleSalesScroll(event) {
+      if (isLoadingMoreSales || activeTab !== 'sales') return;
+      
+      const container = document.getElementById('salesContainer');
+      if (!container) return;
+      
+      // Scroll pozisyonu kontrol et (alt kısma yaklaşıldığında)
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const windowHeight = window.innerHeight;
+      const documentHeight = document.documentElement.scrollHeight;
+      const scrollBottom = documentHeight - scrollTop - windowHeight;
+      
+      // 200px kala daha fazla yükle
+      if (scrollBottom < 200) {
+        const filteredSales = filterSalesByDateForHistory(allSales);
+        if (salesDisplayedCount < filteredSales.length) {
+          loadMoreSales();
+        }
+      }
     }
 
     // Satış geçmişi tarih filtresini güncelle
@@ -965,7 +1248,7 @@
     // Satış geçmişi tarih filtresini değiştir
     function setSalesDateFilter(filter) {
       salesDateFilter = filter;
-      renderSales(allSales);
+      renderSales(allSales, true); // resetCount = true (sayacı sıfırla)
       updateSalesDateFilterButton();
     }
 
@@ -995,7 +1278,7 @@
       salesCustomDateRange.start = startDate;
       salesCustomDateRange.end = endDate;
       salesDateFilter = 'custom';
-      renderSales(allSales);
+      renderSales(allSales, true); // resetCount = true (sayacı sıfırla)
       updateSalesDateFilterButton();
       closeSalesDateFilterModal();
     }
@@ -1236,7 +1519,8 @@
           updateActiveTablesCount(calculateActiveTablesCount());
           
           // İstatistikleri güncelle (ciroya aktif masalar eklenecek)
-          if (allSales && allSales.length > 0) {
+          // Sadece "Satış Geçmişi" sekmesinde görünürse güncelle
+          if (activeTab === 'sales' && allSales && allSales.length > 0) {
             updateStats(allSales);
           }
         }, (error) => {
@@ -1376,11 +1660,33 @@
     
     function updateStats(sales) {
       // Masrafları hariç tut - iş günü içindeki satışlar (gece 3'ten gece 3'e)
+      // TÜM satışları topla (kısmi ödemeler dahil)
       const todaySales = sales.filter(s => {
         if (s.isExpense || s.payment_method === 'Masraf') return false;
         return isInCurrentBusinessDay(s.sale_date, s.sale_time);
       });
+      
+      // Her bir satışın fiyatını topla
       const completedRevenue = todaySales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+      
+      // İptal kayıtlarını hesapla - bugünkü iş günü içindeki iptaller
+      // Her bir iptalin bedelini düş
+      let todayCancelsTotal = 0;
+      if (allCancels && allCancels.length > 0) {
+        const todayCancels = allCancels.filter(cancel => {
+          if (!cancel.cancel_date) return false;
+          // İptal tarihini kontrol et - iş günü içinde mi?
+          const cancelDate = cancel.cancel_date;
+          const cancelTime = cancel.cancel_time || '00:00';
+          return isInCurrentBusinessDay(cancelDate, cancelTime);
+        });
+        // İptal edilen ürünlerin toplam tutarını hesapla (her bir iptalin bedeli)
+        todayCancelsTotal = todayCancels.reduce((sum, cancel) => {
+          const quantity = parseFloat(cancel.quantity || 0);
+          const price = parseFloat(cancel.price || 0);
+          return sum + (quantity * price);
+        }, 0);
+      }
       
       // Nakit ve kart tutarlarını hesapla (tamamlanmış satışlardan)
       // Online Satış (Nakit) -> Nakit'e ekle
@@ -1392,6 +1698,7 @@
       );
       const cardSales = todaySales.filter(s => 
         s.payment_method === 'Kart' || 
+        s.payment_method === 'Kredi Kartı' ||
         s.payment_method === 'Online Satış (Kart)' ||
         s.payment_method === 'Online Satış' ||
         (s.payment_method !== 'Nakit' && 
@@ -1404,15 +1711,52 @@
       // Aktif masalardaki toplam tutarı hesapla
       const activeTablesRevenue = calculateActiveTablesRevenue();
       
-      // Günlük ciro = Tamamlanmış satışlar + Aktif masalar
-      const todayRevenue = completedRevenue + activeTablesRevenue.total;
+      // Günlük ciro = Tamamlanmış satışlar + Aktif masalar - İptal edilen tutarlar
+      const todayRevenue = Math.max(0, completedRevenue + activeTablesRevenue.total - todayCancelsTotal);
       
       // Günlük ciro 50.000 TL'yi geçtiyse push notification gönder
       checkRevenueNotification(todayRevenue);
       
-      // Nakit ve kart tutarlarına aktif masaları ekle
-      const totalCash = cashTotal + activeTablesRevenue.cash;
-      const totalCard = cardTotal + activeTablesRevenue.card;
+      // İptalleri nakit/kart dağılımına göre orantılı olarak düş
+      // Önce toplam satış tutarını hesapla (aktif masalar dahil)
+      const totalSalesWithActive = completedRevenue + activeTablesRevenue.total;
+      
+      // İptalleri nakit/kart oranına göre dağıt
+      let cashCancelAmount = 0;
+      let cardCancelAmount = 0;
+      
+      if (totalSalesWithActive > 0 && todayCancelsTotal > 0) {
+        // Nakit ve kart oranlarını hesapla
+        const cashRatio = (cashTotal + activeTablesRevenue.cash) / totalSalesWithActive;
+        const cardRatio = (cardTotal + activeTablesRevenue.card) / totalSalesWithActive;
+        
+        // İptalleri oranlara göre dağıt ve yuvarla (5'in katı olması için)
+        cashCancelAmount = Math.round((todayCancelsTotal * cashRatio) / 5) * 5;
+        cardCancelAmount = Math.round((todayCancelsTotal * cardRatio) / 5) * 5;
+        
+        // Toplam iptal tutarını koru (yuvarlama hatası olmaması için)
+        const totalCancelDistributed = cashCancelAmount + cardCancelAmount;
+        if (Math.abs(totalCancelDistributed - todayCancelsTotal) > 0.01) {
+          // Fark varsa, daha büyük olana ekle
+          if (cashCancelAmount >= cardCancelAmount) {
+            cashCancelAmount = todayCancelsTotal - cardCancelAmount;
+          } else {
+            cardCancelAmount = todayCancelsTotal - cashCancelAmount;
+          }
+          // Son olarak 5'in katına yuvarla
+          cashCancelAmount = Math.round(cashCancelAmount / 5) * 5;
+          cardCancelAmount = Math.round(cardCancelAmount / 5) * 5;
+        }
+      } else if (todayCancelsTotal > 0) {
+        // Eğer hiç satış yoksa ama iptal varsa, varsayılan olarak yarı yarıya dağıt (5'in katı)
+        cashCancelAmount = Math.round((todayCancelsTotal / 2) / 5) * 5;
+        cardCancelAmount = todayCancelsTotal - cashCancelAmount;
+        cardCancelAmount = Math.round(cardCancelAmount / 5) * 5;
+      }
+      
+      // Nakit ve kart tutarlarına aktif masaları ekle, iptalleri düş (5'in katına yuvarla)
+      const totalCash = Math.max(0, Math.round((cashTotal + activeTablesRevenue.cash - cashCancelAmount) / 5) * 5);
+      const totalCard = Math.max(0, Math.round((cardTotal + activeTablesRevenue.card - cardCancelAmount) / 5) * 5);
       
       // Günlük masrafları hesapla - iş günü içindeki masraflar (gece 3'ten gece 3'e)
       const todayExpenses = sales.filter(s => {
@@ -1424,31 +1768,32 @@
       const statsGrid = document.getElementById('statsGrid');
       if (!statsGrid) return;
       
+      // Sadece "Satış Geçmişi" sekmesinde göster
+      if (activeTab !== 'sales') {
+        statsGrid.innerHTML = '';
+        return;
+      }
+      
       statsGrid.innerHTML = `
-        <div class="stat-card-wrapper">
-          <div class="stat-card stat-card-green">
-            <div class="stat-icon">💰</div>
-            <div class="stat-content">
-              <h3>Günlük Ciro</h3>
-              <div class="stat-value">₺${todayRevenue.toFixed(2)}</div>
-            </div>
-          </div>
-          <div class="payment-breakdown-card">
-            <div class="payment-breakdown-item">
-              <span class="payment-breakdown-label">💵 Nakit:</span>
-              <span class="payment-breakdown-value">₺${totalCash.toFixed(2)}</span>
-            </div>
-            <div class="payment-breakdown-item">
-              <span class="payment-breakdown-label">💳 Kart:</span>
-              <span class="payment-breakdown-value">₺${totalCard.toFixed(2)}</span>
-            </div>
+        <div class="stat-card stat-card-green">
+          <div class="stat-icon">💰</div>
+          <div class="stat-content">
+            <h3>Günlük Ciro</h3>
+            <div class="stat-value">₺${Math.round(todayRevenue).toLocaleString('tr-TR')}</div>
           </div>
         </div>
         <div class="stat-card stat-card-red">
           <div class="stat-icon">💸</div>
           <div class="stat-content">
             <h3>Günlük Masraf</h3>
-            <div class="stat-value">₺${todayExpenseTotal.toFixed(2)}</div>
+            <div class="stat-value">₺${Math.round(todayExpenseTotal).toLocaleString('tr-TR')}</div>
+          </div>
+        </div>
+        <div class="stat-card stat-card-orange">
+          <div class="stat-icon">⚠️</div>
+          <div class="stat-content">
+            <h3>Günlük İptal</h3>
+            <div class="stat-value">₺${Math.round(todayCancelsTotal).toLocaleString('tr-TR')}</div>
           </div>
         </div>
         <div class="stat-card stat-card-purple">
@@ -1463,6 +1808,16 @@
           <div class="stat-content">
             <h3>Aktif Masa</h3>
             <div class="stat-value">0</div>
+          </div>
+        </div>
+        <div class="payment-breakdown-card">
+          <div class="payment-breakdown-item">
+            <span class="payment-breakdown-label">💵 Nakit:</span>
+            <span class="payment-breakdown-value">₺${Math.round(totalCash).toLocaleString('tr-TR')}</span>
+          </div>
+          <div class="payment-breakdown-item">
+            <span class="payment-breakdown-label">💳 Kart:</span>
+            <span class="payment-breakdown-value">₺${Math.round(totalCard).toLocaleString('tr-TR')}</span>
           </div>
         </div>
       `;
@@ -1505,9 +1860,22 @@
         tablesUnsubscribe = null;
       }
 
-      // Aktif masa listener'ını her zaman çalıştır (stats için gerekli)
+      // Aktif masa listener'ını HER ZAMAN çalıştır (istatistikler için)
+      // Böylece masa siparişi kaydedildiğinde veya iptal olduğunda anlık güncellenir
       if (!activeTablesUnsubscribe) {
         startActiveTablesListener();
+      }
+      
+      // İptal listener'ını HER ZAMAN çalıştır (istatistikler için)
+      // Böylece iptal olduğunda anlık güncellenir
+      if (!cancelsUnsubscribe) {
+        startCancelsListener();
+      }
+      
+      // Satış listener'ını HER ZAMAN çalıştır (istatistikler için)
+      // Böylece yeni satış olduğunda anlık güncellenir
+      if (!realtimeUnsubscribe) {
+        startRealtimeListener();
       }
 
       // Container'ları göster/gizle
@@ -1523,8 +1891,14 @@
       if (tablesContainer) tablesContainer.style.display = activeTab === 'tables' ? 'block' : 'none';
       if (cancelsContainer) cancelsContainer.style.display = activeTab === 'cancels' ? 'block' : 'none';
       
+      // Stats grid'i sadece "Satış Geçmişi" sekmesinde göster
+      const statsGrid = document.getElementById('statsGrid');
+      if (statsGrid) {
+        statsGrid.style.display = activeTab === 'sales' ? 'grid' : 'none';
+      }
+      
       if (activeTab === 'sales') {
-        renderSales(allSales);
+        renderSales(allSales, true); // resetCount = true (sekme değiştiğinde sayacı sıfırla)
         updateSalesDateFilterButton();
       } else if (activeTab === 'reports') {
         renderReports();
@@ -1533,7 +1907,7 @@
       } else if (activeTab === 'tables') {
         renderTables();
       } else if (activeTab === 'cancels') {
-        renderCancels();
+        renderCancels(true); // resetCount = true (sekme değiştiğinde sayacı sıfırla)
       }
     }
 
@@ -1704,7 +2078,147 @@
       let reportSales = allSales.filter(sale => 
         !sale.isExpense && sale.payment_method !== 'Masraf'
       );
+      
+      // Eğer "Tüm Zamanlar" seçiliyse, tüm satışları Firebase'den çek (limit olmadan)
+      if (reportDateFilter === 'all') {
+        // Tüm satışları yükle (tüm zamanlar cirosu için - limit yok)
+        loadAllSalesForReports().then(() => {
+          reportSales = allSales.filter(sale => 
+            !sale.isExpense && sale.payment_method !== 'Masraf'
+          );
+          renderReportsContent(reportSales);
+        });
+        return;
+      }
+      
       reportSales = filterSalesByDate(reportSales);
+      renderReportsContent(reportSales);
+    }
+    
+    // Tüm satışları yükle (sadece "Tüm Zamanlar" için - limit yok)
+    async function loadAllSalesForReports() {
+      if (!db) return;
+      
+      try {
+        const salesRef = db.collection('sales');
+        // Tüm satışları al (limit yok - sadece "Tüm Zamanlar" için)
+        let query = salesRef;
+        try {
+          query = salesRef.orderBy('created_at', 'desc');
+        } catch (e) {
+          try {
+            query = salesRef.orderBy('timestamp', 'desc');
+          } catch (e2) {
+            query = salesRef; // Limit yok
+          }
+        }
+        
+        const querySnapshot = await query.get();
+        const sales = [];
+        
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          
+          let saleDate = data.sale_date;
+          let saleTime = data.sale_time;
+          
+          let createdAt = null;
+          if (data.created_at) {
+            const timestamp = data.created_at;
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          } else if (data.timestamp) {
+            const timestamp = data.timestamp;
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          }
+          
+          if (!saleDate && createdAt) {
+            saleDate = createdAt.toLocaleDateString('tr-TR');
+            saleTime = createdAt.toLocaleTimeString('tr-TR');
+          }
+          
+          let items = [];
+          let itemsArray = data.items_array || [];
+          
+          if (data.items) {
+            if (Array.isArray(data.items)) {
+              items = data.items;
+            } else if (typeof data.items === 'string') {
+              items = data.items.split(', ').map(item => {
+                const match = item.match(/(.+) x(\d+)/);
+                if (match) {
+                  return {
+                    product_name: match[1].replace(' (İKRAM)', ''),
+                    quantity: parseInt(match[2]),
+                    isGift: item.includes('(İKRAM)')
+                  };
+                }
+                return { product_name: item, quantity: 1, isGift: false };
+              });
+            }
+          }
+          
+          sales.push({
+            id: doc.id,
+            sale_id: data.sale_id || doc.id,
+            total_amount: data.total_amount || 0,
+            payment_method: data.payment_method || 'Nakit',
+            sale_date: saleDate || 'Bilinmeyen',
+            sale_time: saleTime || '',
+            staff_name: data.staff_name || null,
+            table_name: data.table_name || null,
+            table_type: data.table_type || null,
+            items: items,
+            items_array: itemsArray,
+            itemsText: data.items || 'Ürün bulunamadı',
+            isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
+            created_at: createdAt
+          });
+        });
+        
+        // Sırala
+        sales.sort((a, b) => {
+          if (a.created_at && b.created_at) {
+            return b.created_at.getTime() - a.created_at.getTime();
+          }
+          if (a.created_at) return -1;
+          if (b.created_at) return 1;
+          
+          if (a.sale_date && b.sale_date) {
+            const [dayA, monthA, yearA] = a.sale_date.split('.');
+            const [dayB, monthB, yearB] = b.sale_date.split('.');
+            if (dayA && monthA && yearA && dayB && monthB && yearB) {
+              const dateA = new Date(yearA, monthA - 1, dayA);
+              const dateB = new Date(yearB, monthB - 1, dayB);
+              return dateB.getTime() - dateA.getTime();
+            }
+          }
+          
+          const idA = parseInt(a.sale_id || a.id) || 0;
+          const idB = parseInt(b.sale_id || b.id) || 0;
+          return idB - idA;
+        });
+        
+        // Tüm satışları allSales'e ekle (mevcut olanlarla birleştir, duplicate'leri kaldır)
+        const existingIds = new Set(allSales.map(s => s.id));
+        const newSales = sales.filter(s => !existingIds.has(s.id));
+        allSales = [...allSales, ...newSales];
+        
+        // Tüm satışları tekrar sırala
+        allSales.sort((a, b) => {
+          if (a.created_at && b.created_at) {
+            return b.created_at.getTime() - a.created_at.getTime();
+          }
+          return 0;
+        });
+      } catch (error) {
+        console.error('Tüm satışlar yüklenirken hata:', error);
+      }
+    }
+    
+    // Rapor içeriğini render et
+    function renderReportsContent(reportSales) {
+      const container = document.getElementById('reportsContainer');
+      if (!container) return;
 
       if (reportSales.length === 0) {
         container.innerHTML = `
@@ -1801,7 +2315,86 @@
         paymentMethods[sale.payment_method].total += parseFloat(sale.total_amount);
       });
 
-      const totalRevenue = reportSales.reduce((sum, sale) => sum + parseFloat(sale.total_amount), 0);
+      // TÜM FİLTRELER İÇİN: Günlük ciroları toplayarak hesapla
+      // (Her gün için: Günlük Satışlar - Günlük İptaller)
+      // Satışları tarihe göre grupla (filtreye göre)
+      const salesByDate = {};
+      reportSales.forEach(sale => {
+        if (!sale.sale_date || sale.sale_date === 'Bilinmeyen') return;
+        
+        if (!salesByDate[sale.sale_date]) {
+          salesByDate[sale.sale_date] = { sales: [], cancels: [] };
+        }
+        salesByDate[sale.sale_date].sales.push(sale);
+      });
+      
+      // İptalleri tarihe göre grupla (filtreye göre)
+      if (allCancels && allCancels.length > 0) {
+        const periodCancels = allCancels.filter(cancel => {
+          if (!cancel.cancel_date) return false;
+          
+          // Tarih filtresine göre iptalleri filtrele
+          if (reportDateFilter === 'all') {
+            return true; // Tüm iptaller
+          } else if (reportDateFilter === 'yesterday') {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const yesterdayStr = yesterday.toLocaleDateString('tr-TR');
+            return cancel.cancel_date === yesterdayStr;
+          } else if (reportDateFilter === 'week') {
+            const weekAgo = new Date();
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            const cancelDate = cancel.cancel_date;
+            const [day, month, year] = cancelDate.split('.');
+            if (!day || !month || !year) return false;
+            const cancelDateObj = new Date(year, month - 1, day);
+            return cancelDateObj >= weekAgo;
+          } else if (reportDateFilter === 'month') {
+            const monthAgo = new Date();
+            monthAgo.setMonth(monthAgo.getMonth() - 1);
+            const cancelDate = cancel.cancel_date;
+            const [day, month, year] = cancelDate.split('.');
+            if (!day || !month || !year) return false;
+            const cancelDateObj = new Date(year, month - 1, day);
+            return cancelDateObj >= monthAgo;
+          } else if (reportDateFilter === 'custom' && customDateRange.start && customDateRange.end) {
+            const cancelDate = cancel.cancel_date;
+            const [day, month, year] = cancelDate.split('.');
+            if (!day || !month || !year) return false;
+            const cancelDateObj = new Date(year, month - 1, day);
+            cancelDateObj.setHours(0, 0, 0, 0);
+            return cancelDateObj >= customDateRange.start && cancelDateObj <= customDateRange.end;
+          }
+          
+          return false;
+        });
+        
+        // İptalleri tarihe göre grupla
+        periodCancels.forEach(cancel => {
+          if (!cancel.cancel_date) return;
+          if (!salesByDate[cancel.cancel_date]) {
+            salesByDate[cancel.cancel_date] = { sales: [], cancels: [] };
+          }
+          salesByDate[cancel.cancel_date].cancels.push(cancel);
+        });
+      }
+      
+      // Her gün için ciro hesapla ve topla
+      // Günlük Ciro = O gün yapılan her bir satışın fiyatını topla - O gün yapılan her bir iptalin bedelini düş
+      let totalRevenue = 0;
+      Object.keys(salesByDate).forEach(date => {
+        const dayData = salesByDate[date];
+        // O gün yapılan her bir satışın fiyatını topla
+        const daySales = dayData.sales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+        // O gün yapılan her bir iptalin bedelini düş
+        const dayCancels = dayData.cancels.reduce((sum, cancel) => {
+          const quantity = parseFloat(cancel.quantity || 0);
+          const price = parseFloat(cancel.price || 0);
+          return sum + (quantity * price);
+        }, 0);
+        const dayRevenue = Math.max(0, daySales - dayCancels);
+        totalRevenue += dayRevenue;
+      });
 
       // Online satışları filtrele ve ciro hesapla
       const onlineSales = reportSales.filter(sale => 
@@ -1814,12 +2407,31 @@
       );
       const onlineRevenue = onlineSales.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
 
-      // Seçilen zaman dilimindeki masrafları hesapla
+      // TÜM FİLTRELER İÇİN: Günlük masrafları toplayarak hesapla
+      // Masrafları tarihe göre grupla (filtreye göre)
+      const expensesByDate = {};
       let periodExpenses = allSales.filter(sale => 
         (sale.isExpense || sale.payment_method === 'Masraf')
       );
       periodExpenses = filterSalesByDate(periodExpenses);
-      const totalExpense = periodExpenses.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
+      
+      periodExpenses.forEach(expense => {
+        if (!expense.sale_date || expense.sale_date === 'Bilinmeyen') return;
+        
+        if (!expensesByDate[expense.sale_date]) {
+          expensesByDate[expense.sale_date] = [];
+        }
+        expensesByDate[expense.sale_date].push(expense);
+      });
+      
+      // Her gün için masraf hesapla ve topla
+      // Günlük Masraf = O gün yapılan her bir masrafın fiyatını topla
+      let totalExpense = 0;
+      Object.keys(expensesByDate).forEach(date => {
+        const dayExpenses = expensesByDate[date];
+        const dayExpense = dayExpenses.reduce((sum, e) => sum + parseFloat(e.total_amount || 0), 0);
+        totalExpense += dayExpense;
+      });
 
       const filterLabels = {
         'all': 'Tüm Zamanlar',
@@ -2660,7 +3272,7 @@
 
     // Personel Detayları render et
     // İptaller listesini render et
-    function renderCancels() {
+    function renderCancels(resetCount = false) {
       const container = document.getElementById('cancelsContainer');
       if (!container) return;
 
@@ -2669,42 +3281,40 @@
         return;
       }
 
-      // Loading göster
-      container.innerHTML = `
-        <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
-          <div style="font-size: 48px; margin-bottom: 16px;">⏳</div>
-          <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">İptal kayıtları yükleniyor...</div>
-        </div>
-      `;
+      // İlk yüklemede veya reset edildiğinde sayacı sıfırla
+      if (resetCount) {
+        cancelsDisplayedCount = 2;
+      }
 
-      // Firebase'den iptal kayıtlarını çek
-      const cancelsRef = db.collection('cancels');
+      // allCancels'dan lazy loading ile göster
+      if (allCancels.length === 0) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
+            <div style="font-size: 48px; margin-bottom: 16px;">⏳</div>
+            <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">İptal kayıtları yükleniyor...</div>
+          </div>
+        `;
+        return;
+      }
+
+      // Lazy loading: Sadece gösterilecek kadar iptal al
+      const cancelsToDisplay = allCancels.slice(0, cancelsDisplayedCount);
+      const hasMore = allCancels.length > cancelsDisplayedCount;
+
+      if (cancelsToDisplay.length === 0) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
+            <div style="font-size: 48px; margin-bottom: 16px;">📭</div>
+            <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Henüz iptal kaydı yok</div>
+            <div style="font-size: 14px;">İptal edilen ürünler burada görünecek</div>
+          </div>
+        `;
+        return;
+      }
+
+      let html = '<div class="cancels-list">';
       
-      // Önce created_at ile sıralamayı dene
-      cancelsRef.orderBy('created_at', 'desc').get().then((querySnapshot) => {
-        const cancels = [];
-        querySnapshot.forEach((doc) => {
-          const data = doc.data();
-          cancels.push({
-            id: doc.id,
-            ...data
-          });
-        });
-
-        if (cancels.length === 0) {
-          container.innerHTML = `
-            <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
-              <div style="font-size: 48px; margin-bottom: 16px;">📭</div>
-              <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Henüz iptal kaydı yok</div>
-              <div style="font-size: 14px;">İptal edilen ürünler burada görünecek</div>
-            </div>
-          `;
-          return;
-        }
-
-        let html = '<div class="cancels-list">';
-        
-        cancels.forEach((cancel) => {
+      cancelsToDisplay.forEach((cancel) => {
           const cancelDate = cancel.cancel_date || 'Bilinmeyen';
           const cancelTime = cancel.cancel_time || '';
           const staffName = cancel.staff_name || 'Bilinmiyor';
@@ -2756,125 +3366,78 @@
               </div>
             </div>
           `;
-        });
-
-        html += '</div>';
-        container.innerHTML = html;
-      }).catch((error) => {
-        console.error('İptal kayıtları yüklenirken hata:', error);
-        
-        // Eğer created_at field'ı yoksa veya index hatası varsa, tüm kayıtları çek ve manuel sırala
-        if ((error.message && (error.message.includes('created_at') || error.message.includes('index'))) || error.code === 'failed-precondition') {
-          cancelsRef.get().then((querySnapshot) => {
-            const cancels = [];
-            querySnapshot.forEach((doc) => {
-              const data = doc.data();
-              cancels.push({
-                id: doc.id,
-                ...data
-              });
-            });
-
-            // Tarihe göre manuel sırala
-            cancels.sort((a, b) => {
-              const dateA = a.cancel_date || '';
-              const dateB = b.cancel_date || '';
-              const timeA = a.cancel_time || '';
-              const timeB = b.cancel_time || '';
-              if (dateA !== dateB) return dateB.localeCompare(dateA);
-              return timeB.localeCompare(timeA);
-            });
-
-            if (cancels.length === 0) {
-              container.innerHTML = `
-                <div style="text-align: center; padding: 60px 20px; color: #6b7280;">
-                  <div style="font-size: 48px; margin-bottom: 16px;">📭</div>
-                  <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Henüz iptal kaydı yok</div>
-                  <div style="font-size: 14px;">İptal edilen ürünler burada görünecek</div>
-                </div>
-              `;
-              return;
-            }
-
-            let html = '<div class="cancels-list">';
-            
-            cancels.forEach((cancel) => {
-              const cancelDate = cancel.cancel_date || 'Bilinmeyen';
-              const cancelTime = cancel.cancel_time || '';
-              const staffName = cancel.staff_name || 'Bilinmiyor';
-              const orderStaffName = cancel.order_staff_name || 'Bilinmiyor';
-              const staffIsManager = cancel.staff_is_manager || false;
-              const source = cancel.source === 'mobile' ? '📱 Mobil' : '💻 Masaüstü';
-              const totalAmount = (cancel.price || 0) * (cancel.quantity || 0);
-              
-              html += `
-                <div class="cancel-card">
-                  <div class="cancel-header">
-                    <div class="cancel-header-left">
-                      <div class="cancel-product-name">${cancel.product_name || 'Bilinmeyen Ürün'}</div>
-                      <div class="cancel-meta">
-                        <span class="cancel-meta-item">${cancelDate} ${cancelTime}</span>
-                        <span class="cancel-meta-separator">•</span>
-                        <span class="cancel-meta-item">${cancel.table_name || 'Bilinmeyen Masa'}</span>
-                        <span class="cancel-meta-separator">•</span>
-                        <span class="cancel-meta-item">${source}</span>
-                      </div>
-                    </div>
-                    <div class="cancel-header-right">
-                      <div class="cancel-amount">₺${totalAmount.toFixed(2)}</div>
-                    </div>
-                  </div>
-                  <div class="cancel-details">
-                    <div class="cancel-detail-row">
-                      <span class="cancel-detail-label">Miktar:</span>
-                      <span class="cancel-detail-value">${cancel.quantity || 0} adet</span>
-                    </div>
-                    <div class="cancel-detail-row">
-                      <span class="cancel-detail-label">Birim Fiyat:</span>
-                      <span class="cancel-detail-value">₺${(cancel.price || 0).toFixed(2)}</span>
-                    </div>
-                    <div class="cancel-detail-row">
-                      <span class="cancel-detail-label">İptal Eden Personel:</span>
-                      <span class="cancel-detail-value">
-                        ${staffName || 'Bilinmiyor'}${staffIsManager ? ' (Müdür)' : ''}
-                      </span>
-                    </div>
-                    <div class="cancel-detail-row">
-                      <span class="cancel-detail-label">Sipariş Sorumlusu Garson:</span>
-                      <span class="cancel-detail-value">${orderStaffName || 'Bilinmiyor'}</span>
-                    </div>
-                  </div>
-                  <div class="cancel-reason">
-                    <div class="cancel-reason-label">İptal Açıklaması:</div>
-                    <div class="cancel-reason-text">${cancel.cancel_reason || 'Açıklama yok'}</div>
-                  </div>
-                </div>
-              `;
-            });
-
-            html += '</div>';
-            container.innerHTML = html;
-          }).catch((fallbackError) => {
-            console.error('İptal kayıtları yüklenirken hata (fallback):', fallbackError);
-            container.innerHTML = `
-              <div class="error-message">
-                <div style="font-size: 24px; margin-bottom: 12px;">⚠️</div>
-                <div>İptal kayıtları yüklenirken bir hata oluştu</div>
-                <div style="font-size: 12px; margin-top: 8px; color: #9ca3af;">${fallbackError.message}</div>
-              </div>
-            `;
-          });
-        } else {
-          container.innerHTML = `
-            <div class="error-message">
-              <div style="font-size: 24px; margin-bottom: 12px;">⚠️</div>
-              <div>İptal kayıtları yüklenirken bir hata oluştu</div>
-              <div style="font-size: 12px; margin-top: 8px; color: #9ca3af;">${error.message}</div>
-            </div>
-          `;
-        }
       });
+
+      html += '</div>';
+      
+      // "Daha fazla yükle" butonu
+      if (hasMore) {
+        html += `
+          <div id="cancelsLoadMore" style="text-align: center; padding: 20px; margin-top: 20px;">
+            <button onclick="loadMoreCancels()" style="padding: 12px 24px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+              Daha Fazla Yükle (${allCancels.length - cancelsDisplayedCount} kaldı)
+            </button>
+          </div>
+        `;
+      }
+      
+      container.innerHTML = html;
+      
+      // Scroll event listener ekle (otomatik yükleme için)
+      setupCancelsScrollListener();
     }
+
+    // Daha fazla iptal yükle
+    function loadMoreCancels() {
+      if (isLoadingMoreCancels) return;
+      isLoadingMoreCancels = true;
+      
+      const loadMoreBtn = document.getElementById('cancelsLoadMore');
+      if (loadMoreBtn) {
+        loadMoreBtn.innerHTML = '<div style="padding: 12px; color: #6b7280;">Yükleniyor...</div>';
+      }
+      
+      // 2'şer 2'şer artır
+      cancelsDisplayedCount += 2;
+      
+      // Kısa bir gecikme sonra render et (smooth loading için)
+      setTimeout(() => {
+        renderCancels(false);
+        isLoadingMoreCancels = false;
+      }, 300);
+    }
+
+    // İptaller için scroll listener
+    function setupCancelsScrollListener() {
+      // Eski listener'ı kaldır
+      window.removeEventListener('scroll', handleCancelsScroll);
+      window.removeEventListener('scroll', handleCancelsScroll, true);
+      
+      // Yeni listener ekle (window scroll için)
+      window.addEventListener('scroll', handleCancelsScroll, true);
+    }
+
+    // İptaller scroll handler
+    function handleCancelsScroll(event) {
+      if (isLoadingMoreCancels || activeTab !== 'cancels') return;
+      
+      const container = document.getElementById('cancelsContainer');
+      if (!container) return;
+      
+      // Scroll pozisyonu kontrol et (alt kısma yaklaşıldığında)
+      const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+      const windowHeight = window.innerHeight;
+      const documentHeight = document.documentElement.scrollHeight;
+      const scrollBottom = documentHeight - scrollTop - windowHeight;
+      
+      // 200px kala daha fazla yükle
+      if (scrollBottom < 200) {
+        if (cancelsDisplayedCount < allCancels.length) {
+          loadMoreCancels();
+        }
+      }
+    }
+
 
     // Toast Notification Fonksiyonları
     function showToast(type, title, message) {
@@ -3318,8 +3881,9 @@
       
       // Sadece pending status'ündeki siparişleri dinle
       // Not: orderBy composite index gerektirebilir, bu yüzden sadece where kullanıp client-side'da sıralama yapıyoruz
+      // Limit ekle: Son 100 pending siparişi dinle (read quota tasarrufu için)
       const ordersRef = onlineDb.collection('orders');
-      const query = ordersRef.where('status', '==', 'pending');
+      const query = ordersRef.where('status', '==', 'pending').limit(100);
       
       console.log('📡 Firebase query oluşturuldu: orders collection, status == pending');
       
@@ -5558,8 +6122,26 @@
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-rows: auto auto auto;
       gap: 16px;
       margin-bottom: 24px;
+    }
+    
+    /* Günlük ciro ve masraf kartları yan yana, eş boyutta */
+    .stats-grid .stat-card-green {
+      grid-column: 1;
+      grid-row: 1;
+    }
+    
+    .stats-grid .stat-card-red {
+      grid-column: 2;
+      grid-row: 1;
+    }
+    
+    /* Günlük iptal kartı masraf kartının altında */
+    .stats-grid .stat-card-orange {
+      grid-column: 2;
+      grid-row: 2;
     }
 
     .stat-card {
@@ -5691,6 +6273,24 @@
 
     .stat-card-pink .stat-content h3 {
       color: #db2777;
+    }
+
+    .stat-card-orange {
+      border-color: #f97316;
+      background: #ffffff;
+    }
+
+    .stat-card-orange:hover {
+      border-color: #ea580c;
+      box-shadow: 0 8px 24px rgba(249, 115, 22, 0.2), 0 0 0 1px rgba(249, 115, 22, 0.1);
+    }
+
+    .stat-card-orange .stat-content h3 {
+      color: #ea580c;
+    }
+
+    .stat-card-orange .stat-value {
+      color: #c2410c;
     }
 
     .stat-value {

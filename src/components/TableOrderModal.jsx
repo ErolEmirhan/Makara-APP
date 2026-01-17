@@ -15,6 +15,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   const [pendingCancelQuantity, setPendingCancelQuantity] = useState(null);
   const [showCancelEntireTableModal, setShowCancelEntireTableModal] = useState(false);
   const [cancellingEntireTable, setCancellingEntireTable] = useState(false);
+  const [cancelEntireTableReason, setCancelEntireTableReason] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
 
   const showToast = (message, type = 'info') => {
@@ -493,7 +494,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                   </svg>
-                  <span>Adisyon</span>
+                  <span>Adisyon Yazdır</span>
                 </button>
                 <button
                   onClick={onPartialPayment}
@@ -911,17 +912,38 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               </p>
               
               {/* Masa Bilgisi */}
-              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 mb-6">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">İptal Edilecek Masa</p>
                 <p className="text-lg font-bold text-gray-900">{order.table_name}</p>
                 <p className="text-xs text-gray-500 mt-1">{order.table_type === 'inside' ? 'İç Masa' : 'Dış Masa'}</p>
+              </div>
+
+              {/* İptal Açıklaması */}
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  İptal Açıklaması <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  value={cancelEntireTableReason}
+                  onChange={(e) => setCancelEntireTableReason(e.target.value)}
+                  placeholder="İptal nedenini açıklayın..."
+                  className="w-full px-4 py-3 border-2 border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500 focus:border-gray-500 resize-none text-sm"
+                  rows={3}
+                  disabled={cancellingEntireTable}
+                />
+                {!cancelEntireTableReason.trim() && (
+                  <p className="text-xs text-red-500 mt-1">İptal açıklaması zorunludur</p>
+                )}
               </div>
             </div>
 
             {/* Butonlar */}
             <div className="flex items-center justify-center gap-3 pt-4 border-t border-gray-200">
               <button
-                onClick={() => setShowCancelEntireTableModal(false)}
+                onClick={() => {
+                  setShowCancelEntireTableModal(false);
+                  setCancelEntireTableReason('');
+                }}
                 disabled={cancellingEntireTable}
                 className="px-8 py-3 bg-white hover:bg-gray-50 text-gray-700 font-semibold text-sm rounded-lg transition-all duration-200 border-2 border-gray-300 hover:border-gray-400 disabled:opacity-50 disabled:cursor-not-allowed min-w-[120px]"
               >
@@ -929,6 +951,11 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               </button>
               <button
                 onClick={async () => {
+                  if (!cancelEntireTableReason.trim()) {
+                    showToast('Lütfen iptal açıklaması yazın', 'error');
+                    return;
+                  }
+
                   if (!window.electronAPI || !window.electronAPI.cancelEntireTableOrder) {
                     showToast('İptal işlemi şu anda kullanılamıyor', 'error');
                     return;
@@ -936,15 +963,20 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
 
                   setCancellingEntireTable(true);
                   try {
-                    const result = await window.electronAPI.cancelEntireTableOrder(order.id);
+                    const result = await window.electronAPI.cancelEntireTableOrder(order.id, cancelEntireTableReason.trim());
                     if (result.success) {
                       setShowCancelEntireTableModal(false);
+                      setCancelEntireTableReason('');
                       if (onCancelEntireTable) {
                         onCancelEntireTable();
                       }
                       onClose();
                     } else {
-                      showToast(result.error || 'Masayı iptal ederken bir hata oluştu', 'error');
+                      if (result.requiresReason) {
+                        showToast('Lütfen iptal açıklaması yazın', 'error');
+                      } else {
+                        showToast(result.error || 'Masayı iptal ederken bir hata oluştu', 'error');
+                      }
                       setCancellingEntireTable(false);
                     }
                   } catch (error) {
@@ -953,7 +985,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                     setCancellingEntireTable(false);
                   }
                 }}
-                disabled={cancellingEntireTable}
+                disabled={cancellingEntireTable || !cancelEntireTableReason.trim()}
                 className="px-8 py-3 bg-gray-900 hover:bg-gray-800 text-white font-semibold text-sm rounded-lg transition-all duration-200 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 min-w-[140px]"
               >
                 {cancellingEntireTable ? (

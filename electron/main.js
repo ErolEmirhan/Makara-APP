@@ -9800,16 +9800,17 @@ function startAPIServer() {
         hasOrder: hasPendingOrder
       });
     }
-    for (let i = 1; i <= 20; i++) {
-      const tableId = `outside-${i}`;
+    for (let i = 1; i <= 24; i++) {
+      const tableNumber = 60 + i; // 61-84
+      const tableId = `outside-${tableNumber}`;
       const hasPendingOrder = (db.tableOrders || []).some(
         o => o.table_id === tableId && o.status === 'pending'
       );
       tables.push({
         id: tableId,
-        number: i,
+        number: tableNumber,
         type: 'outside',
-        name: `Dışarı ${i}`,
+        name: `Dışarı ${tableNumber}`,
         hasOrder: hasPendingOrder
       });
     }

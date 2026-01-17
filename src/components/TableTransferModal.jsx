@@ -28,12 +28,15 @@ const TableTransferModal = ({
     name: `İçeri ${i + 1}`
   }));
 
-  const outsideTables = Array.from({ length: 24 }, (_, i) => ({
-    id: `outside-${i + 1}`,
-    number: i + 1,
-    type: 'outside',
-    name: `Dışarı ${i + 1}`
-  }));
+  const outsideTables = Array.from({ length: 24 }, (_, i) => {
+    const tableNumber = 61 + i; // 61-84
+    return {
+      id: `outside-${tableNumber}`,
+      number: tableNumber,
+      type: 'outside',
+      name: `Dışarı ${tableNumber}`
+    };
+  });
 
   // Paket masaları (hem içeri hem dışarı için)
   const packageTablesInside = Array.from({ length: 5 }, (_, i) => ({

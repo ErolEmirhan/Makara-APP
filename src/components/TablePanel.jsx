@@ -56,12 +56,15 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     name: `İçeri ${i + 1}`
   }));
 
-  const outsideTables = Array.from({ length: 24 }, (_, i) => ({
-    id: `outside-${i + 1}`,
-    number: i + 61,
-    type: 'outside',
-    name: `Dışarı ${i + 61}`
-  }));
+  const outsideTables = Array.from({ length: 24 }, (_, i) => {
+    const tableNumber = i + 61; // 61-84
+    return {
+      id: `outside-${tableNumber}`,
+      number: tableNumber,
+      type: 'outside',
+      name: `Dışarı ${tableNumber}`
+    };
+  });
 
   // Paket masaları (hem içeri hem dışarı için)
   const packageTables = Array.from({ length: 5 }, (_, i) => ({
@@ -333,7 +336,26 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
 
   // Belirli bir masa için sipariş var mı kontrol et
   const getTableOrder = (tableId) => {
-    return tableOrders.find(order => order.table_id === tableId && order.status === 'pending');
+    // Önce yeni formatı kontrol et
+    let order = tableOrders.find(order => order.table_id === tableId && order.status === 'pending');
+    
+    // Eğer bulunamazsa ve dışarı masası ise eski formatı da kontrol et
+    if (!order && tableId.startsWith('outside-')) {
+      const tableNumber = parseInt(tableId.replace('outside-', '')) || 0;
+      if (tableNumber >= 61 && tableNumber <= 84) {
+        // Yeni format (outside-61), eski formatı da kontrol et (outside-1)
+        const oldTableNumber = tableNumber - 60; // 61 -> 1, 62 -> 2, etc.
+        const oldTableId = `outside-${oldTableNumber}`;
+        order = tableOrders.find(order => order.table_id === oldTableId && order.status === 'pending');
+      } else if (tableNumber >= 1 && tableNumber <= 24) {
+        // Eski format (outside-1), yeni formatı da kontrol et (outside-61)
+        const newTableNumber = tableNumber + 60; // 1 -> 61, 2 -> 62, etc.
+        const newTableId = `outside-${newTableNumber}`;
+        order = tableOrders.find(order => order.table_id === newTableId && order.status === 'pending');
+      }
+    }
+    
+    return order;
   };
 
   // Masa sipariş detaylarını göster

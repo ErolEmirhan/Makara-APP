@@ -9803,8 +9803,10 @@ function startAPIServer() {
     for (let i = 1; i <= 24; i++) {
       const tableNumber = 60 + i; // 61-84
       const tableId = `outside-${tableNumber}`;
+      // Hem yeni format (outside-61) hem eski format (outside-1) kontrol et
+      const oldTableId = `outside-${i}`; // Eski format için
       const hasPendingOrder = (db.tableOrders || []).some(
-        o => o.table_id === tableId && o.status === 'pending'
+        o => (o.table_id === tableId || o.table_id === oldTableId) && o.status === 'pending'
       );
       tables.push({
         id: tableId,
@@ -10136,8 +10138,25 @@ function startAPIServer() {
       return res.status(400).json({ error: 'tableId gerekli' });
     }
     
+    // Dışarı masalar için hem yeni hem eski format kontrol et
+    let tableIdsToCheck = [tableId];
+    if (tableId.startsWith('outside-')) {
+      const tableNumber = parseInt(tableId.replace('outside-', '')) || 0;
+      if (tableNumber >= 61 && tableNumber <= 84) {
+        // Yeni format (outside-61), eski formatı da kontrol et (outside-1)
+        const oldTableNumber = tableNumber - 60; // 61 -> 1, 62 -> 2, etc.
+        if (oldTableNumber >= 1 && oldTableNumber <= 24) {
+          tableIdsToCheck.push(`outside-${oldTableNumber}`);
+        }
+      } else if (tableNumber >= 1 && tableNumber <= 24) {
+        // Eski format (outside-1), yeni formatı da kontrol et (outside-61)
+        const newTableNumber = tableNumber + 60; // 1 -> 61, 2 -> 62, etc.
+        tableIdsToCheck.push(`outside-${newTableNumber}`);
+      }
+    }
+    
     const orders = (db.tableOrders || []).filter(
-      o => o.table_id === tableId && o.status === 'pending'
+      o => tableIdsToCheck.includes(o.table_id) && o.status === 'pending'
     );
     
     // Her sipariş için itemları ekle

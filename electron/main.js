@@ -4625,16 +4625,21 @@ function generateReceiptHTML(receiptData) {
     <body>
       <div class="header">
         <h3>MAKARA</h3>
-        <p style="font-size: 10px; margin: 0; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName ? 'Masa Siparişi' : 'Satış Fişi'}</p>
+        <p style="font-size: 10px; margin: 0; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName ? (receiptData.tableType === 'online' ? 'Online Sipariş' : 'Masa Siparişi') : 'Satış Fişi'}</p>
       </div>
       
       <div class="info">
-        ${receiptData.tableName ? `
+        ${receiptData.tableName ? (receiptData.tableType === 'online' ? `
+        <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #e2e8f0;">
+          <div style="font-size: 9px; font-weight: 700; color: #6366f1; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.8px;">Online Sipariş Müşteri:</div>
+          <div style="font-size: 17px; font-weight: 900; color: #1e293b; font-family: 'Montserrat', sans-serif; line-height: 1.4; letter-spacing: 0.3px;">${receiptData.tableName.replace('Online Sipariş Müşteri: ', '')}</div>
+        </div>
+        ` : `
         <div>
           <span>Masa:</span>
           <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName}</span>
         </div>
-        ` : ''}
+        `) : ''}
         <div>
           <span>Tarih:</span>
           <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_date || new Date().toLocaleDateString('tr-TR')}</span>
@@ -5791,12 +5796,17 @@ function generateAdisyonHTML(items, adisyonData) {
     </head>
     <body>
       <div class="info">
-        ${adisyonData.tableName ? `
+        ${adisyonData.tableName ? (adisyonData.tableType === 'online' ? `
+        <div class="table-row" style="margin-bottom: 14px; padding-bottom: 12px; border-bottom: 2px solid #e2e8f0;">
+          <div class="table-label" style="font-size: 9px; font-weight: 700; color: #6366f1; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.8px;">Online Sipariş Müşteri:</div>
+          <div class="table-value" style="font-size: 17px; font-weight: 900; color: #1e293b; line-height: 1.4; letter-spacing: 0.3px;">${adisyonData.tableName.replace('Online Sipariş Müşteri: ', '')}</div>
+        </div>
+        ` : `
         <div class="table-row">
           <div class="table-label">Masa:</div>
           <div class="table-value">${adisyonData.tableName}</div>
         </div>
-        ` : ''}
+        `) : ''}
         ${staffName ? `
         <div class="staff-row">
           <div class="staff-label">👤 Garson:</div>

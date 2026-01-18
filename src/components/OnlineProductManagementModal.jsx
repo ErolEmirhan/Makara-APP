@@ -243,33 +243,57 @@ const OnlineProductManagementModal = ({ onClose }) => {
 
     setSaving(true);
     try {
-      const outOfStockProducts = products.filter(p => p.is_out_of_stock_online);
+      // Önce Firebase'den tüm ürünleri kontrol et
+      const productsRef = collection(firestore, 'products');
+      const productsSnapshot = await getDocs(productsRef);
       
-      if (outOfStockProducts.length === 0) {
-        showToast('Tükendi olarak işaretlenmiş ürün bulunmuyor', 'info');
+      // Firebase'de is_out_of_stock_online: true olan ürünleri bul
+      const firebaseOutOfStockIds = new Set();
+      productsSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.is_out_of_stock_online === true) {
+          firebaseOutOfStockIds.add(data.id?.toString() || docSnap.id);
+        }
+      });
+
+      // Local state'teki tükendi ürünleri de ekle
+      const localOutOfStockProducts = products.filter(p => p.is_out_of_stock_online);
+      localOutOfStockProducts.forEach(p => {
+        firebaseOutOfStockIds.add(p.id.toString());
+      });
+
+      // Tüm ürünleri (local state'teki) Firebase'e is_out_of_stock_online: false olarak kaydet
+      // Bu şekilde hem Firebase'deki hem de local'deki tüm ürünler güncellenir
+      const allProductIds = new Set([
+        ...products.map(p => p.id.toString()),
+        ...Array.from(firebaseOutOfStockIds)
+      ]);
+
+      if (allProductIds.size === 0) {
+        showToast('Güncellenecek ürün bulunamadı', 'info');
         setShowResetConfirm(false);
         setSaving(false);
         return;
       }
 
-      // Tüm tükendi ürünleri güncelle
-      const updatePromises = outOfStockProducts.map(product => {
-        const productRef = doc(firestore, 'products', product.id.toString());
+      // Tüm ürünleri mevcut olarak işaretle
+      const updatePromises = Array.from(allProductIds).map(productId => {
+        const productRef = doc(firestore, 'products', productId);
         // setDoc ile merge: true kullan (doküman yoksa oluşturur)
         return setDoc(productRef, {
-          id: product.id,
+          id: parseInt(productId) || productId,
           is_out_of_stock_online: false
         }, { merge: true });
       });
 
       await Promise.all(updatePromises);
 
-      // Local state'i güncelle
+      // Local state'i güncelle - tüm ürünleri mevcut olarak işaretle
       setProducts(prevProducts =>
         prevProducts.map(p => ({ ...p, is_out_of_stock_online: false }))
       );
 
-      showToast(`Tüm ürünler mevcut olarak işaretlendi (${outOfStockProducts.length} ürün)`, 'success');
+      showToast(`Tüm ürünler mevcut olarak işaretlendi (${allProductIds.size} ürün)`, 'success');
       setShowResetConfirm(false);
     } catch (error) {
       console.error('Reset hatası:', error);

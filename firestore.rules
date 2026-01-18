@@ -1,15 +1,9 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Sales koleksiyonu - sadece okuma (admin dashboard için)
-    match /sales/{saleId} {
-      allow read: if true; // PIN kontrolü frontend'de yapılacak
-      allow write: if false; // Sadece Electron uygulaması yazabilir (Firebase Admin SDK ile)
-    }
-    // Tables koleksiyonu - sadece okuma (admin dashboard için)
-    match /tables/{tableId} {
-      allow read: if true; // PIN kontrolü frontend'de yapılacak
-      allow write: if false; // Sadece Electron uygulaması yazabilir (Firebase Admin SDK ile)
+    // TÜM KOLEKSİYONLARA TAM ERİŞİM (Geliştirme/Test için)
+    match /{document=**} {
+      allow read, write: if true;
     }
   }
 }

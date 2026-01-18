@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, where, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, getDoc } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
 import TablePartialPaymentModal from './TablePartialPaymentModal';
 import TableTransferModal from './TableTransferModal';
@@ -42,6 +42,8 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [showPaymentConfirmModal, setShowPaymentConfirmModal] = useState(false);
   const [orderToMarkAsPaid, setOrderToMarkAsPaid] = useState(null);
   const [showOnlineProductManagement, setShowOnlineProductManagement] = useState(false);
+  const [isOnlineActive, setIsOnlineActive] = useState(false);
+  const [loadingOnlineStatus, setLoadingOnlineStatus] = useState(false);
   const selectedTypeRef = useRef(selectedType);
 
   const showToast = (message, type = 'info') => {
@@ -135,6 +137,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       
       // Online siparişleri yükle (her zaman dinle, bildirim badge'i için)
       loadOnlineOrders(db);
+      
+      // Online aktif durumunu yükle
+      loadOnlineActiveStatus(db);
     } catch (error) {
       console.error('Online Firebase başlatılamadı:', error);
       showToast('Online siparişler yüklenemedi', 'error');
@@ -635,9 +640,12 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         category_id: null
       }));
       
+      // Müşteri ismini al
+      const customerName = selectedOrder.customer_name || selectedOrder.name || 'İsimsiz Müşteri';
+      
       const adisyonData = {
         items: adisyonItems,
-        tableName: 'Online Sipariş',
+        tableName: `Online Sipariş Müşteri: ${customerName}`, // Format: "Online Sipariş Müşteri: [İsim]"
         tableType: 'online',
         orderNote: selectedOrder.note || selectedOrder.orderNote || selectedOrder.order_note || null,
         sale_date: selectedOrder.formattedDate || new Date().toLocaleDateString('tr-TR'),
@@ -756,9 +764,12 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         };
       }));
       
+      // Müşteri ismini al
+      const customerName = selectedOrder.customer_name || selectedOrder.name || 'İsimsiz Müşteri';
+      
       const adisyonData = {
         items: adisyonItems,
-        tableName: 'Online Sipariş',
+        tableName: `Online Sipariş Müşteri: ${customerName}`, // Format: "Online Sipariş Müşteri: [İsim]"
         tableType: 'online',
         orderNote: selectedOrder.note || selectedOrder.orderNote || selectedOrder.order_note || null,
         sale_date: selectedOrder.formattedDate || new Date().toLocaleDateString('tr-TR'),
@@ -1039,6 +1050,50 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     setShowCancelConfirmModal(true);
   };
 
+  // Online aktif durumunu yükle
+  const loadOnlineActiveStatus = async (db) => {
+    try {
+      const activeRef = doc(db, 'active', 'dGRsJ5V5lgHcpRMXwDm2');
+      const activeDoc = await getDoc(activeRef);
+      
+      if (activeDoc.exists()) {
+        const data = activeDoc.data();
+        setIsOnlineActive(data.is_active === true);
+      } else {
+        setIsOnlineActive(false);
+      }
+    } catch (error) {
+      console.error('Online aktif durumu yüklenemedi:', error);
+      setIsOnlineActive(false);
+    }
+  };
+
+  // Online aktif durumunu güncelle
+  const handleToggleOnlineActive = async () => {
+    if (!onlineFirestore) {
+      showToast('Firebase bağlantısı bulunamadı', 'error');
+      return;
+    }
+
+    setLoadingOnlineStatus(true);
+    try {
+      const newStatus = !isOnlineActive;
+      const activeRef = doc(onlineFirestore, 'active', 'dGRsJ5V5lgHcpRMXwDm2');
+      
+      await setDoc(activeRef, {
+        is_active: newStatus
+      }, { merge: true });
+
+      setIsOnlineActive(newStatus);
+      showToast(newStatus ? 'Online siparişler aktif edildi' : 'Online siparişler pasif edildi', 'success');
+    } catch (error) {
+      console.error('Online aktif durumu güncellenemedi:', error);
+      showToast('Durum güncellenemedi: ' + error.message, 'error');
+    } finally {
+      setLoadingOnlineStatus(false);
+    }
+  };
+
   // İptal işlemini onayla
   const confirmCancelOrder = async () => {
     if (!selectedOrder || selectedType !== 'online') return;
@@ -1217,6 +1272,53 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
               </svg>
               <span>Online Ürün Yönetimi</span>
             </button>
+          </div>
+
+          {/* Online Sipariş Aktif/Pasif Switch - Üstte */}
+          <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-purple-50 rounded-2xl p-6 border-2 border-purple-200 shadow-lg">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-4">
+                <div className={`w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg ${
+                  isOnlineActive 
+                    ? 'bg-gradient-to-br from-green-500 to-emerald-600' 
+                    : 'bg-gradient-to-br from-gray-400 to-gray-500'
+                }`}>
+                  <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold text-gray-900 mb-1">
+                    {isOnlineActive ? 'Online Sipariş Aktif' : 'Online Sipariş Pasif'}
+                  </h3>
+                  <p className="text-sm text-gray-600">
+                    {isOnlineActive 
+                      ? 'Müşteriler online sipariş verebilir' 
+                      : 'Online siparişler şu anda kapalı'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={handleToggleOnlineActive}
+                disabled={loadingOnlineStatus}
+                className={`relative inline-flex h-16 w-32 items-center rounded-full transition-colors duration-300 focus:outline-none focus:ring-4 focus:ring-purple-300 focus:ring-offset-2 shadow-xl ${
+                  isOnlineActive
+                    ? 'bg-gradient-to-r from-green-500 to-emerald-600'
+                    : 'bg-gradient-to-r from-gray-400 to-gray-500'
+                } ${loadingOnlineStatus ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+              >
+                <span
+                  className={`inline-block h-14 w-14 transform rounded-full bg-white transition-transform duration-300 shadow-lg ${
+                    isOnlineActive ? 'translate-x-[70px]' : 'translate-x-1'
+                  }`}
+                />
+                {loadingOnlineStatus && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="animate-spin rounded-full h-6 w-6 border-2 border-white border-t-transparent"></div>
+                  </div>
+                )}
+              </button>
+            </div>
           </div>
           
           {onlineOrders.length === 0 ? (

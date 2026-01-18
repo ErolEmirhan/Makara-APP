@@ -1708,8 +1708,16 @@
          s.payment_method !== 'Online Satış (Nakit)' && 
          s.payment_method !== 'Masraf')
       );
+      // Online satışları ayrı hesapla (tüm online satışlar)
+      const onlineSales = todaySales.filter(s => 
+        s.payment_method && (
+          s.payment_method.startsWith('Online Satış') ||
+          s.payment_method === 'Online Satış'
+        )
+      );
       const cashTotal = cashSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       const cardTotal = cardSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+      const onlineTotal = onlineSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       
       // Aktif masalardaki toplam tutarı hesapla
       const activeTablesRevenue = calculateActiveTablesRevenue();
@@ -1822,6 +1830,10 @@
             <span class="payment-breakdown-label">💳 Kart:</span>
             <span class="payment-breakdown-value">₺${Math.round(totalCard).toLocaleString('tr-TR')}</span>
           </div>
+          <div class="payment-breakdown-item">
+            <span class="payment-breakdown-label">🌐 Online:</span>
+            <span class="payment-breakdown-value">₺${Math.round(onlineTotal).toLocaleString('tr-TR')}</span>
+          </div>
         </div>
       `;
 
@@ -1887,12 +1899,14 @@
       const staffContainer = document.getElementById('staffContainer');
       const tablesContainer = document.getElementById('tablesContainer');
       const cancelsContainer = document.getElementById('cancelsContainer');
+      const onlineOrdersContainer = document.getElementById('onlineOrdersContainer');
       
       if (salesContainer) salesContainer.style.display = activeTab === 'sales' ? 'block' : 'none';
       if (reportsContainer) reportsContainer.style.display = activeTab === 'reports' ? 'block' : 'none';
       if (staffContainer) staffContainer.style.display = activeTab === 'staff' ? 'block' : 'none';
       if (tablesContainer) tablesContainer.style.display = activeTab === 'tables' ? 'block' : 'none';
       if (cancelsContainer) cancelsContainer.style.display = activeTab === 'cancels' ? 'block' : 'none';
+      if (onlineOrdersContainer) onlineOrdersContainer.style.display = activeTab === 'onlineOrders' ? 'block' : 'none';
       
       // Stats grid'i sadece "Satış Geçmişi" sekmesinde göster
       const statsGrid = document.getElementById('statsGrid');
@@ -1911,6 +1925,8 @@
         renderTables();
       } else if (activeTab === 'cancels') {
         renderCancels(true); // resetCount = true (sekme değiştiğinde sayacı sıfırla)
+      } else if (activeTab === 'onlineOrders') {
+        renderOnlineOrdersPage();
       }
     }
 
@@ -3951,6 +3967,11 @@
         if (modal && modal.style.display === 'flex') {
           renderOnlineOrders();
         }
+        
+        // Eğer onlineOrders sayfası açıksa, orayı da güncelle
+        if (activeTab === 'onlineOrders') {
+          renderOnlineOrdersForPage();
+        }
       }, (error) => {
         console.error('❌ Online siparişler dinleme hatası:', error);
         console.error('Hata detayları:', error.message, error.code);
@@ -4023,6 +4044,7 @@
       onlineOrders.forEach((order, index) => {
         const customerName = order.customer_name || order.name || 'İsimsiz Müşteri';
         const customerPhone = order.customer_phone || order.phone || '-';
+        const customerAddress = order.customer_address || order.address || '-';
         // Telefon numarasını temizle (sadece rakamlar ve +)
         const cleanPhone = customerPhone.replace(/[^\d+]/g, '');
         const phoneLink = cleanPhone && cleanPhone !== '-' ? `tel:${cleanPhone}` : '#';
@@ -4119,6 +4141,323 @@
                 <div style="background: #ffffff; border-radius: 8px; padding: 4px 0;">
                   ${itemsHtml}
                 </div>
+                ${customerAddress && customerAddress !== '-' ? `
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #f3f4f6;">
+                  <div style="font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Adres
+                  </div>
+                  <div style="font-size: 14px; color: #374151; line-height: 1.6; background: #f9fafb; padding: 12px; border-radius: 6px; border-left: 3px solid #3b82f6;">
+                    ${customerAddress}
+                  </div>
+                </div>
+                ` : ''}
+                ${noteHtml}
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      
+      container.innerHTML = html;
+    }
+
+    // Online sipariş aktiflik durumu (global)
+    let isOnlineActive = false;
+    let savingOnlineStatus = false;
+    let onlineStatusUnsubscribe = null;
+
+    // Online durum UI'ı güncelle (global)
+    function updateOnlineStatusUI(isActive) {
+      const switchBtn = document.getElementById('onlineStatusSwitch');
+      const switchCircle = document.getElementById('onlineStatusSwitchCircle');
+      const statusText = document.getElementById('onlineStatusText');
+      
+      if (switchBtn && switchCircle && statusText) {
+        if (isActive) {
+          switchBtn.style.background = '#10b981';
+          switchCircle.style.transform = 'translateX(22px)';
+          statusText.textContent = 'Aktif';
+          statusText.style.color = '#10b981';
+        } else {
+          switchBtn.style.background = '#e5e7eb';
+          switchCircle.style.transform = 'translateX(2px)';
+          statusText.textContent = 'Pasif';
+          statusText.style.color = '#6b7280';
+        }
+      }
+    }
+
+    // Online durum listener'ı başlat
+    function startOnlineStatusListener() {
+      if (!onlineDb) return;
+
+      // Önceki listener'ı temizle
+      if (onlineStatusUnsubscribe) {
+        onlineStatusUnsubscribe();
+        onlineStatusUnsubscribe = null;
+      }
+
+      const activeRef = onlineDb.collection('active').doc('dGRsJ5V5lgHcpRMXwDm2');
+      
+      // İlk yükleme
+      activeRef.get().then((doc) => {
+        if (doc.exists) {
+          isOnlineActive = doc.data().is_active === true;
+        } else {
+          // Doküman yoksa oluştur (varsayılan: false)
+          activeRef.set({ is_active: false }, { merge: true });
+          isOnlineActive = false;
+        }
+        updateOnlineStatusUI(isOnlineActive);
+      }).catch((error) => {
+        console.error('Online aktiflik durumu yüklenemedi:', error);
+        isOnlineActive = false;
+        updateOnlineStatusUI(false);
+      });
+
+      // Real-time listener
+      onlineStatusUnsubscribe = activeRef.onSnapshot((doc) => {
+        if (doc.exists) {
+          isOnlineActive = doc.data().is_active === true;
+          updateOnlineStatusUI(isOnlineActive);
+        }
+      }, (error) => {
+        console.error('Online durum listener hatası:', error);
+      });
+    }
+
+    // Switch toggle fonksiyonu
+    window.toggleOnlineStatus = function() {
+      if (savingOnlineStatus || !onlineDb) {
+        console.warn('Switch toggle: savingOnlineStatus veya onlineDb yok');
+        return;
+      }
+      
+      savingOnlineStatus = true;
+      const newStatus = !isOnlineActive;
+      
+      const switchBtn = document.getElementById('onlineStatusSwitch');
+      if (switchBtn) {
+        switchBtn.style.opacity = '0.6';
+        switchBtn.style.cursor = 'not-allowed';
+      }
+
+      const activeRef = onlineDb.collection('active').doc('dGRsJ5V5lgHcpRMXwDm2');
+      activeRef.set({ is_active: newStatus }, { merge: true })
+        .then(() => {
+          console.log('✅ Online durum güncellendi:', newStatus);
+          isOnlineActive = newStatus;
+          updateOnlineStatusUI(newStatus);
+          savingOnlineStatus = false;
+          if (switchBtn) {
+            switchBtn.style.opacity = '1';
+            switchBtn.style.cursor = 'pointer';
+          }
+        })
+        .catch((error) => {
+          console.error('❌ Online aktiflik durumu güncellenemedi:', error);
+          savingOnlineStatus = false;
+          if (switchBtn) {
+            switchBtn.style.opacity = '1';
+            switchBtn.style.cursor = 'pointer';
+          }
+          alert('Durum güncellenemedi: ' + error.message);
+        });
+    };
+
+    // Online Siparişler Sayfasını Render Et
+    function renderOnlineOrdersPage() {
+      const container = document.getElementById('onlineOrdersContainer');
+      if (!container) {
+        console.error('❌ onlineOrdersContainer bulunamadı');
+        return;
+      }
+
+      // Listener'ı başlat
+      startOnlineStatusListener();
+
+      // Container HTML'i oluştur - Minimal ve modern tasarım
+      container.innerHTML = `
+        <div style="padding: 24px; max-width: 1200px; margin: 0 auto;">
+          <!-- Online Sipariş Durum Kontrolü -->
+          <div style="background: #ffffff; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px; border: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <span style="font-size: 15px; font-weight: 500; color: #374151;">Online Sipariş:</span>
+              <span id="onlineStatusText" style="font-size: 14px; font-weight: 600; color: #6b7280;">
+                Pasif
+              </span>
+            </div>
+            <button 
+              id="onlineStatusSwitch"
+              onclick="toggleOnlineStatus()"
+              style="position: relative; width: 48px; height: 26px; border-radius: 13px; border: none; background: #e5e7eb; cursor: pointer; transition: background 0.2s ease; outline: none; flex-shrink: 0;"
+              onmouseover="this.style.opacity='0.85'"
+              onmouseout="this.style.opacity='1'"
+            >
+              <span 
+                id="onlineStatusSwitchCircle"
+                style="position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: white; box-shadow: 0 1px 2px rgba(0,0,0,0.15); transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1); transform: translateX(0px);"
+              ></span>
+            </button>
+          </div>
+
+          <!-- Online Siparişler Listesi -->
+          <div id="onlineOrdersPageList" style="display: grid; gap: 16px;">
+            <!-- Siparişler buraya eklenecek -->
+          </div>
+        </div>
+      `;
+
+      // UI'ı güncelle
+      updateOnlineStatusUI(isOnlineActive);
+
+      // Online siparişleri render et
+      renderOnlineOrdersForPage();
+    }
+
+    // Online Siparişleri Sayfa İçin Render Et
+    function renderOnlineOrdersForPage() {
+      const container = document.getElementById('onlineOrdersPageList');
+      if (!container) return;
+
+      if (!onlineDb) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 60px 20px; color: #6b7280; background: white; border-radius: 12px; border: 2px dashed #e5e7eb;">
+            <div style="font-size: 64px; margin-bottom: 16px;">⚠️</div>
+            <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Firebase bağlantısı kurulamadı</div>
+            <div style="font-size: 14px; color: #9ca3af;">Sayfayı yenileyin</div>
+          </div>
+        `;
+        return;
+      }
+
+      if (onlineOrders.length === 0) {
+        container.innerHTML = `
+          <div style="text-align: center; padding: 60px 20px; color: #6b7280; background: white; border-radius: 12px; border: 2px dashed #e5e7eb;">
+            <div style="font-size: 64px; margin-bottom: 16px;">🌐</div>
+            <div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">Henüz online sipariş bulunmuyor</div>
+            <div style="font-size: 14px; color: #9ca3af;">Yeni siparişler burada görünecek</div>
+          </div>
+        `;
+        return;
+      }
+
+      // renderOnlineOrders fonksiyonunun mantığını kullan ama doğrudan bu container'a yaz
+      let html = '';
+      onlineOrders.forEach((order, index) => {
+        const customerName = order.customer_name || order.name || 'İsimsiz Müşteri';
+        const customerPhone = order.customer_phone || order.phone || '-';
+        const customerAddress = order.customer_address || order.address || '-';
+        const cleanPhone = customerPhone.replace(/[^\d+]/g, '');
+        const phoneLink = cleanPhone && cleanPhone !== '-' ? `tel:${cleanPhone}` : '#';
+        const totalAmount = parseFloat(order.total_amount || order.total || 0).toFixed(2);
+        const orderDate = order.formattedDate || '';
+        const orderTime = order.formattedTime || '';
+        const orderId = order.id || `order-${index}`;
+        
+        const items = order.items || [];
+        const itemsHtml = items.length > 0 
+          ? items.map(item => {
+              const itemName = item.name || item.product_name || 'Bilinmeyen Ürün';
+              const quantity = item.quantity || 1;
+              const price = parseFloat(item.price || 0).toFixed(2);
+              const itemTotal = (parseFloat(item.price || 0) * (item.quantity || 1)).toFixed(2);
+              return `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #f3f4f6;">
+                  <div style="flex: 1;">
+                    <div style="font-size: 14px; font-weight: 500; color: #111827; margin-bottom: 4px;">
+                      ${itemName}
+                    </div>
+                    <div style="font-size: 12px; color: #6b7280;">
+                      ${quantity} adet × ₺${price}
+                    </div>
+                  </div>
+                  <div style="font-size: 15px; font-weight: 600; color: #059669; margin-left: 16px;">
+                    ₺${itemTotal}
+                  </div>
+                </div>
+              `;
+            }).join('')
+          : '<div style="padding: 12px 0; color: #9ca3af; font-size: 14px;">Ürün bulunamadı</div>';
+        
+        const orderNote = order.note || order.orderNote || order.order_note || null;
+        const noteHtml = orderNote 
+          ? `
+            <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #f3f4f6;">
+              <div style="font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">
+                Sipariş Notu
+              </div>
+              <div style="font-size: 14px; color: #374151; line-height: 1.6; background: #f9fafb; padding: 12px; border-radius: 6px; border-left: 3px solid #8b5cf6;">
+                ${orderNote}
+              </div>
+            </div>
+          `
+          : '';
+        
+        html += `
+          <div class="online-order-card" data-order-id="${orderId}" style="background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%); border-radius: 12px; padding: 20px; border: 1px solid #e5e7eb; box-shadow: 0 2px 8px rgba(0,0,0,0.06); transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); cursor: pointer; overflow: hidden;" onclick="toggleOrderDetails('${orderId}')">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <div style="flex: 1; min-width: 0;">
+                <div style="font-size: 17px; font-weight: 700; color: #111827; margin-bottom: 10px; line-height: 1.3;">
+                  ${customerName}
+                </div>
+                <a href="${phoneLink}" onclick="event.stopPropagation(); return true;" style="font-size: 14px; color: #3b82f6; margin-bottom: 6px; line-height: 1.5; display: flex; align-items: center; gap: 6px; text-decoration: none; transition: color 0.2s ease; cursor: pointer;" onmouseover="this.style.color='#2563eb'; this.style.textDecoration='underline';" onmouseout="this.style.color='#3b82f6'; this.style.textDecoration='none';">
+                  <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="flex-shrink: 0;">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                  </svg>
+                  ${customerPhone}
+                </a>
+                <div style="font-size: 20px; font-weight: 700; color: #059669; margin-top: 10px; display: flex; align-items: center; gap: 6px;">
+                  <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  ₺${totalAmount}
+                </div>
+              </div>
+              <div style="text-align: right; margin-left: 24px; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
+                <div style="font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px;">
+                  ${orderDate}
+                </div>
+                <div style="font-size: 18px; font-weight: 700; color: #1f2937; white-space: nowrap;">
+                  ${orderTime}
+                </div>
+                <div style="margin-top: 8px; transition: transform 0.3s ease;" id="arrow-page-${orderId}">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #6b7280;">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+            
+            <div id="details-page-${orderId}" style="max-height: 0; overflow: hidden; transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease; padding-top: 0;">
+              <div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #e5e7eb;">
+                <div style="font-size: 13px; font-weight: 600; color: #6b7280; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
+                  <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                  </svg>
+                  Ürünler (${items.length})
+                </div>
+                <div style="background: #ffffff; border-radius: 8px; padding: 4px 0;">
+                  ${itemsHtml}
+                </div>
+                ${customerAddress && customerAddress !== '-' ? `
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #f3f4f6;">
+                  <div style="font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; display: flex; align-items: center; gap: 8px;">
+                    <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Adres
+                  </div>
+                  <div style="font-size: 14px; color: #374151; line-height: 1.6; background: #f9fafb; padding: 12px; border-radius: 6px; border-left: 3px solid #3b82f6;">
+                    ${customerAddress}
+                  </div>
+                </div>
+                ` : ''}
                 ${noteHtml}
               </div>
             </div>
@@ -5369,8 +5708,16 @@
     window.toggleStaffDateFilterModal = toggleStaffDateFilterModal;
     window.closeStaffDateFilterModal = closeStaffDateFilterModal;
     window.toggleOrderDetails = function(orderId) {
-      const detailsDiv = document.getElementById('details-' + orderId);
-      const arrowDiv = document.getElementById('arrow-' + orderId);
+      // Modal için
+      let detailsDiv = document.getElementById('details-' + orderId);
+      let arrowDiv = document.getElementById('arrow-' + orderId);
+      
+      // Sayfa için (eğer modal'da yoksa)
+      if (!detailsDiv || !arrowDiv) {
+        detailsDiv = document.getElementById('details-page-' + orderId);
+        arrowDiv = document.getElementById('arrow-page-' + orderId);
+      }
+      
       const card = document.querySelector(`[data-order-id="${orderId}"]`);
       
       if (!detailsDiv || !arrowDiv || !card) return;
@@ -10390,12 +10737,6 @@
               </svg>
               <span>Yenile</span>
             </button>
-            <button onclick="showOnlineOrdersModal()" class="notifications-btn" id="onlineOrdersBtn">
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-              </svg>
-              <span>Online</span>
-            </button>
             <button onclick="logout()" class="logout-btn">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/>
@@ -10452,9 +10793,9 @@
             <div class="tab-btn-text">İptaller</div>
             <div class="tab-btn-indicator"></div>
           </button>
-          <button class="tab-btn" data-tab="send-message" onclick="showSendMessageModal()">
-            <div class="tab-btn-icon">📢</div>
-            <div class="tab-btn-text">Mesaj Gönder</div>
+          <button class="tab-btn" data-tab="onlineOrders" onclick="setActiveTab('onlineOrders')">
+            <div class="tab-btn-icon">🌐</div>
+            <div class="tab-btn-text">Online Siparişler</div>
             <div class="tab-btn-indicator"></div>
           </button>
         </div>
@@ -10467,6 +10808,7 @@
       <div id="staffContainer" style="min-height: 200px; display: none;"></div>
       <div id="tablesContainer" style="min-height: 200px; display: none;"></div>
       <div id="cancelsContainer" style="min-height: 200px; display: none;"></div>
+      <div id="onlineOrdersContainer" style="min-height: 200px; display: none;"></div>
     </div>
   </div>
 

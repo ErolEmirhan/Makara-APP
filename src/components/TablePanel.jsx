@@ -5,6 +5,7 @@ import TableOrderModal from './TableOrderModal';
 import TablePartialPaymentModal from './TablePartialPaymentModal';
 import TableTransferModal from './TableTransferModal';
 import OnlineOrderModal from './OnlineOrderModal';
+import OnlineProductManagementModal from './OnlineProductManagementModal';
 import Toast from './Toast';
 
 const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
@@ -40,6 +41,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [showCancelConfirmModal, setShowCancelConfirmModal] = useState(false);
   const [showPaymentConfirmModal, setShowPaymentConfirmModal] = useState(false);
   const [orderToMarkAsPaid, setOrderToMarkAsPaid] = useState(null);
+  const [showOnlineProductManagement, setShowOnlineProductManagement] = useState(false);
   const selectedTypeRef = useRef(selectedType);
 
   const showToast = (message, type = 'info') => {
@@ -1204,6 +1206,19 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       {/* Online Siparişler - Kart Görünümü */}
       {selectedType === 'online' ? (
         <div className="space-y-4">
+          {/* Online Ürün Yönetimi Butonu */}
+          <div className="flex justify-end mb-4">
+            <button
+              onClick={() => setShowOnlineProductManagement(true)}
+              className="px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+              </svg>
+              <span>Online Ürün Yönetimi</span>
+            </button>
+          </div>
+          
           {onlineOrders.length === 0 ? (
             <div className="text-center py-12 bg-white/50 backdrop-blur-sm rounded-2xl border border-gray-200">
               <svg className="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1608,6 +1623,13 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Online Ürün Yönetimi Modal */}
+      {showOnlineProductManagement && (
+        <OnlineProductManagementModal
+          onClose={() => setShowOnlineProductManagement(false)}
+        />
       )}
 
       {/* İptal Onay Modal - Modern ve Profesyonel */}

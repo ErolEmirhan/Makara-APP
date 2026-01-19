@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.12">
+  <link rel="manifest" href="/manifest.json?v=2.4.15">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,15 +23,43 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.12';
+      const APP_VERSION = '2.4.15';
       const STORAGE_KEY = 'makara_admin_version';
+      const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
       // Mevcut versiyonu kontrol et
       const currentVersion = localStorage.getItem(STORAGE_KEY);
       
-      // Eğer versiyon değiştiyse veya ilk yükleme ise cache'i temizle
-      if (currentVersion !== APP_VERSION) {
-        console.log('🔄 Yeni versiyon tespit edildi, cache temizleniyor...');
+      // Manifest'i kontrol et ve güncelle
+      async function checkManifestUpdate() {
+        try {
+          const manifestResponse = await fetch(`/manifest.json?v=${APP_VERSION}&t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: {
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache'
+            }
+          });
+          
+          if (manifestResponse.ok) {
+            const manifest = await manifestResponse.json();
+            const manifestVersion = manifest.version || APP_VERSION;
+            const storedVersion = localStorage.getItem(STORAGE_KEY);
+            
+            // Eğer manifest'teki versiyon farklıysa güncelle
+            if (manifestVersion !== storedVersion && storedVersion) {
+              console.log('🔄 Manifest\'te yeni versiyon tespit edildi:', manifestVersion);
+              forceUpdate();
+            }
+          }
+        } catch (error) {
+          console.warn('Manifest kontrolü hatası:', error);
+        }
+      }
+      
+      // Zorla güncelleme
+      function forceUpdate() {
+        console.log('🔄 Zorla güncelleme başlatılıyor...');
         
         // Service Worker'ları unregister et
         if ('serviceWorker' in navigator) {
@@ -59,26 +87,36 @@
           });
         }
         
-        // IndexedDB'yi temizle (isteğe bağlı)
-        if ('indexedDB' in window) {
-          // IndexedDB temizleme işlemi
-          indexedDB.databases().then(databases => {
-            databases.forEach(db => {
-              indexedDB.deleteDatabase(db.name);
-            });
-          });
-        }
-        
         // Yeni versiyonu kaydet
         localStorage.setItem(STORAGE_KEY, APP_VERSION);
         
         // Sayfayı yeniden yükle (cache olmadan)
-        if (currentVersion) {
-          // Sadece versiyon değiştiyse yeniden yükle (ilk yüklemede değil)
-          setTimeout(() => {
-            window.location.reload(true);
-          }, 500);
-        }
+        setTimeout(() => {
+          window.location.href = window.location.href.split('?')[0].split('#')[0] + `?v=${APP_VERSION}&t=${Date.now()}&_update=1`;
+        }, 500);
+      }
+      
+      // Eğer versiyon değiştiyse veya ilk yükleme ise cache'i temizle
+      if (currentVersion !== APP_VERSION) {
+        console.log('🔄 Yeni versiyon tespit edildi, cache temizleniyor...');
+        forceUpdate();
+      } else {
+        // Versiyon aynı olsa bile, periyodik olarak manifest'i kontrol et
+        // İlk kontrolü hemen yap
+        checkManifestUpdate();
+        
+        // Sonra periyodik olarak kontrol et
+        setInterval(checkManifestUpdate, MANIFEST_CHECK_INTERVAL);
+        
+        // Sayfa görünür olduğunda da kontrol et (kullanıcı uygulamaya geri döndüğünde)
+        document.addEventListener('visibilitychange', function() {
+          if (!document.hidden) {
+            checkManifestUpdate();
+          }
+        });
+        
+        // Focus olduğunda da kontrol et
+        window.addEventListener('focus', checkManifestUpdate);
       }
     })();
     
@@ -1920,6 +1958,18 @@
       } else if (activeTab === 'reports') {
         renderReports();
       } else if (activeTab === 'staff') {
+        // Personel detayları sekmesine ilk girildiğinde bugün için veri yükle
+        if (!isStaffDetailsInitialized) {
+          staffSelectedDate = new Date();
+          staffDateFilter = 'day';
+          isStaffDetailsInitialized = true;
+          
+          // Tarih input'unu güncelle
+          const datePicker = document.getElementById('staffDatePicker');
+          if (datePicker) {
+            datePicker.value = staffSelectedDate.toISOString().split('T')[0];
+          }
+        }
         renderStaffDetails();
       } else if (activeTab === 'tables') {
         renderTables();
@@ -2082,10 +2132,8 @@
     }
 
     function closeStaffDateFilterModal() {
-      const modal = document.getElementById('staffDateFilterModal');
-      if (modal) {
-        modal.classList.remove('show');
-      }
+      // Modal'ı kapatma - kullanıcı istediği için modal açık kalacak
+      // Sadece manuel olarak toggle ile kapatılabilir
     }
 
     // Detaylı Raporlama render et
@@ -4603,11 +4651,80 @@
     }
 
     // Personel detayları için zaman filtresi
-    let staffDateFilter = 'all'; // 'all', 'yesterday', 'week', 'month', 'custom'
+    let staffDateFilter = 'day'; // 'all', 'yesterday', 'week', 'month', 'custom', 'day'
     let staffCustomDateRange = { start: null, end: null };
+    let staffSelectedDate = new Date(); // Seçilen gün (varsayılan: bugün)
+    
+    // Personel detayları sekmesine ilk girildiğinde bugün için veri yükle
+    let isStaffDetailsInitialized = false;
 
     function setStaffDateFilter(filter) {
       staffDateFilter = filter;
+      
+      // Eğer "yesterday", "week", "month" seçildiyse, tarih navigasyonunu güncelle
+      if (filter === 'yesterday') {
+        const yesterday = new Date();
+        yesterday.setDate(yesterday.getDate() - 1);
+        staffSelectedDate = yesterday;
+        
+        // Tarih input'unu güncelle
+        const datePicker = document.getElementById('staffDatePicker');
+        if (datePicker) {
+          datePicker.value = staffSelectedDate.toISOString().split('T')[0];
+        }
+      }
+      
+      // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
+      staffSalesCacheByDate = {};
+      
+      renderStaffDetails();
+    }
+    
+    // Tarih seçici değiştiğinde
+    function setStaffSelectedDate(dateString) {
+      if (!dateString) return;
+      staffSelectedDate = new Date(dateString);
+      staffDateFilter = 'day';
+      
+      // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
+      staffSalesCacheByDate = {};
+      
+      renderStaffDetails();
+    }
+    
+    // Tarih navigasyonu (geri/ileri)
+    function navigateStaffDate(days) {
+      const newDate = new Date(staffSelectedDate);
+      newDate.setDate(newDate.getDate() + days);
+      staffSelectedDate = newDate;
+      staffDateFilter = 'day';
+      
+      // Tarih input'unu güncelle
+      const datePicker = document.getElementById('staffDatePicker');
+      if (datePicker) {
+        datePicker.value = staffSelectedDate.toISOString().split('T')[0];
+      }
+      
+      // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
+      staffSalesCacheByDate = {};
+      
+      renderStaffDetails();
+    }
+    
+    // Bugün'e git
+    function setStaffDateToToday() {
+      staffSelectedDate = new Date();
+      staffDateFilter = 'day';
+      
+      // Tarih input'unu güncelle
+      const datePicker = document.getElementById('staffDatePicker');
+      if (datePicker) {
+        datePicker.value = staffSelectedDate.toISOString().split('T')[0];
+      }
+      
+      // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
+      staffSalesCacheByDate = {};
+      
       renderStaffDetails();
     }
 
@@ -4630,7 +4747,19 @@
       const now = new Date();
       now.setHours(23, 59, 59, 999);
       
-      if (staffDateFilter === 'yesterday') {
+      // Tek gün seçimi
+      if (staffDateFilter === 'day') {
+        const selectedDate = new Date(staffSelectedDate);
+        selectedDate.setHours(0, 0, 0, 0);
+        const selectedDateEnd = new Date(selectedDate);
+        selectedDateEnd.setHours(23, 59, 59, 999);
+        const selectedDateStr = selectedDate.toLocaleDateString('tr-TR');
+        
+        return sales.filter(sale => {
+          if (!sale.sale_date || sale.sale_date === 'Bilinmeyen') return false;
+          return sale.sale_date === selectedDateStr;
+        });
+      } else if (staffDateFilter === 'yesterday') {
         const yesterday = new Date(now);
         yesterday.setDate(yesterday.getDate() - 1);
         yesterday.setHours(0, 0, 0, 0);
@@ -4680,12 +4809,246 @@
       return sales;
     }
 
-    function renderStaffDetails() {
+    // Personel detayları için özel satış yükleme (Limonata, Filtre Kahve, Salep içeren satışlar)
+    // Tarih bazlı cache (her tarih için ayrı cache)
+    let staffSalesCacheByDate = {};
+    const STAFF_SALES_CACHE_DURATION = 5 * 60 * 1000; // 5 dakika
+    
+    // Tarih filtresine göre hangi tarihleri yükleyeceğimizi belirle
+    function getDateRangeForStaffFilter() {
+      const now = new Date();
+      now.setHours(23, 59, 59, 999);
+      
+      if (staffDateFilter === 'day') {
+        const selectedDate = new Date(staffSelectedDate);
+        selectedDate.setHours(0, 0, 0, 0);
+        const selectedDateStr = selectedDate.toLocaleDateString('tr-TR');
+        return { start: selectedDateStr, end: selectedDateStr, dates: [selectedDateStr] };
+      } else if (staffDateFilter === 'yesterday') {
+        const yesterday = new Date(now);
+        yesterday.setDate(yesterday.getDate() - 1);
+        yesterday.setHours(0, 0, 0, 0);
+        const yesterdayStr = yesterday.toLocaleDateString('tr-TR');
+        return { start: yesterdayStr, end: yesterdayStr, dates: [yesterdayStr] };
+      } else if (staffDateFilter === 'week') {
+        const weekAgo = new Date(now);
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        weekAgo.setHours(0, 0, 0, 0);
+        const dates = [];
+        for (let d = new Date(weekAgo); d <= now; d.setDate(d.getDate() + 1)) {
+          dates.push(d.toLocaleDateString('tr-TR'));
+        }
+        return { start: dates[0], end: dates[dates.length - 1], dates: dates };
+      } else if (staffDateFilter === 'month') {
+        const monthAgo = new Date(now);
+        monthAgo.setMonth(monthAgo.getMonth() - 1);
+        monthAgo.setHours(0, 0, 0, 0);
+        const dates = [];
+        for (let d = new Date(monthAgo); d <= now; d.setDate(d.getDate() + 1)) {
+          dates.push(d.toLocaleDateString('tr-TR'));
+        }
+        return { start: dates[0], end: dates[dates.length - 1], dates: dates };
+      } else if (staffDateFilter === 'custom' && staffCustomDateRange.start && staffCustomDateRange.end) {
+        const dates = [];
+        for (let d = new Date(staffCustomDateRange.start); d <= staffCustomDateRange.end; d.setDate(d.getDate() + 1)) {
+          dates.push(d.toLocaleDateString('tr-TR'));
+        }
+        return { start: dates[0], end: dates[dates.length - 1], dates: dates };
+      } else {
+        // 'all' için tüm tarihler
+        return { start: null, end: null, dates: null };
+      }
+    }
+    
+    async function loadStaffSales() {
+      if (!db) return [];
+      
+      const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
+      const dateRange = getDateRangeForStaffFilter();
+      const cacheKey = `${staffDateFilter}_${dateRange.start || 'all'}_${dateRange.end || 'all'}`;
+      
+      // Cache kontrolü
+      const now = Date.now();
+      if (staffSalesCacheByDate[cacheKey] && 
+          staffSalesCacheByDate[cacheKey].timestamp && 
+          (now - staffSalesCacheByDate[cacheKey].timestamp) < STAFF_SALES_CACHE_DURATION) {
+        return staffSalesCacheByDate[cacheKey].sales;
+      }
+      
+      try {
+        const salesRef = db.collection('sales');
+        
+        // Tüm satışları yükle (limit yok - bu 3 ürünü içeren satışları bulmak için)
+        let query = salesRef;
+        try {
+          query = salesRef.orderBy('created_at', 'desc');
+        } catch (e) {
+          try {
+            query = salesRef.orderBy('timestamp', 'desc');
+          } catch (e2) {
+            query = salesRef; // Limit yok
+          }
+        }
+        
+        const querySnapshot = await query.get();
+        const sales = [];
+        
+        querySnapshot.forEach((doc) => {
+          const data = doc.data();
+          
+          // Satış tarihini al
+          let saleDate = data.sale_date;
+          let saleTime = data.sale_time;
+          
+          let createdAt = null;
+          if (data.created_at) {
+            const timestamp = data.created_at;
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          } else if (data.timestamp) {
+            const timestamp = data.timestamp;
+            createdAt = timestamp.toDate ? timestamp.toDate() : new Date(timestamp.seconds * 1000);
+          }
+          
+          if (!saleDate && createdAt) {
+            saleDate = createdAt.toLocaleDateString('tr-TR');
+            saleTime = createdAt.toLocaleTimeString('tr-TR');
+          }
+          
+          // Tarih filtresi uygula (eğer belirli tarihler seçildiyse)
+          if (dateRange.dates && !dateRange.dates.includes(saleDate)) {
+            return; // Bu tarih filtresine uymuyor, atla
+          }
+          
+          // Bu satışta hedef ürünlerden biri var mı kontrol et
+          let hasTargetProduct = false;
+          let parsedItemsArray = [];
+          
+          // Önce items_array'i kontrol et
+          if (data.items_array && Array.isArray(data.items_array) && data.items_array.length > 0) {
+            parsedItemsArray = data.items_array;
+            hasTargetProduct = parsedItemsArray.some(item => {
+              const productName = (item.product_name || '').trim();
+              return targetProducts.includes(productName);
+            });
+          }
+          
+          // Eğer items_array yoksa veya hedef ürün bulunamadıysa, items string'ini parse et
+          if (!hasTargetProduct && data.items) {
+            const itemsStr = typeof data.items === 'string' ? data.items : JSON.stringify(data.items);
+            
+            // items string'inden parse et
+            if (typeof data.items === 'string') {
+              const items = data.items.split(', ').map(itemStr => {
+                const match = itemStr.match(/(.+) x(\d+)/);
+                if (match) {
+                  const productName = match[1].replace(' (İKRAM)', '').trim();
+                  return {
+                    product_name: productName,
+                    quantity: parseInt(match[2]),
+                    isGift: itemStr.includes('(İKRAM)'),
+                    price: 0
+                  };
+                }
+                return {
+                  product_name: itemStr.trim(),
+                  quantity: 1,
+                  isGift: false,
+                  price: 0
+                };
+              });
+              parsedItemsArray = items;
+              
+              hasTargetProduct = parsedItemsArray.some(item => {
+                const productName = (item.product_name || '').trim();
+                return targetProducts.includes(productName);
+              });
+            } else if (Array.isArray(data.items)) {
+              parsedItemsArray = data.items;
+              hasTargetProduct = parsedItemsArray.some(item => {
+                const productName = (item.product_name || item.name || '').trim();
+                return targetProducts.includes(productName);
+              });
+            } else {
+              hasTargetProduct = targetProducts.some(product => itemsStr.includes(product));
+            }
+          }
+          
+          // Sadece hedef ürünleri içeren satışları ekle
+          if (hasTargetProduct) {
+            // items_array'i kullan (yukarıda parse edildi)
+            // Eğer price yoksa, total_amount'u item sayısına böl (yaklaşık)
+            if (parsedItemsArray.length > 0 && parsedItemsArray.some(item => !item.price || item.price === 0)) {
+              const totalAmount = parseFloat(data.total_amount || 0);
+              const totalQuantity = parsedItemsArray.reduce((sum, item) => sum + (item.quantity || 1), 0);
+              const avgPrice = totalQuantity > 0 ? totalAmount / totalQuantity : 0;
+              
+              parsedItemsArray = parsedItemsArray.map(item => ({
+                ...item,
+                price: item.price || avgPrice,
+                product_name: (item.product_name || '').trim()
+              }));
+            }
+            
+            sales.push({
+              id: doc.id,
+              sale_id: data.sale_id || doc.id,
+              total_amount: data.total_amount || 0,
+              payment_method: data.payment_method || 'Nakit',
+              sale_date: saleDate || 'Bilinmeyen',
+              sale_time: saleTime || '',
+              staff_name: data.staff_name || null,
+              table_name: data.table_name || null,
+              table_type: data.table_type || null,
+              items: parsedItemsArray,
+              items_array: parsedItemsArray,
+              itemsText: data.items || 'Ürün bulunamadı',
+              isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
+              created_at: createdAt
+            });
+          }
+        });
+        
+        // Cache'e kaydet
+        staffSalesCacheByDate[cacheKey] = {
+          sales: sales,
+          timestamp: now
+        };
+        
+        return sales;
+      } catch (error) {
+        console.error('Personel satışları yüklenirken hata:', error);
+        return [];
+      }
+    }
+    
+    // Personel Detayları Loading Overlay Fonksiyonları
+    function showStaffLoadingOverlay() {
+      const overlay = document.getElementById('staffLoadingOverlay');
+      if (overlay) {
+        overlay.classList.add('show');
+      }
+    }
+
+    function hideStaffLoadingOverlay() {
+      const overlay = document.getElementById('staffLoadingOverlay');
+      if (overlay) {
+        overlay.classList.remove('show');
+      }
+    }
+
+    async function renderStaffDetails() {
       const container = document.getElementById('staffContainer');
       if (!container) return;
 
-      let reportSales = allSales.filter(sale => !sale.isExpense);
-      reportSales = filterStaffSalesByDate(reportSales);
+      // Loading overlay'i göster
+      showStaffLoadingOverlay();
+
+      try {
+        // Bu 3 ürünü içeren satışları direkt yükle (tarih filtresi zaten loadStaffSales içinde uygulanıyor)
+        const staffSales = await loadStaffSales();
+      
+      // Sadece masraf olmayan satışları kullan
+      let reportSales = staffSales.filter(sale => !sale.isExpense);
       
       // Toplam istatistikler
       const totalRevenue = reportSales.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
@@ -4696,7 +5059,46 @@
         if (sale.items_array && Array.isArray(sale.items_array)) {
           sale.items_array.forEach(item => {
             if (item.isGift) return;
-            const productName = item.product_name;
+            const productName = (item.product_name || '').trim();
+            // Ürün ismini normalize et ve tam eşleşme kontrol et
+            if (targetProducts.includes(productName)) {
+              if (!totalProductSales[productName]) {
+                totalProductSales[productName] = { count: 0, revenue: 0 };
+              }
+              totalProductSales[productName].count += (item.quantity || 0);
+              totalProductSales[productName].revenue += (parseFloat(item.price || 0) * (item.quantity || 0));
+            }
+          });
+        } else if (sale.items && typeof sale.items === 'string') {
+          // Eğer items_array yoksa ama items string'i varsa, parse et
+          const items = sale.items.split(', ').map(itemStr => {
+            const match = itemStr.match(/(.+) x(\d+)/);
+            if (match) {
+              const productName = match[1].replace(' (İKRAM)', '').trim();
+              const quantity = parseInt(match[2]);
+              const isGift = itemStr.includes('(İKRAM)');
+              const totalAmount = parseFloat(sale.total_amount || 0);
+              // Yaklaşık fiyat hesapla
+              const allItems = sale.items.split(', ');
+              const totalQuantity = allItems.reduce((sum, itm) => {
+                const m = itm.match(/x(\d+)/);
+                return sum + (m ? parseInt(m[1]) : 1);
+              }, 0);
+              const avgPrice = totalQuantity > 0 ? totalAmount / totalQuantity : 0;
+              
+              return {
+                product_name: productName,
+                quantity: quantity,
+                isGift: isGift,
+                price: avgPrice
+              };
+            }
+            return null;
+          }).filter(Boolean);
+          
+          items.forEach(item => {
+            if (item.isGift) return;
+            const productName = (item.product_name || '').trim();
             if (targetProducts.includes(productName)) {
               if (!totalProductSales[productName]) {
                 totalProductSales[productName] = { count: 0, revenue: 0 };
@@ -4719,6 +5121,18 @@
             
             if (!itemStaffName) return;
             
+            const productName = (item.product_name || '').trim();
+            const quantity = item.quantity || 0;
+            const price = parseFloat(item.price || 0);
+            const isGift = item.isGift || false;
+            
+            // Sadece hedef ürünleri işle (Limonata, Filtre Kahve, Salep)
+            const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
+            if (!targetProducts.includes(productName)) {
+              return; // Bu ürünü atla
+            }
+            
+            // Bu satışta hedef ürün satan personeli kaydet
             staffInThisSale.add(itemStaffName);
             
             if (!staffStats[itemStaffName]) {
@@ -4733,11 +5147,7 @@
               };
             }
             
-            const productName = item.product_name;
-            const quantity = item.quantity || 0;
-            const price = parseFloat(item.price || 0);
-            const isGift = item.isGift || false;
-            
+            // Sadece hedef ürünler için revenue hesapla
             if (!isGift) {
               staffStats[itemStaffName].totalRevenue += (price * quantity);
             }
@@ -4754,6 +5164,7 @@
               staffStats[itemStaffName].products[productName].revenue += (price * quantity);
             }
             
+            // Sadece hedef ürünler için totalItemsSold hesapla
             staffStats[itemStaffName].totalItemsSold += quantity;
             if (isGift) {
               staffStats[itemStaffName].totalGiftItems += quantity;
@@ -4765,21 +5176,72 @@
               staffStats[staffName].totalSales += 1;
             }
           });
-        } else if (sale.staff_name) {
-          if (!staffStats[sale.staff_name]) {
-            staffStats[sale.staff_name] = {
-              name: sale.staff_name,
-              totalRevenue: 0,
-              totalSales: 0,
-              products: {},
-              averageSale: 0,
-              totalItemsSold: 0,
-              totalGiftItems: 0
-            };
-          }
+        } else if (sale.staff_name && sale.items) {
+          // Eğer items_array yoksa ama items string'i varsa ve hedef ürün içeriyorsa
+          const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
+          const itemsStr = typeof sale.items === 'string' ? sale.items : JSON.stringify(sale.items);
+          const hasTargetProduct = targetProducts.some(product => itemsStr.includes(product));
           
-          staffStats[sale.staff_name].totalRevenue += parseFloat(sale.total_amount);
-          staffStats[sale.staff_name].totalSales += 1;
+          if (hasTargetProduct) {
+            if (!staffStats[sale.staff_name]) {
+              staffStats[sale.staff_name] = {
+                name: sale.staff_name,
+                totalRevenue: 0,
+                totalSales: 0,
+                products: {},
+                averageSale: 0,
+                totalItemsSold: 0,
+                totalGiftItems: 0
+              };
+            }
+            
+            // items string'inden parse et ve hedef ürünleri hesapla
+            if (typeof sale.items === 'string') {
+              const items = sale.items.split(', ').map(itemStr => {
+                const match = itemStr.match(/(.+) x(\d+)/);
+                if (match) {
+                  const productName = match[1].replace(' (İKRAM)', '').trim();
+                  const quantity = parseInt(match[2]);
+                  const isGift = itemStr.includes('(İKRAM)');
+                  const totalAmount = parseFloat(sale.total_amount || 0);
+                  const allItems = sale.items.split(', ');
+                  const totalQuantity = allItems.reduce((sum, itm) => {
+                    const m = itm.match(/x(\d+)/);
+                    return sum + (m ? parseInt(m[1]) : 1);
+                  }, 0);
+                  const avgPrice = totalQuantity > 0 ? totalAmount / totalQuantity : 0;
+                  
+                  return {
+                    product_name: productName,
+                    quantity: quantity,
+                    isGift: isGift,
+                    price: avgPrice
+                  };
+                }
+                return null;
+              }).filter(Boolean);
+              
+              items.forEach(item => {
+                const productName = (item.product_name || '').trim();
+                if (targetProducts.includes(productName)) {
+                  if (!staffStats[sale.staff_name].products[productName]) {
+                    staffStats[sale.staff_name].products[productName] = {
+                      count: 0,
+                      revenue: 0
+                    };
+                  }
+                  staffStats[sale.staff_name].products[productName].count += (item.quantity || 0);
+                  if (!item.isGift) {
+                    staffStats[sale.staff_name].products[productName].revenue += (parseFloat(item.price || 0) * (item.quantity || 0));
+                    staffStats[sale.staff_name].totalRevenue += (parseFloat(item.price || 0) * (item.quantity || 0));
+                  }
+                  staffStats[sale.staff_name].totalItemsSold += (item.quantity || 0);
+                }
+              });
+              
+              staffStats[sale.staff_name].totalSales += 1;
+            }
+          }
         }
       });
       
@@ -4790,20 +5252,10 @@
       
       const sortedStaff = Object.values(staffStats).sort((a, b) => b.totalRevenue - a.totalRevenue);
       
-      if (sortedStaff.length === 0) {
-        container.innerHTML = `
-          <div class="empty-state">
-            <div class="empty-icon">👥</div>
-            <h3>Personel satış verisi bulunamadı</h3>
-            <p>Henüz personel satış verisi yok</p>
-          </div>
-        `;
-        return;
-      }
-
       // Zaman dilimi bilgisi
       const filterLabels = {
         'all': 'Tüm Zamanlar',
+        'day': staffSelectedDate.toLocaleDateString('tr-TR'),
         'yesterday': 'Dün',
         'week': 'Son 1 Hafta',
         'month': 'Son 1 Ay',
@@ -4811,32 +5263,64 @@
           ? `${staffCustomDateRange.start.toLocaleDateString('tr-TR')} - ${staffCustomDateRange.end.toLocaleDateString('tr-TR')}`
           : 'Özel Tarih Aralığı'
       };
+      
+      // Seçilen tarih bilgisi (empty state için)
+      const selectedDateStr = staffDateFilter === 'day' 
+        ? staffSelectedDate.toLocaleDateString('tr-TR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+        : 'Seçilen tarih';
 
       let html = `
         <div class="staff-container">
           <div class="staff-header-section">
             <h2 class="staff-title">👥 Personel Detayları</h2>
+            <div class="staff-date-navigation-wrapper" style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
+              <!-- Geri Butonu -->
+              <button onclick="navigateStaffDate(-1)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#f9fafb'; this.style.borderColor='#d1d5db';" onmouseout="this.style.background='#ffffff'; this.style.borderColor='#e5e7eb';">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
+                </svg>
+              </button>
+              
+              <!-- Tarih Seçici -->
+              <input type="date" id="staffDatePicker" value="${staffSelectedDate.toISOString().split('T')[0]}" onchange="setStaffSelectedDate(this.value)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 500; color: #111827; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05); min-width: 160px; text-align: center;" onmouseover="this.style.borderColor='#d1d5db';" onmouseout="this.style.borderColor='#e5e7eb';">
+              
+              <!-- İleri Butonu -->
+              <button onclick="navigateStaffDate(1)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#f9fafb'; this.style.borderColor='#d1d5db';" onmouseout="this.style.background='#ffffff'; this.style.borderColor='#e5e7eb';">
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                </svg>
+              </button>
+              
+              <!-- Bugün Butonu -->
+              <button onclick="setStaffDateToToday()" style="background: #3b82f6; color: white; border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#2563eb';" onmouseout="this.style.background='#3b82f6';">
+                Bugün
+              </button>
+            </div>
             <div class="staff-date-filter-wrapper">
               <button class="staff-date-filter-trigger" onclick="toggleStaffDateFilterModal(event)">
                 <span>📅</span>
                 <span>${filterLabels[staffDateFilter] || 'Tarih Seç'}</span>
                 <span class="date-filter-arrow">▼</span>
               </button>
-              <div id="staffDateFilterModal" class="date-filter-modal">
-                <div class="date-filter-modal-content">
-                  <div class="date-filter-option ${staffDateFilter === 'yesterday' ? 'active' : ''}" onclick="setStaffDateFilter('yesterday'); closeStaffDateFilterModal();">
+              <div id="staffDateFilterModal" class="date-filter-modal" onclick="event.stopPropagation();">
+                <div class="date-filter-modal-content" onclick="event.stopPropagation();">
+                  <div class="date-filter-option ${staffDateFilter === 'day' ? 'active' : ''}" onclick="setStaffDateFilter('day');">
+                    <span class="date-filter-icon">📅</span>
+                    <span>Günlük (Seçilen Tarih)</span>
+                  </div>
+                  <div class="date-filter-option ${staffDateFilter === 'yesterday' ? 'active' : ''}" onclick="setStaffDateFilter('yesterday');">
                     <span class="date-filter-icon">📆</span>
                     <span>Dün</span>
                   </div>
-                  <div class="date-filter-option ${staffDateFilter === 'week' ? 'active' : ''}" onclick="setStaffDateFilter('week'); closeStaffDateFilterModal();">
+                  <div class="date-filter-option ${staffDateFilter === 'week' ? 'active' : ''}" onclick="setStaffDateFilter('week');">
                     <span class="date-filter-icon">📆</span>
                     <span>Son 1 Hafta</span>
                   </div>
-                  <div class="date-filter-option ${staffDateFilter === 'month' ? 'active' : ''}" onclick="setStaffDateFilter('month'); closeStaffDateFilterModal();">
+                  <div class="date-filter-option ${staffDateFilter === 'month' ? 'active' : ''}" onclick="setStaffDateFilter('month');">
                     <span class="date-filter-icon">📅</span>
                     <span>Son 1 Ay</span>
                   </div>
-                  <div class="date-filter-option ${staffDateFilter === 'all' ? 'active' : ''}" onclick="setStaffDateFilter('all'); closeStaffDateFilterModal();">
+                  <div class="date-filter-option ${staffDateFilter === 'all' ? 'active' : ''}" onclick="setStaffDateFilter('all');">
                     <span class="date-filter-icon">📊</span>
                     <span>Tüm Zamanlar</span>
                   </div>
@@ -4865,13 +5349,6 @@
           
           <!-- Toplam İstatistikler -->
           <div class="staff-summary-cards">
-            <div class="staff-summary-card revenue-card">
-              <div class="summary-icon">💰</div>
-              <div class="summary-content">
-                <div class="summary-label">Toplam Ciro</div>
-                <div class="summary-value">₺${totalRevenue.toFixed(2)}</div>
-              </div>
-            </div>
             ${targetProducts.map(productName => {
               const sales = totalProductSales[productName] || { count: 0, revenue: 0 };
               const config = {
@@ -4893,70 +5370,115 @@
             }).join('')}
           </div>
           
-          <div class="staff-grid">
-            ${sortedStaff.map((staff, index) => {
-              // Belirli ürünlerin satışlarını hesapla
-              const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
-              const productSales = {};
-              
-              targetProducts.forEach(productName => {
-                const productData = staff.products[productName];
-                if (productData) {
-                  productSales[productName] = {
-                    count: typeof productData === 'object' ? productData.count : productData,
-                    revenue: typeof productData === 'object' ? productData.revenue : 0
-                  };
-                } else {
-                  productSales[productName] = { count: 0, revenue: 0 };
-                }
-              });
-              
-              // Ürün ikonları ve renkleri
-              const productConfig = {
-                'Limonata': { icon: '🍋', color: '#fef3c7', textColor: '#92400e', gradient: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)' },
-                'Filtre Kahve': { icon: '☕', color: '#ddd6fe', textColor: '#5b21b6', gradient: 'linear-gradient(135deg, #ddd6fe 0%, #c4b5fd 100%)' },
-                'Salep': { icon: '🥛', color: '#fce7f3', textColor: '#9f1239', gradient: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)' }
-              };
-              
-              return `
-                <div class="staff-card-compact">
-                  <div class="staff-header-compact">
-                    <div class="staff-avatar-compact ${index === 0 ? 'rank-gold' : index === 1 ? 'rank-silver' : index === 2 ? 'rank-bronze' : 'rank-default'}">
-                      ${index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤'}
-                    </div>
-                    <div class="staff-info-compact">
-                      <h3 class="staff-name-compact">${staff.name}</h3>
-                      <div class="staff-meta-compact">
-                        <span>${staff.totalSales} satış</span>
-                        <span>•</span>
-                        <span>₺${staff.totalRevenue.toFixed(2)}</span>
-                      </div>
-                    </div>
-                  </div>
+          <!-- Personel Tablosu - Modern ve Kompakt -->
+          <div class="staff-table-container" style="background: #ffffff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; margin-top: 24px;">
+            <table class="staff-table" style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
+                  <th style="padding: 16px; text-align: left; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Personel</th>
+                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">🍋 Limonata</th>
+                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">☕ Filtre Kahve</th>
+                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">🥛 Salep</th>
+                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Toplam Satış</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sortedStaff.map((staff, index) => {
+                  // Belirli ürünlerin satışlarını hesapla
+                  const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
+                  const productSales = {};
                   
-                  <div class="staff-products-compact">
-                    ${targetProducts.map(productName => {
-                      const sales = productSales[productName] || { count: 0, revenue: 0 };
-                      const config = productConfig[productName];
-                      
-                      return `
-                        <div class="staff-product-compact" style="border-left: 3px solid ${config.color};">
-                          <span class="product-icon-compact">${config.icon}</span>
-                          <span class="product-name-compact">${productName}</span>
-                          <span class="product-count-compact">${sales.count} adet</span>
-                          ${sales.revenue > 0 ? `<span class="product-revenue-compact">₺${sales.revenue.toFixed(2)}</span>` : ''}
+                  targetProducts.forEach(productName => {
+                    const productData = staff.products[productName];
+                    if (productData) {
+                      productSales[productName] = {
+                        count: typeof productData === 'object' ? productData.count : productData,
+                        revenue: typeof productData === 'object' ? productData.revenue : 0
+                      };
+                    } else {
+                      productSales[productName] = { count: 0, revenue: 0 };
+                    }
+                  });
+                  
+                  const limonata = productSales['Limonata'] || { count: 0, revenue: 0 };
+                  const filtreKahve = productSales['Filtre Kahve'] || { count: 0, revenue: 0 };
+                  const salep = productSales['Salep'] || { count: 0, revenue: 0 };
+                  
+                  // Toplam satış sayısı (sadece bu 3 ürün için)
+                  const totalCount = limonata.count + filtreKahve.count + salep.count;
+                  
+                  // Rank badge
+                  const rankBadge = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+                  const rankClass = index === 0 ? 'rank-1' : index === 1 ? 'rank-2' : index === 2 ? 'rank-3' : '';
+                  
+                  return `
+                    <tr style="border-bottom: 1px solid #f3f4f6; transition: background 0.2s;" onmouseover="this.style.background='#f9fafb';" onmouseout="this.style.background='#ffffff';">
+                      <td style="padding: 16px;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                          ${rankBadge ? `<span style="font-size: 20px;">${rankBadge}</span>` : ''}
+                          <div>
+                            <div style="font-weight: 600; font-size: 15px; color: #111827; margin-bottom: 4px;">${staff.name}</div>
+                            <div style="font-size: 12px; color: #6b7280;">${staff.totalSales} satış</div>
+                          </div>
                         </div>
-                      `;
-                    }).join('')}
-                  </div>
-                </div>
-              `;
-            }).join('')}
+                      </td>
+                      <td style="padding: 16px; text-align: center;">
+                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                          <div style="font-weight: 700; font-size: 18px; color: #92400e;">${limonata.count}</div>
+                          <div style="font-size: 12px; color: #6b7280;">adet</div>
+                          ${limonata.revenue > 0 ? `<div style="font-size: 11px; color: #059669; font-weight: 500; margin-top: 2px;">₺${Math.round(limonata.revenue).toLocaleString('tr-TR')}</div>` : ''}
+                        </div>
+                      </td>
+                      <td style="padding: 16px; text-align: center;">
+                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                          <div style="font-weight: 700; font-size: 18px; color: #5b21b6;">${filtreKahve.count}</div>
+                          <div style="font-size: 12px; color: #6b7280;">adet</div>
+                          ${filtreKahve.revenue > 0 ? `<div style="font-size: 11px; color: #059669; font-weight: 500; margin-top: 2px;">₺${Math.round(filtreKahve.revenue).toLocaleString('tr-TR')}</div>` : ''}
+                        </div>
+                      </td>
+                      <td style="padding: 16px; text-align: center;">
+                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                          <div style="font-weight: 700; font-size: 18px; color: #9f1239;">${salep.count}</div>
+                          <div style="font-size: 12px; color: #6b7280;">adet</div>
+                          ${salep.revenue > 0 ? `<div style="font-size: 11px; color: #059669; font-weight: 500; margin-top: 2px;">₺${Math.round(salep.revenue).toLocaleString('tr-TR')}</div>` : ''}
+                        </div>
+                      </td>
+                      <td style="padding: 16px; text-align: center;">
+                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                          <div style="font-weight: 700; font-size: 18px; color: #111827;">${totalCount}</div>
+                          <div style="font-size: 12px; color: #6b7280;">toplam</div>
+                        </div>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
           </div>
+          
+          ${sortedStaff.length === 0 ? `
+            <div class="empty-state" style="padding: 60px 20px; margin-top: 40px;">
+              <div class="empty-icon" style="font-size: 64px; margin-bottom: 16px;">📊</div>
+              <h3 style="font-size: 18px; font-weight: 600; color: #374151; margin-bottom: 8px;">
+                ${staffDateFilter === 'day' ? selectedDateStr + ' tarihinde' : 'Seçilen zaman diliminde'} bu ürünlerden hiç satış yapılmamış
+              </h3>
+              <p style="font-size: 14px; color: #6b7280; margin-top: 8px;">
+                Limonata, Filtre Kahve ve Salep için satış verisi bulunmuyor
+              </p>
+            </div>
+          ` : ''}
         </div>
       `;
 
       container.innerHTML = html;
+      
+      // Loading overlay'i gizle
+      hideStaffLoadingOverlay();
+      } catch (error) {
+        console.error('Personel detayları render edilirken hata:', error);
+        // Hata durumunda da overlay'i gizle
+        hideStaffLoadingOverlay();
+      }
     }
 
     // Modal dışına tıklanınca kapat - sayfa yüklendiğinde ekle
@@ -9756,6 +10278,59 @@
       grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
       gap: 24px;
     }
+    
+    /* Personel Tablosu Stilleri */
+    .staff-table-container {
+      background: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+      overflow: hidden;
+      margin-top: 24px;
+    }
+    
+    .staff-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    
+    .staff-table thead tr {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+    
+    .staff-table th {
+      padding: 16px;
+      text-align: left;
+      font-weight: 600;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    
+    .staff-table th:not(:first-child) {
+      text-align: center;
+    }
+    
+    .staff-table tbody tr {
+      border-bottom: 1px solid #f3f4f6;
+      transition: background 0.2s;
+    }
+    
+    .staff-table tbody tr:hover {
+      background: #f9fafb;
+    }
+    
+    .staff-table tbody tr:last-child {
+      border-bottom: none;
+    }
+    
+    .staff-table td {
+      padding: 16px;
+    }
+    
+    .staff-table td:not(:first-child) {
+      text-align: center;
+    }
 
     /* Modern Personel Kartı */
     .staff-card-modern {
@@ -10579,6 +11154,53 @@
         font-size: 8px;
       }
     }
+
+    /* Personel Detayları Loading Overlay */
+    @keyframes staff-spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    #staffLoadingOverlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.85);
+      z-index: 9999;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+    }
+
+    #staffLoadingOverlay.show {
+      display: flex;
+    }
+
+    .staff-loading-spinner {
+      width: 64px;
+      height: 64px;
+      border: 4px solid rgba(255, 255, 255, 0.1);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      animation: staff-spin 0.8s linear infinite;
+    }
+
+    @media (max-width: 768px) {
+      .staff-loading-spinner {
+        width: 48px;
+        height: 48px;
+        border-width: 3px;
+      }
+
+      #staffLoadingOverlay div:last-child {
+        font-size: 16px;
+      }
+    }
   </style>
 </head>
 <body>
@@ -10805,7 +11427,17 @@
       
       <div id="salesContainer" style="min-height: 200px;"></div>
       <div id="reportsContainer" style="min-height: 200px; display: none;"></div>
-      <div id="staffContainer" style="min-height: 200px; display: none;"></div>
+      <div id="staffContainer" style="min-height: 200px; display: none; position: relative;"></div>
+      
+      <!-- Personel Detayları Loading Overlay -->
+      <div id="staffLoadingOverlay">
+        <div style="display: flex; flex-direction: column; align-items: center; gap: 24px;">
+          <!-- Spinner -->
+          <div class="staff-loading-spinner"></div>
+          <!-- Text -->
+          <div style="color: #ffffff; font-size: 18px; font-weight: 600; letter-spacing: 0.5px;">Hesaplanıyor...</div>
+        </div>
+      </div>
       <div id="tablesContainer" style="min-height: 200px; display: none;"></div>
       <div id="cancelsContainer" style="min-height: 200px; display: none;"></div>
       <div id="onlineOrdersContainer" style="min-height: 200px; display: none;"></div>

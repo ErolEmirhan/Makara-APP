@@ -37,10 +37,12 @@ function updateVersionFiles(newVersion) {
   const manifestPath = path.join(__dirname, '../public/manifest.json');
   const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
   manifest.version = newVersion;
-  manifest.start_url = `/?v=${newVersion}`;
+  // start_url'e timestamp ekle (PWA güncellemesi için)
+  const timestamp = Date.now();
+  manifest.start_url = `/?v=${newVersion}&_t=${timestamp}`;
   manifest.icons = manifest.icons.map(icon => ({
     ...icon,
-    src: icon.src.replace(/\?v=[\d.]+/, `?v=${newVersion}`)
+    src: icon.src.replace(/\?v=[\d.]+/, `?v=${newVersion}&t=${timestamp}`)
   }));
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   console.log('✅ public/manifest.json güncellendi');

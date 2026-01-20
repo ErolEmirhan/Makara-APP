@@ -14,6 +14,7 @@ import SplashScreen from './components/SplashScreen';
 import ExitSplash from './components/ExitSplash';
 import UpdateModal from './components/UpdateModal';
 import ExpenseModal from './components/ExpenseModal';
+import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
 function App() {
   const [showSplash, setShowSplash] = useState(true);
@@ -22,6 +23,9 @@ function App() {
   const [products, setProducts] = useState([]);
   const [allProducts, setAllProducts] = useState([]); // Tüm kategorilerden ürünler (arama için)
   const [selectedCategory, setSelectedCategory] = useState(null);
+  const [yanUrunler, setYanUrunler] = useState([]); // Yan Ürünler listesi
+  const [showYanUrunlerModal, setShowYanUrunlerModal] = useState(false); // Yan Ürünler yönetim modalı
+  const YAN_URUNLER_CATEGORY_ID = -999; // Özel kategori ID'si
   const [cart, setCart] = useState([]);
   const [orderNote, setOrderNote] = useState('');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -96,7 +100,20 @@ function App() {
 
   const loadCategories = async () => {
     const cats = await window.electronAPI.getCategories();
-    setCategories(cats);
+    // Yan Ürünler kategorisini ekle
+    const yanUrunlerCategory = {
+      id: YAN_URUNLER_CATEGORY_ID,
+      name: 'Yan Ürünler',
+      order_index: 9999 // En sona ekle
+    };
+    setCategories([...cats, yanUrunlerCategory]);
+    
+    // Yan ürünleri yükle
+    if (window.electronAPI && window.electronAPI.getYanUrunler) {
+      const yanUrunlerList = await window.electronAPI.getYanUrunler();
+      setYanUrunler(yanUrunlerList);
+    }
+    
     // Tüm ürünleri yükle (arama için)
     const allProds = await window.electronAPI.getProducts(null);
     setAllProducts(allProds);
@@ -106,6 +123,23 @@ function App() {
   };
 
   const loadProducts = async (categoryId) => {
+    // Yan Ürünler kategorisi seçildiyse
+    if (categoryId === YAN_URUNLER_CATEGORY_ID) {
+      if (window.electronAPI && window.electronAPI.getYanUrunler) {
+        const yanUrunlerList = await window.electronAPI.getYanUrunler();
+        // Yan ürünleri normal ürün formatına çevir
+        const formattedYanUrunler = yanUrunlerList.map(urun => ({
+          id: `yan_urun_${urun.id}`, // Özel ID formatı
+          name: urun.name,
+          price: urun.price,
+          category_id: YAN_URUNLER_CATEGORY_ID,
+          isYanUrun: true // Yan ürün olduğunu belirt
+        }));
+        setProducts(formattedYanUrunler);
+      }
+      return;
+    }
+    
     const prods = await window.electronAPI.getProducts(categoryId);
     setProducts(prods);
     // Tüm ürünleri de güncelle (arama için)
@@ -119,17 +153,39 @@ function App() {
       // Arama yoksa sadece seçili kategorinin ürünlerini göster
       return products;
     }
-    // Arama varsa tüm kategorilerden ara
+    // Arama varsa tüm kategorilerden ara (yan ürünler dahil)
     const query = searchQuery.toLowerCase().trim();
-    return allProducts.filter(product => 
+    const allProductsWithYanUrunler = [
+      ...allProducts,
+      ...yanUrunler.map(urun => ({
+        id: `yan_urun_${urun.id}`,
+        name: urun.name,
+        price: urun.price,
+        category_id: YAN_URUNLER_CATEGORY_ID,
+        isYanUrun: true
+      }))
+    ];
+    return allProductsWithYanUrunler.filter(product => 
       product.name.toLowerCase().includes(query)
     );
-  }, [products, allProducts, searchQuery]);
+  }, [products, allProducts, searchQuery, yanUrunler]);
 
   const refreshProducts = async () => {
     // Kategorileri yenile
     const cats = await window.electronAPI.getCategories();
-    setCategories(cats);
+    // Yan Ürünler kategorisini ekle
+    const yanUrunlerCategory = {
+      id: YAN_URUNLER_CATEGORY_ID,
+      name: 'Yan Ürünler',
+      order_index: 9999
+    };
+    setCategories([...cats, yanUrunlerCategory]);
+    
+    // Yan ürünleri yenile
+    if (window.electronAPI && window.electronAPI.getYanUrunler) {
+      const yanUrunlerList = await window.electronAPI.getYanUrunler();
+      setYanUrunler(yanUrunlerList);
+    }
     
     // Tüm ürünleri güncelle (arama için)
     const allProds = await window.electronAPI.getProducts(null);
@@ -137,13 +193,14 @@ function App() {
     
     // Seçili kategoriyi koru veya ilk kategoriyi seç
     let categoryToLoad = selectedCategory;
-    if (cats.length > 0) {
-      if (!categoryToLoad || !cats.find(c => c.id === categoryToLoad.id)) {
-        categoryToLoad = cats[0];
-        setSelectedCategory(cats[0]);
+    const allCategories = [...cats, yanUrunlerCategory];
+    if (allCategories.length > 0) {
+      if (!categoryToLoad || !allCategories.find(c => c.id === categoryToLoad.id)) {
+        categoryToLoad = allCategories[0];
+        setSelectedCategory(allCategories[0]);
       } else {
         // Mevcut kategoriyi güncelle (order_index değişmiş olabilir)
-        const updatedCategory = cats.find(c => c.id === categoryToLoad.id);
+        const updatedCategory = allCategories.find(c => c.id === categoryToLoad.id);
         if (updatedCategory) {
           setSelectedCategory(updatedCategory);
           categoryToLoad = updatedCategory;
@@ -152,8 +209,7 @@ function App() {
       
       // Seçili kategorinin ürünlerini yenile
       if (categoryToLoad) {
-        const prods = await window.electronAPI.getProducts(categoryToLoad.id);
-        setProducts(prods);
+        await loadProducts(categoryToLoad.id);
       }
     }
   };
@@ -633,14 +689,30 @@ function App() {
                 </button>
               </div>
             )}
-            <CategoryPanel
-              categories={categories}
-              selectedCategory={selectedCategory}
-              onSelectCategory={(category) => {
-                setSelectedCategory(category);
-                setSearchQuery(''); // Kategori değiştiğinde aramayı temizle
-              }}
-            />
+            <div>
+              <CategoryPanel
+                categories={categories}
+                selectedCategory={selectedCategory}
+                onSelectCategory={(category) => {
+                  setSelectedCategory(category);
+                  setSearchQuery(''); // Kategori değiştiğinde aramayı temizle
+                }}
+              />
+              {/* Yan Ürünler Yönetim Butonu - Sadece Yan Ürünler kategorisi seçildiğinde */}
+              {selectedCategory && selectedCategory.id === YAN_URUNLER_CATEGORY_ID && userType === 'Admin' && (
+                <div className="mt-3 mb-3">
+                  <button
+                    onClick={() => setShowYanUrunlerModal(true)}
+                    className="w-full px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+                  >
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    </svg>
+                    <span>Yan Ürünler Yönetimi</span>
+                  </button>
+                </div>
+              )}
+            </div>
             
             {/* Arama Çubuğu ve (sadece Admin için) Masraf Ekle Butonu */}
             <div className="mb-3 flex gap-2">
@@ -745,6 +817,27 @@ function App() {
         <ExpenseModal
           onClose={() => setShowExpenseModal(false)}
           onSave={handleSaveExpense}
+        />
+      )}
+
+      {/* Yan Ürünler Yönetim Modal */}
+      {showYanUrunlerModal && (
+        <YanUrunlerManagementModal
+          yanUrunler={yanUrunler}
+          onClose={() => {
+            setShowYanUrunlerModal(false);
+            loadCategories(); // Yan ürünleri yenile
+          }}
+          onRefresh={async () => {
+            if (window.electronAPI && window.electronAPI.getYanUrunler) {
+              const yanUrunlerList = await window.electronAPI.getYanUrunler();
+              setYanUrunler(yanUrunlerList);
+              // Eğer Yan Ürünler kategorisi seçiliyse ürünleri yenile
+              if (selectedCategory && selectedCategory.id === YAN_URUNLER_CATEGORY_ID) {
+                loadProducts(YAN_URUNLER_CATEGORY_ID);
+              }
+            }
+          }}
         />
       )}
 

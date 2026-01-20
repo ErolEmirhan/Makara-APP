@@ -1173,6 +1173,13 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       const updatedItems = await window.electronAPI.getTableOrderItems(selectedOrder.id);
       setOrderItems(updatedItems || []);
       
+      // Sipariş bilgisini de güncelle (kalan tutar için önemli)
+      const updatedOrders = await window.electronAPI.getTableOrders();
+      const updatedOrder = updatedOrders.find(o => o.id === selectedOrder.id);
+      if (updatedOrder) {
+        setSelectedOrder(updatedOrder);
+      }
+      
       // Eğer tüm ürünlerin ödemesi alındıysa modal'ı kapat
       const unpaidItems = updatedItems.filter(item => !item.is_paid && !item.isGift);
       if (unpaidItems.length === 0) {

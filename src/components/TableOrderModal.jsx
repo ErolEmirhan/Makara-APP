@@ -111,8 +111,8 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     const paidQty = item.paid_quantity || 0;
     return sum + (item.price * paidQty);
   }, 0);
-  // Şu anki kalan tutar (order.total_amount)
-  const remainingAmount = order.total_amount || 0;
+  // Kalan tutar: Toplam - Ödenen (doğru hesaplama)
+  const remainingAmount = originalTotalAmount - paidAmount;
 
   // Ürün iptal etme fonksiyonu
   const handleCancelItem = (item) => {

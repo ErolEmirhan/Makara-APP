@@ -149,7 +149,8 @@ let db = {
     adminPin: '1234',
     cashierPrinter: null // { printerName, printerType } - Kasa yazıcısı ayarı
   },
-  printerAssignments: [] // { printerName, printerType, category_id }
+  printerAssignments: [], // { printerName, printerType, category_id }
+  yanUrunler: [] // Local kayıtlı yan ürünler (Firebase'e gitmez) - { id, name, price }
 };
 
 function initDatabase() {
@@ -180,6 +181,24 @@ function initDatabase() {
       if (!db.tableOrders) db.tableOrders = [];
       if (!db.tableOrderItems) db.tableOrderItems = [];
       if (!db.printerAssignments) db.printerAssignments = [];
+      if (!db.yanUrunler) db.yanUrunler = [];
+      
+      // Yan Ürünler için varsayılan veriler (eğer boşsa)
+      if (db.yanUrunler.length === 0) {
+        db.yanUrunler = [
+          { id: 1, name: 'Pasta Servis ücreti', price: 150 },
+          { id: 2, name: 'Kolonya', price: 270 },
+          { id: 3, name: 'Callei Antep sos', price: 600 },
+          { id: 4, name: 'Callei frambuaz sos', price: 450 },
+          { id: 5, name: 'Chocoworld soslar', price: 350 },
+          { id: 6, name: '100 gr Türk kahvesi', price: 150 },
+          { id: 7, name: '250 gr filtre kahve', price: 450 },
+          { id: 8, name: '250 gr çekirdek kahve', price: 450 },
+          { id: 9, name: 'Pasta volkanı', price: 100 },
+          { id: 10, name: 'Yer volkanı', price: 450 }
+        ];
+        saveDatabase();
+      }
     } catch (error) {
       console.error('Veritabanı yüklenemedi, yeni oluşturuluyor:', error);
       initDefaultData();
@@ -244,6 +263,18 @@ function initDefaultData() {
   db.settings = {
     adminPin: '1234'
   };
+  db.yanUrunler = [
+    { id: 1, name: 'Pasta Servis ücreti', price: 150 },
+    { id: 2, name: 'Kolonya', price: 270 },
+    { id: 3, name: 'Callei Antep sos', price: 600 },
+    { id: 4, name: 'Callei frambuaz sos', price: 450 },
+    { id: 5, name: 'Chocoworld soslar', price: 350 },
+    { id: 6, name: '100 gr Türk kahvesi', price: 150 },
+    { id: 7, name: '250 gr filtre kahve', price: 450 },
+    { id: 8, name: '250 gr çekirdek kahve', price: 450 },
+    { id: 9, name: 'Pasta volkanı', price: 100 },
+    { id: 10, name: 'Yer volkanı', price: 450 }
+  ];
   
   saveDatabase();
 }
@@ -1182,6 +1213,83 @@ ipcMain.handle('get-products', async (event, categoryId) => {
   return productsWithStock;
 });
 
+// Yan Ürünler IPC Handlers (Local kayıtlı, Firebase'e gitmez)
+ipcMain.handle('get-yan-urunler', () => {
+  return db.yanUrunler || [];
+});
+
+ipcMain.handle('create-yan-urun', (event, urunData) => {
+  const { name, price } = urunData;
+  
+  if (!name || name.trim() === '') {
+    return { success: false, error: 'Ürün adı boş olamaz' };
+  }
+  
+  if (!price || price <= 0) {
+    return { success: false, error: 'Geçerli bir fiyat giriniz' };
+  }
+  
+  const newId = db.yanUrunler.length > 0 
+    ? Math.max(...db.yanUrunler.map(u => u.id)) + 1 
+    : 1;
+  
+  const newUrun = {
+    id: newId,
+    name: name.trim(),
+    price: parseFloat(price)
+  };
+  
+  db.yanUrunler.push(newUrun);
+  saveDatabase();
+  
+  // Firebase'e kaydetme - YOK (local kayıtlı)
+  
+  return { success: true, urun: newUrun };
+});
+
+ipcMain.handle('update-yan-urun', (event, urunData) => {
+  const { id, name, price } = urunData;
+  
+  const urunIndex = db.yanUrunler.findIndex(u => u.id === id);
+  if (urunIndex === -1) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+  
+  if (!name || name.trim() === '') {
+    return { success: false, error: 'Ürün adı boş olamaz' };
+  }
+  
+  if (!price || price <= 0) {
+    return { success: false, error: 'Geçerli bir fiyat giriniz' };
+  }
+  
+  db.yanUrunler[urunIndex] = {
+    ...db.yanUrunler[urunIndex],
+    name: name.trim(),
+    price: parseFloat(price)
+  };
+  
+  saveDatabase();
+  
+  // Firebase'e kaydetme - YOK (local kayıtlı)
+  
+  return { success: true, urun: db.yanUrunler[urunIndex] };
+});
+
+ipcMain.handle('delete-yan-urun', (event, urunId) => {
+  const urunIndex = db.yanUrunler.findIndex(u => u.id === urunId);
+  if (urunIndex === -1) {
+    return { success: false, error: 'Ürün bulunamadı' };
+  }
+  
+  db.yanUrunler.splice(urunIndex, 1);
+  saveDatabase();
+  
+  // Firebase'e kaydetme - YOK (local kayıtlı)
+  
+  return { success: true };
+});
+
 ipcMain.handle('create-sale', async (event, saleData) => {
   const { items, totalAmount, paymentMethod, orderNote, staff_name } = saleData;
   
@@ -1191,6 +1299,11 @@ ipcMain.handle('create-sale', async (event, saleData) => {
 
   // Stok kontrolü ve düşürme (sadece stok takibi yapılan ürünler için)
   for (const item of items) {
+    // Yan ürünler için stok kontrolü yapma
+    if (item.isYanUrun || (typeof item.id === 'string' && item.id.startsWith('yan_urun_'))) {
+      continue;
+    }
+    
     if (!item.isGift && !item.isExpense) { // İkram ve masraf ürünleri stoktan düşmez
       const product = db.products.find(p => p.id === item.id);
       // Sadece stok takibi yapılan ürünler için kontrol et
@@ -1525,6 +1638,11 @@ ipcMain.handle('create-table-order', async (event, orderData) => {
 
   // Stok kontrolü ve düşürme (sadece stok takibi yapılan ürünler için)
   for (const item of items) {
+    // Yan ürünler için stok kontrolü yapma
+    if (item.isYanUrun || (typeof item.id === 'string' && item.id.startsWith('yan_urun_'))) {
+      continue;
+    }
+    
     if (!item.isGift) { // İkram edilen ürünler stoktan düşmez
       const product = db.products.find(p => p.id === item.id);
       // Sadece stok takibi yapılan ürünler için kontrol et
@@ -6960,62 +7078,71 @@ function generateMobileHTML(serverURL) {
     }
     .toast {
       position: fixed;
-      top: 20px;
+      top: 24px;
       left: 50%;
-      transform: translateX(-50%) translateY(-100px);
-      background: white;
-      border-radius: 16px;
-      padding: 20px 25px;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+      transform: translateX(-50%) translateY(-120px);
+      background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%);
+      border-radius: 20px;
+      padding: 24px 28px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.05);
       z-index: 10000;
-      min-width: 300px;
+      min-width: 360px;
       max-width: 90%;
       display: flex;
       align-items: center;
-      gap: 15px;
+      gap: 18px;
       opacity: 0;
-      transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+      transition: all 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+      backdrop-filter: blur(10px);
     }
     .toast.show {
       transform: translateX(-50%) translateY(0);
       opacity: 1;
     }
     .toast.success {
-      border-left: 4px solid #10b981;
+      border-left: 5px solid #10b981;
+      box-shadow: 0 20px 60px rgba(16, 185, 129, 0.2), 0 0 0 1px rgba(16, 185, 129, 0.1);
     }
     .toast.error {
-      border-left: 4px solid #ef4444;
+      border-left: 5px solid #ef4444;
+      box-shadow: 0 20px 60px rgba(239, 68, 68, 0.2), 0 0 0 1px rgba(239, 68, 68, 0.1);
     }
     .toast-icon {
-      width: 50px;
-      height: 50px;
-      border-radius: 50%;
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
       display: flex;
       align-items: center;
       justify-content: center;
       font-size: 24px;
       flex-shrink: 0;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     .toast.success .toast-icon {
-      background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+      background: linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%);
       color: white;
+      box-shadow: 0 4px 16px rgba(16, 185, 129, 0.4);
     }
     .toast.error .toast-icon {
-      background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+      background: linear-gradient(135deg, #ef4444 0%, #dc2626 50%, #b91c1c 100%);
       color: white;
+      box-shadow: 0 4px 16px rgba(239, 68, 68, 0.4);
     }
     .toast-content {
       flex: 1;
     }
     .toast-title {
-      font-size: 16px;
-      font-weight: bold;
-      color: #1f2937;
-      margin-bottom: 4px;
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 6px;
+      letter-spacing: -0.02em;
     }
     .toast-message {
-      font-size: 14px;
-      color: #6b7280;
+      font-size: 15px;
+      color: #4b5563;
+      line-height: 1.5;
+      font-weight: 400;
     }
     .toast-close {
       width: 24px;
@@ -7343,8 +7470,48 @@ function generateMobileHTML(serverURL) {
       <div class="pin-input-wrapper">
         <input type="password" id="pinInput" class="pin-input" placeholder="Şifrenizi giriniz" maxlength="20" autocomplete="off" onkeypress="if(event.key === 'Enter') verifyStaffPin()">
       </div>
+      
+      <!-- Beni Hatırla ve Şifre Değiştir -->
+      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; max-width: 300px; margin: 15px auto 20px;">
+        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #666;">
+          <input type="checkbox" id="rememberMe" style="width: 18px; height: 18px; cursor: pointer; accent-color: #8b5cf6;">
+          <span>Beni Hatırla</span>
+        </label>
+        <button onclick="showChangePasswordModal()" style="background: none; border: none; color: #8b5cf6; font-size: 14px; cursor: pointer; text-decoration: underline; padding: 0;">
+          Şifre Değiştir
+        </button>
+      </div>
+      
       <button onclick="verifyStaffPin()" class="pin-btn">Giriş Yap</button>
       <p id="pinError" class="pin-error"></p>
+    </div>
+    
+    <!-- Şifre Değiştir Modal -->
+    <div id="changePasswordModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10000; align-items: center; justify-content: center; padding: 20px;">
+      <div style="background: white; border-radius: 16px; padding: 30px; max-width: 400px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+        <h3 style="margin: 0 0 20px; font-size: 20px; font-weight: bold; color: #333;">Şifre Değiştir</h3>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #555;">Mevcut Şifre</label>
+          <input type="password" id="currentPassword" placeholder="Mevcut şifrenizi giriniz" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; box-sizing: border-box;">
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #555;">Yeni Şifre</label>
+          <input type="password" id="newPassword" placeholder="Yeni şifrenizi giriniz" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; box-sizing: border-box;">
+        </div>
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #555;">Yeni Şifre (Tekrar)</label>
+          <input type="password" id="confirmPassword" placeholder="Yeni şifrenizi tekrar giriniz" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; box-sizing: border-box;" onkeypress="if(event.key === 'Enter') changeStaffPassword()">
+        </div>
+        <p id="changePasswordError" style="color: #ef4444; font-size: 13px; margin: 0 0 15px; display: none;"></p>
+        <div style="display: flex; gap: 10px;">
+          <button onclick="changeStaffPassword()" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #8b5cf6, #a78bfa); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+            Değiştir
+          </button>
+          <button onclick="closeChangePasswordModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #666; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
+            İptal
+          </button>
+        </div>
+      </div>
     </div>
     
     <!-- Splash Screen - Giriş Sonrası Hoş Geldiniz -->
@@ -7774,8 +7941,8 @@ function generateMobileHTML(serverURL) {
     // PIN oturum yönetimi (1 saat)
     const SESSION_DURATION = 60 * 60 * 1000;
     
-    function saveStaffSession(staff) {
-      const sessionData = { staff: staff, timestamp: Date.now() };
+    function saveStaffSession(staff, rememberMe = false) {
+      const sessionData = { staff: staff, timestamp: Date.now(), rememberMe: rememberMe };
       localStorage.setItem('staffSession', JSON.stringify(sessionData));
     }
     
@@ -7784,6 +7951,11 @@ function generateMobileHTML(serverURL) {
       if (!sessionData) return null;
       try {
         const parsed = JSON.parse(sessionData);
+        // Eğer "Beni Hatırla" seçiliyse süre kontrolü yapma
+        if (parsed.rememberMe) {
+          return parsed.staff;
+        }
+        // Normal durumda süre kontrolü yap
         if (Date.now() - parsed.timestamp > SESSION_DURATION) {
           localStorage.removeItem('staffSession');
           return null;
@@ -7811,6 +7983,21 @@ function generateMobileHTML(serverURL) {
       const savedStaff = getStaffSession();
       if (savedStaff) {
         currentStaff = savedStaff;
+        // "Beni Hatırla" checkbox'ını kontrol et
+        const sessionData = localStorage.getItem('staffSession');
+        if (sessionData) {
+          try {
+            const parsed = JSON.parse(sessionData);
+            if (parsed.rememberMe) {
+              const rememberMeCheckbox = document.getElementById('rememberMe');
+              if (rememberMeCheckbox) {
+                rememberMeCheckbox.checked = true;
+              }
+            }
+          } catch (error) {
+            console.error('Session parse hatası:', error);
+          }
+        }
         document.getElementById('pinSection').style.display = 'none';
         document.getElementById('mainSection').style.display = 'block';
         // staffName ve staffInfo elementleri kaldırıldı, null kontrolü yap
@@ -7853,7 +8040,8 @@ function generateMobileHTML(serverURL) {
         
         if (result.success) {
           currentStaff = result.staff;
-          saveStaffSession(currentStaff);
+          const rememberMe = document.getElementById('rememberMe')?.checked || false;
+          saveStaffSession(currentStaff, rememberMe);
           errorDiv.classList.remove('show');
           
           // Splash screen göster
@@ -8997,10 +9185,11 @@ function generateMobileHTML(serverURL) {
       
       toast.classList.add('show');
       
-      // Otomatik kapat (3 saniye)
+      // Otomatik kapat (başarı mesajları için 4 saniye, hata mesajları için 3 saniye)
+      const autoCloseDelay = type === 'success' ? 4000 : 3000;
       setTimeout(() => {
         hideToast();
-      }, 3000);
+      }, autoCloseDelay);
     }
     
     function hideToast() {
@@ -9019,6 +9208,103 @@ function generateMobileHTML(serverURL) {
     
     function hideLogoutModal() {
       document.getElementById('logoutModal').style.display = 'none';
+    }
+    
+    // Şifre Değiştir Modal Fonksiyonları
+    function showChangePasswordModal() {
+      document.getElementById('changePasswordModal').style.display = 'flex';
+      document.getElementById('currentPassword').value = '';
+      document.getElementById('newPassword').value = '';
+      document.getElementById('confirmPassword').value = '';
+      document.getElementById('changePasswordError').style.display = 'none';
+      document.getElementById('currentPassword').focus();
+    }
+    
+    function closeChangePasswordModal() {
+      document.getElementById('changePasswordModal').style.display = 'none';
+      document.getElementById('currentPassword').value = '';
+      document.getElementById('newPassword').value = '';
+      document.getElementById('confirmPassword').value = '';
+      document.getElementById('changePasswordError').style.display = 'none';
+    }
+    
+    async function changeStaffPassword() {
+      const currentPassword = document.getElementById('currentPassword').value;
+      const newPassword = document.getElementById('newPassword').value;
+      const confirmPassword = document.getElementById('confirmPassword').value;
+      const errorDiv = document.getElementById('changePasswordError');
+      
+      // Validasyon
+      if (!currentPassword || !newPassword || !confirmPassword) {
+        errorDiv.textContent = 'Lütfen tüm alanları doldurunuz';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      
+      if (newPassword !== confirmPassword) {
+        errorDiv.textContent = 'Yeni şifreler eşleşmiyor';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      
+      if (newPassword.length < 4) {
+        errorDiv.textContent = 'Yeni şifre en az 4 karakter olmalıdır';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      
+      try {
+        // Önce mevcut şifreyi doğrula
+        const loginResponse = await fetch(API_URL + '/staff/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: currentPassword })
+        });
+        
+        const loginResult = await loginResponse.json();
+        
+        if (!loginResult.success) {
+          errorDiv.textContent = 'Mevcut şifre hatalı';
+          errorDiv.style.display = 'block';
+          return;
+        }
+        
+        // Şifreyi değiştir
+        const changeResponse = await fetch(API_URL + '/staff/change-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            staffId: loginResult.staff.id,
+            currentPassword: currentPassword,
+            newPassword: newPassword 
+          })
+        });
+        
+        const changeResult = await changeResponse.json();
+        
+        if (changeResult.success) {
+          // Başarılı - Modern toast bildirimi göster
+          showToast('success', 'Şifre Değiştirildi', 'Şifreniz başarıyla güncellendi. Lütfen yeni şifrenizle tekrar giriş yapın.');
+          closeChangePasswordModal();
+          
+          // 2 saniye sonra giriş ekranına dön (toast mesajının görünmesi için)
+          setTimeout(() => {
+            document.getElementById('changePasswordModal').style.display = 'none';
+            document.getElementById('pinSection').style.display = 'block';
+            document.getElementById('mainSection').style.display = 'none';
+            document.getElementById('pinInput').value = '';
+            localStorage.removeItem('staffSession');
+            currentStaff = null;
+          }, 2000);
+        } else {
+          errorDiv.textContent = changeResult.error || 'Şifre değiştirilemedi';
+          errorDiv.style.display = 'block';
+        }
+      } catch (error) {
+        console.error('Şifre değiştirme hatası:', error);
+        errorDiv.textContent = 'Bağlantı hatası';
+        errorDiv.style.display = 'block';
+      }
     }
     
     function confirmLogout() {
@@ -9793,6 +10079,31 @@ function startAPIServer() {
     } else {
       res.status(401).json({ success: false, error: 'Şifre hatalı' });
     }
+  });
+  
+  // Mobil personel şifre değiştirme endpoint'i
+  appExpress.post('/api/staff/change-password', (req, res) => {
+    const { staffId, currentPassword, newPassword } = req.body;
+    
+    if (!staffId || !currentPassword || !newPassword) {
+      return res.status(400).json({ success: false, error: 'Tüm alanlar gereklidir' });
+    }
+    
+    const staff = (db.staff || []).find(s => s.id === staffId);
+    if (!staff) {
+      return res.status(404).json({ success: false, error: 'Personel bulunamadı' });
+    }
+    
+    // Mevcut şifreyi doğrula
+    if (staff.password !== currentPassword.toString()) {
+      return res.status(401).json({ success: false, error: 'Mevcut şifre hatalı' });
+    }
+    
+    // Yeni şifreyi kaydet
+    staff.password = newPassword.toString();
+    saveDatabase();
+    
+    res.json({ success: true, message: 'Şifre başarıyla değiştirildi' });
   });
 
   appExpress.get('/api/tables', (req, res) => {

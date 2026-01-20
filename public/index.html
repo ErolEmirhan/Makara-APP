@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.15">
+  <link rel="manifest" href="/manifest.json?v=2.4.17">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.15';
+      const APP_VERSION = '2.4.17';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -5117,9 +5117,12 @@
           const staffInThisSale = new Set();
           
           sale.items_array.forEach(item => {
-            const itemStaffName = item.staff_name || sale.staff_name;
-            
+            // Personel ismini al ve virgülle ayrılmış ise ayır
+            let itemStaffName = item.staff_name || sale.staff_name;
             if (!itemStaffName) return;
+            
+            // Virgülle ayrılmış personel isimlerini ayır ve temizle
+            const staffNames = itemStaffName.split(',').map(name => name.trim()).filter(name => name.length > 0);
             
             const productName = (item.product_name || '').trim();
             const quantity = item.quantity || 0;
@@ -5132,43 +5135,50 @@
               return; // Bu ürünü atla
             }
             
-            // Bu satışta hedef ürün satan personeli kaydet
-            staffInThisSale.add(itemStaffName);
-            
-            if (!staffStats[itemStaffName]) {
-              staffStats[itemStaffName] = {
-                name: itemStaffName,
-                totalRevenue: 0,
-                totalSales: 0,
-                products: {},
-                averageSale: 0,
-                totalItemsSold: 0,
-                totalGiftItems: 0
-              };
-            }
-            
-            // Sadece hedef ürünler için revenue hesapla
-            if (!isGift) {
-              staffStats[itemStaffName].totalRevenue += (price * quantity);
-            }
-            
-            if (!staffStats[itemStaffName].products[productName]) {
-              staffStats[itemStaffName].products[productName] = {
-                count: 0,
-                revenue: 0
-              };
-            }
-            
-            staffStats[itemStaffName].products[productName].count += quantity;
-            if (!isGift) {
-              staffStats[itemStaffName].products[productName].revenue += (price * quantity);
-            }
-            
-            // Sadece hedef ürünler için totalItemsSold hesapla
-            staffStats[itemStaffName].totalItemsSold += quantity;
-            if (isGift) {
-              staffStats[itemStaffName].totalGiftItems += quantity;
-            }
+            // Her personel için ayrı ayrı işle
+            staffNames.forEach(staffName => {
+              // Bu satışta hedef ürün satan personeli kaydet
+              staffInThisSale.add(staffName);
+              
+              if (!staffStats[staffName]) {
+                staffStats[staffName] = {
+                  name: staffName,
+                  totalRevenue: 0,
+                  totalSales: 0,
+                  products: {},
+                  averageSale: 0,
+                  totalItemsSold: 0,
+                  totalGiftItems: 0
+                };
+              }
+              
+              // Sadece hedef ürünler için revenue hesapla
+              // Birden fazla personel varsa, miktarı eşit böl
+              const quantityPerStaff = staffNames.length > 1 ? quantity / staffNames.length : quantity;
+              const revenuePerStaff = staffNames.length > 1 ? (price * quantity) / staffNames.length : (price * quantity);
+              
+              if (!isGift) {
+                staffStats[staffName].totalRevenue += revenuePerStaff;
+              }
+              
+              if (!staffStats[staffName].products[productName]) {
+                staffStats[staffName].products[productName] = {
+                  count: 0,
+                  revenue: 0
+                };
+              }
+              
+              staffStats[staffName].products[productName].count += quantityPerStaff;
+              if (!isGift) {
+                staffStats[staffName].products[productName].revenue += revenuePerStaff;
+              }
+              
+              // Sadece hedef ürünler için totalItemsSold hesapla
+              staffStats[staffName].totalItemsSold += quantityPerStaff;
+              if (isGift) {
+                staffStats[staffName].totalGiftItems += quantityPerStaff;
+              }
+            });
           });
           
           staffInThisSale.forEach(staffName => {
@@ -5183,17 +5193,8 @@
           const hasTargetProduct = targetProducts.some(product => itemsStr.includes(product));
           
           if (hasTargetProduct) {
-            if (!staffStats[sale.staff_name]) {
-              staffStats[sale.staff_name] = {
-                name: sale.staff_name,
-                totalRevenue: 0,
-                totalSales: 0,
-                products: {},
-                averageSale: 0,
-                totalItemsSold: 0,
-                totalGiftItems: 0
-              };
-            }
+            // Personel ismini al ve virgülle ayrılmış ise ayır
+            const staffNames = sale.staff_name.split(',').map(name => name.trim()).filter(name => name.length > 0);
             
             // items string'inden parse et ve hedef ürünleri hesapla
             if (typeof sale.items === 'string') {
@@ -5221,25 +5222,44 @@
                 return null;
               }).filter(Boolean);
               
-              items.forEach(item => {
-                const productName = (item.product_name || '').trim();
-                if (targetProducts.includes(productName)) {
-                  if (!staffStats[sale.staff_name].products[productName]) {
-                    staffStats[sale.staff_name].products[productName] = {
-                      count: 0,
-                      revenue: 0
-                    };
-                  }
-                  staffStats[sale.staff_name].products[productName].count += (item.quantity || 0);
-                  if (!item.isGift) {
-                    staffStats[sale.staff_name].products[productName].revenue += (parseFloat(item.price || 0) * (item.quantity || 0));
-                    staffStats[sale.staff_name].totalRevenue += (parseFloat(item.price || 0) * (item.quantity || 0));
-                  }
-                  staffStats[sale.staff_name].totalItemsSold += (item.quantity || 0);
+              // Her personel için ayrı ayrı işle
+              staffNames.forEach(staffName => {
+                if (!staffStats[staffName]) {
+                  staffStats[staffName] = {
+                    name: staffName,
+                    totalRevenue: 0,
+                    totalSales: 0,
+                    products: {},
+                    averageSale: 0,
+                    totalItemsSold: 0,
+                    totalGiftItems: 0
+                  };
                 }
+                
+                items.forEach(item => {
+                  const productName = (item.product_name || '').trim();
+                  if (targetProducts.includes(productName)) {
+                    // Birden fazla personel varsa, miktarı eşit böl
+                    const quantityPerStaff = staffNames.length > 1 ? item.quantity / staffNames.length : item.quantity;
+                    const revenuePerStaff = staffNames.length > 1 ? (item.price * item.quantity) / staffNames.length : (item.price * item.quantity);
+                    
+                    if (!staffStats[staffName].products[productName]) {
+                      staffStats[staffName].products[productName] = {
+                        count: 0,
+                        revenue: 0
+                      };
+                    }
+                    staffStats[staffName].products[productName].count += quantityPerStaff;
+                    if (!item.isGift) {
+                      staffStats[staffName].products[productName].revenue += revenuePerStaff;
+                      staffStats[staffName].totalRevenue += revenuePerStaff;
+                    }
+                    staffStats[staffName].totalItemsSold += quantityPerStaff;
+                  }
+                });
+                
+                staffStats[staffName].totalSales += 1;
               });
-              
-              staffStats[sale.staff_name].totalSales += 1;
             }
           }
         }
@@ -5347,113 +5367,171 @@
             </div>
           </div>
           
-          <!-- Toplam İstatistikler -->
+          <!-- Toplam İstatistikler - Kurumsal ve Profesyonel -->
           <div class="staff-summary-cards">
             ${targetProducts.map(productName => {
               const sales = totalProductSales[productName] || { count: 0, revenue: 0 };
               const config = {
-                'Limonata': { icon: '🍋', color: '#fef3c7', textColor: '#92400e' },
-                'Filtre Kahve': { icon: '☕', color: '#ddd6fe', textColor: '#5b21b6' },
-                'Salep': { icon: '🥛', color: '#fce7f3', textColor: '#9f1239' }
+                'Limonata': { 
+                  icon: '🍋', 
+                  gradient: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                  borderColor: '#fbbf24',
+                  iconBg: '#fef3c7',
+                  textColor: '#92400e',
+                  accentColor: '#d97706'
+                },
+                'Filtre Kahve': { 
+                  icon: '☕', 
+                  gradient: 'linear-gradient(135deg, #e9d5ff 0%, #ddd6fe 100%)',
+                  borderColor: '#a78bfa',
+                  iconBg: '#e9d5ff',
+                  textColor: '#5b21b6',
+                  accentColor: '#7c3aed'
+                },
+                'Salep': { 
+                  icon: '🥛', 
+                  gradient: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)',
+                  borderColor: '#f472b6',
+                  iconBg: '#fce7f3',
+                  textColor: '#9f1239',
+                  accentColor: '#db2777'
+                }
               }[productName];
               
               return `
-                <div class="staff-summary-card product-card" style="background: ${config.color};">
-                  <div class="summary-icon">${config.icon}</div>
-                  <div class="summary-content">
-                    <div class="summary-label" style="color: ${config.textColor};">${productName}</div>
-                    <div class="summary-value" style="color: ${config.textColor};">${sales.count} adet</div>
-                    <div class="summary-sub" style="color: ${config.textColor};">₺${sales.revenue.toFixed(2)}</div>
+                <div class="staff-product-card" style="background: #ffffff; border: 2px solid ${config.borderColor}; border-radius: 16px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); transition: all 0.3s ease; position: relative; overflow: hidden;">
+                  <!-- Gradient Accent -->
+                  <div style="position: absolute; top: 0; left: 0; right: 0; height: 4px; background: ${config.gradient};"></div>
+                  
+                  <div style="display: flex; align-items: flex-start; gap: 16px;">
+                    <!-- Icon Container -->
+                    <div style="width: 64px; height: 64px; border-radius: 12px; background: ${config.gradient}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+                      <span style="font-size: 32px;">${config.icon}</span>
+                    </div>
+                    
+                    <!-- Content -->
+                    <div style="flex: 1; min-width: 0;">
+                      <div style="font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">${productName}</div>
+                      
+                      <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px;">
+                        <div style="font-size: 28px; font-weight: 700; color: ${config.accentColor}; line-height: 1;">${sales.count}</div>
+                        <div style="font-size: 14px; font-weight: 500; color: #6b7280;">adet</div>
+                      </div>
+                      
+                      <div style="display: flex; align-items: center; gap: 6px; padding-top: 8px; border-top: 1px solid #f3f4f6;">
+                        <svg width="16" height="16" fill="none" stroke="${config.accentColor}" viewBox="0 0 24 24" style="flex-shrink: 0;">
+                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        <div style="font-size: 16px; font-weight: 600; color: #059669;">₺${Math.round(sales.revenue).toLocaleString('tr-TR')}</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
               `;
             }).join('')}
           </div>
           
-          <!-- Personel Tablosu - Modern ve Kompakt -->
-          <div class="staff-table-container" style="background: #ffffff; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; margin-top: 24px;">
-            <table class="staff-table" style="width: 100%; border-collapse: collapse;">
-              <thead>
-                <tr style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white;">
-                  <th style="padding: 16px; text-align: left; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Personel</th>
-                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">🍋 Limonata</th>
-                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">☕ Filtre Kahve</th>
-                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">🥛 Salep</th>
-                  <th style="padding: 16px; text-align: center; font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px;">Toplam Satış</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sortedStaff.map((staff, index) => {
-                  // Belirli ürünlerin satışlarını hesapla
-                  const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
-                  const productSales = {};
-                  
-                  targetProducts.forEach(productName => {
-                    const productData = staff.products[productName];
-                    if (productData) {
-                      productSales[productName] = {
-                        count: typeof productData === 'object' ? productData.count : productData,
-                        revenue: typeof productData === 'object' ? productData.revenue : 0
-                      };
-                    } else {
-                      productSales[productName] = { count: 0, revenue: 0 };
-                    }
-                  });
-                  
-                  const limonata = productSales['Limonata'] || { count: 0, revenue: 0 };
-                  const filtreKahve = productSales['Filtre Kahve'] || { count: 0, revenue: 0 };
-                  const salep = productSales['Salep'] || { count: 0, revenue: 0 };
-                  
-                  // Toplam satış sayısı (sadece bu 3 ürün için)
-                  const totalCount = limonata.count + filtreKahve.count + salep.count;
-                  
-                  // Rank badge
-                  const rankBadge = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
-                  const rankClass = index === 0 ? 'rank-1' : index === 1 ? 'rank-2' : index === 2 ? 'rank-3' : '';
-                  
-                  return `
-                    <tr style="border-bottom: 1px solid #f3f4f6; transition: background 0.2s;" onmouseover="this.style.background='#f9fafb';" onmouseout="this.style.background='#ffffff';">
-                      <td style="padding: 16px;">
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                          ${rankBadge ? `<span style="font-size: 20px;">${rankBadge}</span>` : ''}
-                          <div>
-                            <div style="font-weight: 600; font-size: 15px; color: #111827; margin-bottom: 4px;">${staff.name}</div>
-                            <div style="font-size: 12px; color: #6b7280;">${staff.totalSales} satış</div>
-                          </div>
+          <!-- Personel Kartları - Her Personel Ayrı -->
+          <div class="staff-cards-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; margin-top: 24px;">
+            ${sortedStaff.map((staff, index) => {
+              // Belirli ürünlerin satışlarını hesapla
+              const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
+              const productSales = {};
+              
+              targetProducts.forEach(productName => {
+                const productData = staff.products[productName];
+                if (productData) {
+                  productSales[productName] = {
+                    count: typeof productData === 'object' ? productData.count : productData,
+                    revenue: typeof productData === 'object' ? productData.revenue : 0
+                  };
+                } else {
+                  productSales[productName] = { count: 0, revenue: 0 };
+                }
+              });
+              
+              const limonata = productSales['Limonata'] || { count: 0, revenue: 0 };
+              const filtreKahve = productSales['Filtre Kahve'] || { count: 0, revenue: 0 };
+              const salep = productSales['Salep'] || { count: 0, revenue: 0 };
+              
+              // Toplam satış sayısı (sadece bu 3 ürün için)
+              const totalCount = limonata.count + filtreKahve.count + salep.count;
+              const totalRevenue = limonata.revenue + filtreKahve.revenue + salep.revenue;
+              
+              // Rank badge
+              const rankBadge = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+              
+              return `
+                <div class="staff-individual-card" style="background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; transition: all 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'; this.style.transform='translateY(-2px)';" onmouseout="this.style.boxShadow='0 1px 3px rgba(0,0,0,0.05)'; this.style.transform='translateY(0)';">
+                  <!-- Personel Başlık -->
+                  <div style="background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); padding: 16px; border-bottom: 1px solid #e5e7eb;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        ${rankBadge ? `<span style="font-size: 24px;">${rankBadge}</span>` : ''}
+                        <div>
+                          <div style="font-weight: 600; font-size: 16px; color: #111827; line-height: 1.3;">${staff.name}</div>
+                          <div style="font-size: 12px; color: #6b7280; margin-top: 2px;">${staff.totalSales} satış</div>
                         </div>
-                      </td>
-                      <td style="padding: 16px; text-align: center;">
-                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-                          <div style="font-weight: 700; font-size: 18px; color: #92400e;">${limonata.count}</div>
-                          <div style="font-size: 12px; color: #6b7280;">adet</div>
-                          ${limonata.revenue > 0 ? `<div style="font-size: 11px; color: #059669; font-weight: 500; margin-top: 2px;">₺${Math.round(limonata.revenue).toLocaleString('tr-TR')}</div>` : ''}
-                        </div>
-                      </td>
-                      <td style="padding: 16px; text-align: center;">
-                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-                          <div style="font-weight: 700; font-size: 18px; color: #5b21b6;">${filtreKahve.count}</div>
-                          <div style="font-size: 12px; color: #6b7280;">adet</div>
-                          ${filtreKahve.revenue > 0 ? `<div style="font-size: 11px; color: #059669; font-weight: 500; margin-top: 2px;">₺${Math.round(filtreKahve.revenue).toLocaleString('tr-TR')}</div>` : ''}
-                        </div>
-                      </td>
-                      <td style="padding: 16px; text-align: center;">
-                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-                          <div style="font-weight: 700; font-size: 18px; color: #9f1239;">${salep.count}</div>
-                          <div style="font-size: 12px; color: #6b7280;">adet</div>
-                          ${salep.revenue > 0 ? `<div style="font-size: 11px; color: #059669; font-weight: 500; margin-top: 2px;">₺${Math.round(salep.revenue).toLocaleString('tr-TR')}</div>` : ''}
-                        </div>
-                      </td>
-                      <td style="padding: 16px; text-align: center;">
-                        <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
-                          <div style="font-weight: 700; font-size: 18px; color: #111827;">${totalCount}</div>
-                          <div style="font-size: 12px; color: #6b7280;">toplam</div>
-                        </div>
-                      </td>
-                    </tr>
-                  `;
-                }).join('')}
-              </tbody>
-            </table>
+                      </div>
+                      <div style="text-align: right;">
+                        <div style="font-size: 11px; color: #6b7280; margin-bottom: 2px;">Toplam</div>
+                        <div style="font-weight: 700; font-size: 18px; color: #059669;">${totalCount}</div>
+                      </div>
+                    </div>
+                  </div>
+                  
+                  <!-- Satış Tablosu -->
+                  <div style="padding: 16px;">
+                    <table style="width: 100%; border-collapse: collapse;">
+                      <thead>
+                        <tr style="border-bottom: 1px solid #f3f4f6;">
+                          <th style="padding: 8px 0; text-align: left; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;">Ürün</th>
+                          <th style="padding: 8px 0; text-align: right; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;">Adet</th>
+                          <th style="padding: 8px 0; text-align: right; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;">Tutar</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr style="border-bottom: 1px solid #f9fafb;">
+                          <td style="padding: 12px 0; font-size: 14px; color: #111827; font-weight: 500;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                              <span style="font-size: 18px;">🍋</span>
+                              <span>Limonata</span>
+                            </div>
+                          </td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 600; color: #92400e;">${limonata.count}</td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 14px; font-weight: 500; color: #059669;">₺${Math.round(limonata.revenue).toLocaleString('tr-TR')}</td>
+                        </tr>
+                        <tr style="border-bottom: 1px solid #f9fafb;">
+                          <td style="padding: 12px 0; font-size: 14px; color: #111827; font-weight: 500;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                              <span style="font-size: 18px;">☕</span>
+                              <span>Filtre Kahve</span>
+                            </div>
+                          </td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 600; color: #5b21b6;">${filtreKahve.count}</td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 14px; font-weight: 500; color: #059669;">₺${Math.round(filtreKahve.revenue).toLocaleString('tr-TR')}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 12px 0; font-size: 14px; color: #111827; font-weight: 500;">
+                            <div style="display: flex; align-items: center; gap: 8px;">
+                              <span style="font-size: 18px;">🥛</span>
+                              <span>Salep</span>
+                            </div>
+                          </td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 600; color: #9f1239;">${salep.count}</td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 14px; font-weight: 500; color: #059669;">₺${Math.round(salep.revenue).toLocaleString('tr-TR')}</td>
+                        </tr>
+                        <tr style="border-top: 2px solid #e5e7eb; background: #f9fafb;">
+                          <td style="padding: 12px 0; font-size: 14px; font-weight: 600; color: #111827;">Toplam</td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 700; color: #111827;">${totalCount}</td>
+                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 700; color: #059669;">₺${Math.round(totalRevenue).toLocaleString('tr-TR')}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              `;
+            }).join('')}
           </div>
           
           ${sortedStaff.length === 0 ? `
@@ -8088,13 +8166,14 @@
     }
 
     /* Admin Splash Screen */
+    /* Modern Kurumsal Splash Screen */
     .admin-splash-screen {
       position: fixed;
       top: 0;
       left: 0;
       right: 0;
       bottom: 0;
-      background: #ffffff;
+      background: linear-gradient(135deg, #f8fafc 0%, #ffffff 50%, #f1f5f9 100%);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -8102,96 +8181,189 @@
       overflow: hidden;
     }
 
+    /* Arka Plan Pattern */
+    .splash-background-pattern {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-image: 
+        radial-gradient(circle at 20% 30%, rgba(220, 38, 38, 0.03) 0%, transparent 50%),
+        radial-gradient(circle at 80% 70%, rgba(220, 38, 38, 0.02) 0%, transparent 50%);
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
     .splash-content {
       position: relative;
       z-index: 1;
       width: 100%;
+      max-width: 600px;
       text-align: center;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
+      padding: 40px;
+    }
+
+    /* Logo Container */
+    .splash-logo-container {
+      position: relative;
+      margin-bottom: 40px;
+      animation: logoFadeIn 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      opacity: 0;
     }
 
     .splash-logo {
-      width: 120px;
-      height: 120px;
+      width: 140px;
+      height: 140px;
       object-fit: contain;
-      margin-bottom: 32px;
-      animation: logoFadeIn 0.8s ease-out forwards;
-      opacity: 0;
+      filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.12));
+      animation: logoFloat 3s ease-in-out infinite;
+    }
+
+    .splash-logo-fallback {
+      width: 140px;
+      height: 140px;
+      border-radius: 24px;
+      background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 64px;
+      font-weight: 800;
+      color: #ffffff;
+      box-shadow: 0 8px 24px rgba(220, 38, 38, 0.3);
     }
 
     .splash-main-text {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       font-weight: 800;
-      font-size: clamp(4rem, 12vw, 8rem);
-      line-height: 0.9;
-      letter-spacing: 0.15em;
-      color: #0a0a0a;
-      margin: 0;
+      font-size: clamp(3.5rem, 10vw, 6.5rem);
+      line-height: 1;
+      letter-spacing: 0.12em;
+      margin: 0 0 16px 0;
       padding: 0;
       text-align: center;
       text-transform: uppercase;
-      animation: mainTextReveal 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      display: inline-flex;
+      gap: 0.05em;
+    }
+
+    .splash-letter {
+      display: inline-block;
+      background: linear-gradient(135deg, #111827 0%, #374151 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.1));
+      animation: letterSlideIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
       opacity: 0;
+      transform: translateY(50px) rotateX(90deg);
     }
 
     .splash-decorative-line {
       width: 0%;
-      height: 1px;
-      background: linear-gradient(90deg, transparent 0%, #d1d5db 50%, transparent 100%);
-      margin: 32px auto 40px;
-      max-width: 400px;
-      animation: lineExpand 1s ease-out forwards;
-      animation-delay: 0.5s;
+      height: 2px;
+      background: linear-gradient(90deg, transparent 0%, #dc2626 20%, #dc2626 80%, transparent 100%);
+      margin: 24px auto 32px;
+      max-width: 320px;
+      border-radius: 2px;
+      animation: lineExpand 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation-delay: 0.6s;
       opacity: 0;
+      box-shadow: 0 0 12px rgba(220, 38, 38, 0.2);
     }
 
     .splash-subtitle-text {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      font-size: clamp(0.875rem, 1.5vw, 1.125rem);
-      font-weight: 400;
-      color: #6b7280;
+      font-size: clamp(0.875rem, 1.2vw, 1rem);
+      font-weight: 500;
+      color: #64748b;
       margin: 0;
       padding: 0;
-      letter-spacing: 0.2em;
+      letter-spacing: 0.15em;
       text-transform: uppercase;
       text-align: center;
-      opacity: 0.7;
-      animation: subtitleFadeIn 0.8s ease-out forwards;
-      animation-delay: 0.3s;
+      animation: subtitleFadeIn 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation-delay: 0.4s;
       opacity: 0;
     }
 
+    /* Loading Indicator */
+    .splash-loading-indicator {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 48px;
+      animation: loadingFadeIn 0.8s ease-out forwards;
+      animation-delay: 0.8s;
+      opacity: 0;
+    }
+
+    .splash-loading-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+      animation: loadingDotBounce 1.4s ease-in-out infinite;
+      box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+    }
+
+    .splash-loading-dot:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    .splash-loading-dot:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+
+    /* Animations */
     @keyframes logoFadeIn {
       from {
         opacity: 0;
-        transform: scale(0.8);
+        transform: scale(0.85) translateY(-20px);
       }
       to {
         opacity: 1;
-        transform: scale(1);
+        transform: scale(1) translateY(0);
       }
     }
 
-    @keyframes mainTextReveal {
+    @keyframes logoFloat {
+      0%, 100% {
+        transform: translateY(0);
+      }
+      50% {
+        transform: translateY(-8px);
+      }
+    }
+
+    @keyframes letterSlideIn {
       0% {
         opacity: 0;
-        transform: translateY(40px) scale(0.95);
-        letter-spacing: 0.3em;
+        transform: translateY(50px) rotateX(90deg) scale(0.8);
+        filter: blur(10px);
+      }
+      60% {
+        opacity: 1;
+        transform: translateY(-5px) rotateX(0deg) scale(1.05);
+        filter: blur(0px);
       }
       100% {
         opacity: 1;
-        transform: translateY(0) scale(1);
-        letter-spacing: 0.15em;
+        transform: translateY(0) rotateX(0deg) scale(1);
+        filter: blur(0px);
       }
     }
 
     @keyframes subtitleFadeIn {
       from {
         opacity: 0;
-        transform: translateY(20px);
+        transform: translateY(15px);
       }
       to {
         opacity: 1;
@@ -8210,31 +8382,51 @@
       }
     }
 
-    /* Dekoratif arka plan elementleri */
-    .admin-splash-screen::before {
-      content: '';
-      position: absolute;
-      top: 20%;
-      left: 10%;
-      width: 200px;
-      height: 200px;
-      background: radial-gradient(circle, rgba(236, 72, 153, 0.03) 0%, transparent 70%);
-      border-radius: 50%;
-      filter: blur(40px);
-      pointer-events: none;
+    @keyframes loadingFadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
 
-    .admin-splash-screen::after {
-      content: '';
-      position: absolute;
-      bottom: 20%;
-      right: 10%;
-      width: 300px;
-      height: 300px;
-      background: radial-gradient(circle, rgba(236, 72, 153, 0.02) 0%, transparent 70%);
-      border-radius: 50%;
-      filter: blur(60px);
-      pointer-events: none;
+    @keyframes loadingDotBounce {
+      0%, 80%, 100% {
+        transform: scale(0.8);
+        opacity: 0.5;
+      }
+      40% {
+        transform: scale(1.2);
+        opacity: 1;
+      }
+    }
+
+    /* Responsive */
+    @media (max-width: 768px) {
+      .splash-content {
+        padding: 24px;
+      }
+
+      .splash-logo,
+      .splash-logo-fallback {
+        width: 100px;
+        height: 100px;
+      }
+
+      .splash-logo-fallback {
+        font-size: 48px;
+      }
+
+      .splash-main-text {
+        font-size: clamp(2.5rem, 12vw, 4rem);
+      }
+
+      .splash-loading-indicator {
+        margin-top: 32px;
+      }
     }
 
     /* Sekme butonları */
@@ -10074,67 +10266,39 @@
       background: #f9fafb;
     }
 
-    /* Toplam İstatistikler */
+    /* Toplam İstatistikler - Kurumsal ve Profesyonel */
     .staff-summary-cards {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 16px;
-      margin-bottom: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 32px;
     }
 
-    .staff-summary-card {
-      background: white;
-      border-radius: 14px;
-      padding: 18px;
-      border: 1px solid #e5e7eb;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-      display: flex;
-      align-items: center;
-      gap: 14px;
+    .staff-product-card {
+      background: #ffffff;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
       transition: all 0.3s ease;
+      position: relative;
+      overflow: hidden;
+      border: 2px solid transparent;
     }
 
-    .staff-summary-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    .staff-product-card:hover {
+      transform: translateY(-4px);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.12);
     }
 
-    .staff-summary-card.revenue-card {
-      background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%);
-      border-color: #6ee7b7;
-    }
-
-    .summary-icon {
-      font-size: 32px;
-      flex-shrink: 0;
-    }
-
-    .summary-content {
-      flex: 1;
-      min-width: 0;
-    }
-
-    .summary-label {
-      font-size: 12px;
-      font-weight: 600;
-      color: #6b7280;
-      margin-bottom: 4px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .summary-value {
-      font-size: 20px;
-      font-weight: 700;
-      color: #111827;
-      line-height: 1.2;
-    }
-
-    .summary-sub {
-      font-size: 13px;
-      font-weight: 600;
-      margin-top: 2px;
-      opacity: 0.9;
+    @media (max-width: 768px) {
+      .staff-summary-cards {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      
+      .staff-product-card {
+        padding: 20px;
+      }
     }
 
     /* Kompakt Personel Kartları */
@@ -10279,53 +10443,37 @@
       gap: 24px;
     }
     
-    /* Personel Tablosu Stilleri */
-    .staff-table-container {
-      background: #ffffff;
-      border-radius: 12px;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-      overflow: hidden;
+    /* Personel Kartları Grid */
+    .staff-cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 20px;
       margin-top: 24px;
     }
-    
-    .staff-table {
-      width: 100%;
-      border-collapse: collapse;
+
+    .staff-individual-card {
+      background: #ffffff;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      overflow: hidden;
+      transition: all 0.2s;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
     }
-    
-    .staff-table thead tr {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
+
+    .staff-individual-card:hover {
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+      transform: translateY(-2px);
     }
-    
-    .staff-table th {
-      padding: 16px;
-      text-align: left;
-      font-weight: 600;
-      font-size: 14px;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-    
-    .staff-table th:not(:first-child) {
-      text-align: center;
-    }
-    
-    .staff-table tbody tr {
-      border-bottom: 1px solid #f3f4f6;
-      transition: background 0.2s;
-    }
-    
-    .staff-table tbody tr:hover {
-      background: #f9fafb;
-    }
-    
-    .staff-table tbody tr:last-child {
-      border-bottom: none;
-    }
-    
-    .staff-table td {
-      padding: 16px;
+
+    @media (max-width: 768px) {
+      .staff-cards-grid {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+      
+      .staff-individual-card {
+        border-radius: 10px;
+      }
     }
     
     .staff-table td:not(:first-child) {
@@ -11205,11 +11353,27 @@
 </head>
 <body>
   <div id="loader" class="admin-splash-screen">
+    <div class="splash-background-pattern"></div>
     <div class="splash-content">
-      <img src="logo.png" alt="MAKARA Logo" class="splash-logo" onerror="this.style.display='none';">
-      <h1 class="splash-main-text">MAKARA</h1>
+      <div class="splash-logo-container">
+        <img src="logo.png" alt="MAKARA Logo" class="splash-logo" onerror="this.style.display='none';">
+        <div class="splash-logo-fallback" style="display: none;">M</div>
+      </div>
+      <h1 class="splash-main-text">
+        <span class="splash-letter" style="animation-delay: 0.1s;">M</span>
+        <span class="splash-letter" style="animation-delay: 0.2s;">A</span>
+        <span class="splash-letter" style="animation-delay: 0.3s;">K</span>
+        <span class="splash-letter" style="animation-delay: 0.4s;">A</span>
+        <span class="splash-letter" style="animation-delay: 0.5s;">R</span>
+        <span class="splash-letter" style="animation-delay: 0.6s;">A</span>
+      </h1>
       <div class="splash-decorative-line"></div>
       <p class="splash-subtitle-text">Admin Dashboard</p>
+      <div class="splash-loading-indicator">
+        <div class="splash-loading-dot"></div>
+        <div class="splash-loading-dot"></div>
+        <div class="splash-loading-dot"></div>
+      </div>
     </div>
   </div>
 

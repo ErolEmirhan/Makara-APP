@@ -96,6 +96,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     };
   },
   // Window Management API
-  minimizeWindow: () => ipcRenderer.invoke('minimize-window')
+  minimizeWindow: () => ipcRenderer.invoke('minimize-window'),
+  // Yan Ürünler API (Local kayıtlı, Firebase'e gitmez)
+  getYanUrunler: () => ipcRenderer.invoke('get-yan-urunler'),
+  createYanUrun: (urunData) => ipcRenderer.invoke('create-yan-urun', urunData),
+  updateYanUrun: (urunData) => ipcRenderer.invoke('update-yan-urun', urunData),
+  deleteYanUrun: (urunId) => ipcRenderer.invoke('delete-yan-urun', urunId)
 });
 

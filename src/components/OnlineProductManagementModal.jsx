@@ -16,6 +16,9 @@ const OnlineProductManagementModal = ({ onClose }) => {
   const isManualScrollRef = useRef(false);
   const [minimumOrderAmount, setMinimumOrderAmount] = useState(0);
   const [savingMinAmount, setSavingMinAmount] = useState(false);
+  const [bulkPriceAdd, setBulkPriceAdd] = useState('');
+  const [savingBulkPrice, setSavingBulkPrice] = useState(false);
+  const [categoryOutOfStock, setCategoryOutOfStock] = useState({});
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -309,6 +312,142 @@ const OnlineProductManagementModal = ({ onClose }) => {
     products: products.filter(p => p.category_id === category.id)
   })).filter(group => group.products.length > 0);
 
+  // Kategori tükendi durumunu yükle
+  useEffect(() => {
+    if (firestore && categories.length > 0) {
+      loadCategoryStockStatus();
+    }
+  }, [firestore, categories]);
+
+  const loadCategoryStockStatus = async () => {
+    if (!firestore) return;
+    
+    try {
+      const categoryStatus = {};
+      
+      // Her kategori için Firebase'den kontrol et
+      await Promise.all(
+        categories.map(async (category) => {
+          try {
+            const categoryRef = doc(firestore, 'categories', category.id.toString());
+            const categoryDoc = await getDoc(categoryRef);
+            
+            if (categoryDoc.exists()) {
+              const data = categoryDoc.data();
+              categoryStatus[category.id] = data.is_out_of_stock_online || false;
+            } else {
+              categoryStatus[category.id] = false;
+            }
+          } catch (error) {
+            console.error(`Kategori ${category.id} için stok durumu yüklenemedi:`, error);
+            categoryStatus[category.id] = false;
+          }
+        })
+      );
+      
+      setCategoryOutOfStock(categoryStatus);
+    } catch (error) {
+      console.error('Kategori stok durumu yüklenemedi:', error);
+    }
+  };
+
+  // Tüm ürünlere fiyat ekle
+  const handleBulkPriceAdd = async () => {
+    if (!firestore) {
+      showToast('Firebase bağlantısı bulunamadı', 'error');
+      return;
+    }
+
+    const addAmount = parseFloat(bulkPriceAdd);
+    if (isNaN(addAmount) || addAmount === 0) {
+      showToast('Lütfen geçerli bir fiyat giriniz', 'error');
+      return;
+    }
+
+    setSavingBulkPrice(true);
+    try {
+      const updatePromises = products.map(async (product) => {
+        const currentPrice = product.online_price || product.price;
+        const newPrice = currentPrice + addAmount;
+        
+        const productRef = doc(firestore, 'products', product.id.toString());
+        await setDoc(productRef, {
+          id: product.id,
+          online_price: newPrice
+        }, { merge: true });
+      });
+
+      await Promise.all(updatePromises);
+
+      // Local state'i güncelle
+      setProducts(prevProducts =>
+        prevProducts.map(p => ({
+          ...p,
+          online_price: (p.online_price || p.price) + addAmount
+        }))
+      );
+
+      showToast(`Tüm ürünlere ${addAmount.toFixed(2)} ₺ eklendi`, 'success');
+      setBulkPriceAdd('');
+    } catch (error) {
+      console.error('Toplu fiyat ekleme hatası:', error);
+      showToast('Fiyatlar güncellenemedi: ' + error.message, 'error');
+    } finally {
+      setSavingBulkPrice(false);
+    }
+  };
+
+  // Kategori tükendi durumunu güncelle
+  const handleCategoryStockToggle = async (categoryId, isOutOfStock) => {
+    if (!firestore) {
+      showToast('Firebase bağlantısı bulunamadı', 'error');
+      return;
+    }
+
+    try {
+      const categoryRef = doc(firestore, 'categories', categoryId.toString());
+      await setDoc(categoryRef, {
+        id: categoryId,
+        is_out_of_stock_online: isOutOfStock
+      }, { merge: true });
+
+      // Local state'i güncelle
+      setCategoryOutOfStock(prev => ({
+        ...prev,
+        [categoryId]: isOutOfStock
+      }));
+
+      // Kategorideki tüm ürünleri de güncelle
+      const categoryProducts = products.filter(p => p.category_id === categoryId);
+      const productUpdatePromises = categoryProducts.map(async (product) => {
+        const productRef = doc(firestore, 'products', product.id.toString());
+        await setDoc(productRef, {
+          id: product.id,
+          is_out_of_stock_online: isOutOfStock
+        }, { merge: true });
+      });
+
+      await Promise.all(productUpdatePromises);
+
+      // Local state'teki ürünleri güncelle
+      setProducts(prevProducts =>
+        prevProducts.map(p =>
+          p.category_id === categoryId ? { ...p, is_out_of_stock_online: isOutOfStock } : p
+        )
+      );
+
+      showToast(
+        isOutOfStock 
+          ? 'Kategori tükendi olarak işaretlendi' 
+          : 'Kategori mevcut olarak işaretlendi', 
+        'success'
+      );
+    } catch (error) {
+      console.error('Kategori stok durumu güncelleme hatası:', error);
+      showToast('Kategori stok durumu güncellenemedi: ' + error.message, 'error');
+    }
+  };
+
   // Kategoriye scroll yap
   const scrollToCategory = (categoryId) => {
     setSelectedCategoryId(categoryId);
@@ -409,15 +548,55 @@ const OnlineProductManagementModal = ({ onClose }) => {
                 <p className="text-sm text-gray-600 font-medium">Online siparişlere özel fiyat ve stok yönetimi</p>
               </div>
             </div>
-            <button
-              onClick={() => setShowResetConfirm(true)}
-              className="px-6 py-3 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-              <span>Reset</span>
-            </button>
+            <div className="flex items-center space-x-3">
+              {/* Tüm Ürünlere Fiyat Ekle */}
+              <div className="flex items-center space-x-2 bg-gradient-to-r from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-xl px-4 py-2 shadow-sm">
+                <input
+                  type="number"
+                  step="0.01"
+                  value={bulkPriceAdd}
+                  onChange={(e) => setBulkPriceAdd(e.target.value)}
+                  onKeyPress={(e) => {
+                    if (e.key === 'Enter') {
+                      handleBulkPriceAdd();
+                    }
+                  }}
+                  disabled={savingBulkPrice}
+                  placeholder="Fiyat ekle"
+                  className="w-24 px-2 py-1 text-sm font-semibold text-gray-900 focus:outline-none disabled:opacity-50 bg-transparent border-none"
+                />
+                <span className="text-xs font-semibold text-gray-600">₺</span>
+                <button
+                  onClick={handleBulkPriceAdd}
+                  disabled={savingBulkPrice || !bulkPriceAdd}
+                  className="px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg text-xs font-bold hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+                >
+                  {savingBulkPrice ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
+                      <span>Kaydediliyor...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                      </svg>
+                      <span>Kaydet</span>
+                    </>
+                  )}
+                </button>
+              </div>
+              
+              <button
+                onClick={() => setShowResetConfirm(true)}
+                className="px-6 py-3 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white rounded-xl text-sm font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                <span>Reset</span>
+              </button>
+            </div>
           </div>
 
           {/* Minimum Sepet Tutarı Bar */}
@@ -526,8 +705,34 @@ const OnlineProductManagementModal = ({ onClose }) => {
                 >
                   {/* Kategori Başlığı */}
                   <div className="bg-gradient-to-r from-purple-50 to-indigo-50 px-6 py-4 border-b border-gray-200">
-                    <h4 className="text-xl font-bold text-gray-900">{category.name}</h4>
-                    <p className="text-sm text-gray-600 mt-1">{categoryProducts.length} ürün</p>
+                    <div className="flex items-center justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center space-x-4">
+                          <h4 className="text-xl font-bold text-gray-900">{category.name}</h4>
+                          {/* Kategori Tükendi Switch */}
+                          <div className="flex items-center space-x-3">
+                            <span className={`text-sm font-semibold ${categoryOutOfStock[category.id] ? 'text-red-600' : 'text-gray-600'}`}>
+                              {categoryOutOfStock[category.id] ? 'Tükendi' : 'Mevcut'}
+                            </span>
+                            <button
+                              onClick={() => handleCategoryStockToggle(category.id, !categoryOutOfStock[category.id])}
+                              className={`relative inline-flex h-10 w-20 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 shadow-md ${
+                                categoryOutOfStock[category.id]
+                                  ? 'bg-gradient-to-r from-red-500 to-red-600'
+                                  : 'bg-gradient-to-r from-green-500 to-emerald-500'
+                              }`}
+                            >
+                              <span
+                                className={`inline-block h-8 w-8 transform rounded-full bg-white transition-transform duration-200 shadow-lg ${
+                                  categoryOutOfStock[category.id] ? 'translate-x-11' : 'translate-x-1'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-sm text-gray-600 mt-1">{categoryProducts.length} ürün</p>
+                      </div>
+                    </div>
                   </div>
 
                   {/* Ürün Tablosu */}

@@ -1070,91 +1070,6 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Ürün Görseli (Opsiyonel)
-                      </label>
-                      <div className="flex space-x-2">
-                        <input
-                          type="text"
-                          value={productForm.image}
-                          onChange={(e) => setProductForm({ ...productForm, image: e.target.value })}
-                          className="flex-1 px-4 py-2 rounded-xl border-2 border-gray-200 focus:border-purple-500 focus:outline-none"
-                          placeholder="Görsel URL'si girin veya dosya seçin"
-                        />
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            if (!window.electronAPI || typeof window.electronAPI.selectImageFile !== 'function') {
-                              showToast('Dosya seçimi özelliği yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
-                              return;
-                            }
-                            
-                            try {
-                              // Ürün ID'sini parametre olarak gönder (düzenleme modunda)
-                              const productId = editingProduct ? editingProduct.id : null;
-                              const result = await window.electronAPI.selectImageFile(productId);
-                              if (result.success && result.path) {
-                                setProductForm({ ...productForm, image: result.path });
-                              } else if (!result.canceled) {
-                                showToast('Dosya seçilemedi: ' + (result.error || 'Bilinmeyen hata'), 'error');
-                              }
-                            } catch (error) {
-                              showToast('Dosya seçme hatası: ' + error.message, 'error');
-                            }
-                          }}
-                          className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-medium transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap"
-                        >
-                          📁 Dosya Seç
-                        </button>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            setIsLoadingFirebaseImages(true);
-                            setShowFirebaseImageModal(true);
-                            try {
-                              const result = await window.electronAPI.getFirebaseImages();
-                              if (result.success) {
-                                setFirebaseImages(result.images || []);
-                              } else {
-                                showToast('Firebase görselleri yüklenemedi: ' + (result.error || 'Bilinmeyen hata'), 'error');
-                              }
-                            } catch (error) {
-                              showToast('Firebase görselleri yükleme hatası: ' + error.message, 'error');
-                            } finally {
-                              setIsLoadingFirebaseImages(false);
-                            }
-                          }}
-                          className="px-6 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-medium transition-all duration-200 shadow-sm hover:shadow-md whitespace-nowrap"
-                        >
-                          🔥 Firebase'den Seç
-                        </button>
-                        {productForm.image && (
-                          <button
-                            type="button"
-                            onClick={() => setProductForm({ ...productForm, image: '' })}
-                            className="px-4 py-2 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 transition-all"
-                          >
-                            ✕
-                          </button>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500 mt-1">
-                        💡 Görsel URL'si girebilir, dosya seçebilir veya Firebase'den seçebilirsiniz. URL girildiğinde otomatik olarak Firebase'e kaydedilir.
-                      </p>
-                      {productForm.image && (
-                        <div className="mt-2">
-                          <img 
-                            src={productForm.image} 
-                            alt="Önizleme" 
-                            className="w-24 h-24 object-cover rounded-lg border-2 border-purple-200"
-                            onError={(e) => {
-                              e.target.style.display = 'none';
-                            }}
-                          />
-                        </div>
-                      )}
-                    </div>
                   </div>
 
                   <div className="flex space-x-3">
@@ -1175,43 +1090,6 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                     )}
                   </div>
                 </form>
-              </div>
-
-              {/* Firebase Image Records Button */}
-              <div className="mb-6">
-                <button
-                  onClick={async () => {
-                    if (!window.confirm(
-                      'Tüm mevcut ürünler için Firebase\'de image kayıtları oluşturulacak.\n\n' +
-                      'Bu işlem sadece görseli olan ve henüz Firebase\'de kaydı olmayan ürünler için çalışır.\n\n' +
-                      'Devam etmek istiyor musunuz?'
-                    )) {
-                      return;
-                    }
-                    
-                    try {
-                      setIsCreatingImageRecords(true);
-                      const result = await window.electronAPI.createImageRecordsForAllProducts();
-                      if (result.success) {
-                        showToast(
-                          `✅ Image kayıtları oluşturuldu! Oluşturulan: ${result.created}, Atlanan: ${result.skipped}, Hata: ${result.errors}`,
-                          'success'
-                        );
-                      } else {
-                        showToast('Image kayıtları oluşturulamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
-                      }
-                    } catch (error) {
-                      console.error('Image kayıtları oluşturma hatası:', error);
-                      showToast('Image kayıtları oluşturma hatası: ' + error.message, 'error');
-                    } finally {
-                      setIsCreatingImageRecords(false);
-                    }
-                  }}
-                  disabled={isCreatingImageRecords}
-                  className="w-full px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isCreatingImageRecords ? '🔄 Oluşturuluyor...' : '🔥 Tüm Ürünler İçin Firebase Image Kayıtları Oluştur'}
-                </button>
               </div>
 
               {/* Product List */}
@@ -1346,40 +1224,37 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 max-h-96 overflow-y-auto scrollbar-custom">
+                <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3 overflow-y-auto scrollbar-custom" style={{ maxHeight: 'calc(100vh - 500px)' }}>
                   {filteredProducts.map(product => {
                     const category = categories.find(c => c.id === product.category_id);
                     return (
                       <div
                         key={product.id}
-                        className="bg-white rounded-xl p-4 border border-gray-200 hover:shadow-md transition-all flex items-center justify-between"
+                        className="bg-white rounded-xl p-3 border border-gray-200 hover:border-gray-300 hover:shadow-lg transition-all flex flex-col"
                       >
-                        <div className="flex items-center space-x-4 flex-1">
-                          {product.image ? (
-                            <img src={product.image} alt={product.name} className="w-16 h-16 rounded-lg object-cover" />
-                          ) : (
-                            <div className="w-16 h-16 rounded-lg bg-gray-100 flex items-center justify-center">
-                              <span className="text-2xl">📦</span>
+                        <div className="mb-3">
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-bold text-gray-900 text-base leading-tight mb-1.5 truncate" title={product.name} style={{ fontWeight: 700 }}>{product.name}</h4>
+                            <p className="text-xs text-gray-500 mb-2 truncate">{category?.name || 'Kategori yok'}</p>
+                            <div className="inline-block">
+                              <span className="px-3 py-1.5 bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 font-semibold rounded-lg text-sm border border-emerald-200/50">
+                                {product.price.toFixed(2)} ₺
+                              </span>
                             </div>
-                          )}
-                          <div className="flex-1">
-                            <h4 className="font-semibold text-gray-800">{product.name}</h4>
-                            <p className="text-sm text-gray-500">{category?.name || 'Kategori yok'}</p>
-                            <p className="text-lg font-bold text-purple-600">{product.price.toFixed(2)} ₺</p>
                           </div>
                         </div>
-                        <div className="flex space-x-2">
+                        <div className="flex space-x-2 pt-2 border-t border-gray-100">
                           <button
                             onClick={() => handleEditProduct(product)}
-                            className="px-4 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-all"
+                            className="flex-1 px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-all text-xs font-medium border border-gray-300 hover:border-gray-400"
                           >
-                            ✏️ Düzenle
+                            Düzenle
                           </button>
                           <button
                             onClick={() => handleDeleteProduct(product.id)}
-                            className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all"
+                            className="flex-1 px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 rounded-lg transition-all text-xs font-medium border border-gray-300 hover:border-gray-400"
                           >
-                            🗑️ Sil
+                            Sil
                           </button>
                         </div>
                       </div>

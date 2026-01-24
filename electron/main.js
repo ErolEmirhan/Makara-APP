@@ -1807,29 +1807,49 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     return { success: false, error: 'Geçersiz iptal miktarı' };
   }
   
-  // Stok iadesi (ikram edilen ürünler hariç)
-  if (!item.isGift) {
-    await increaseProductStock(item.product_id, quantityToCancel);
-  }
+  // Yan ürün kontrolü
+  const isYanUrun = typeof item.product_id === 'string' && item.product_id.startsWith('yan_urun_');
+  let categoryName = 'Yan Ürünler';
+  let printerName = null;
+  let printerType = null;
 
-  // Ürün bilgilerini al (kategori ve yazıcı için)
-  const product = db.products.find(p => p.id === item.product_id);
-  if (!product) {
-    return { success: false, error: 'Ürün bilgisi bulunamadı' };
-  }
+  if (isYanUrun) {
+    // Yan ürünler için kasa yazıcısından yazdır
+    const cashierPrinter = db.settings.cashierPrinter;
+    if (!cashierPrinter || !cashierPrinter.printerName) {
+      return { success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen ayarlardan kasa yazıcısı seçin.' };
+    }
+    printerName = cashierPrinter.printerName;
+    printerType = cashierPrinter.printerType;
+    categoryName = 'Yan Ürünler';
+  } else {
+    // Normal ürünler için stok iadesi (ikram edilen ürünler hariç)
+    if (!item.isGift) {
+      await increaseProductStock(item.product_id, quantityToCancel);
+    }
 
-  // Kategori bilgisini al
-  const category = db.categories.find(c => c.id === product.category_id);
-  const categoryName = category ? category.name : 'Diğer';
+    // Ürün bilgilerini al (kategori ve yazıcı için)
+    const product = db.products.find(p => p.id === item.product_id);
+    if (!product) {
+      return { success: false, error: 'Ürün bilgisi bulunamadı' };
+    }
 
-  // Bu kategoriye atanmış yazıcıyı bul
-  const assignment = db.printerAssignments.find(a => {
-    const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
-    return assignmentCategoryId === product.category_id;
-  });
+    // Kategori bilgisini al
+    const category = db.categories.find(c => c.id === product.category_id);
+    categoryName = category ? category.name : 'Diğer';
 
-  if (!assignment) {
-    return { success: false, error: 'Bu ürünün kategorisine yazıcı atanmamış' };
+    // Bu kategoriye atanmış yazıcıyı bul
+    const assignment = db.printerAssignments.find(a => {
+      const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+      return assignmentCategoryId === product.category_id;
+    });
+
+    if (!assignment) {
+      return { success: false, error: 'Bu ürünün kategorisine yazıcı atanmamış' };
+    }
+
+    printerName = assignment.printerName;
+    printerType = assignment.printerType;
   }
 
       // İptal açıklaması kontrolü - açıklama yoksa fiş yazdırma, sadece açıklama iste
@@ -1857,7 +1877,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
       };
 
       // Yazıcıya gönderme işlemini arka planda yap (await kullanmadan)
-      printCancelReceipt(assignment.printerName, assignment.printerType, cancelReceiptData).catch(error => {
+      printCancelReceipt(printerName, printerType, cancelReceiptData).catch(error => {
         console.error('İptal fişi yazdırma hatası:', error);
         // Yazdırma hatası olsa bile iptal işlemi zaten tamamlandı
       });
@@ -1995,6 +2015,7 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
   let totalCancelAmount = 0;
   const cancelItems = [];
   const categoryGroups = new Map(); // categoryId -> { items: [], totalQuantity, totalAmount }
+  const YAN_URUNLER_CATEGORY_ID = 'yan_urunler'; // Yan ürünler için özel kategori ID
 
   for (const cancelItem of itemsToCancel) {
     const item = db.tableOrderItems.find(oi => oi.id === cancelItem.itemId);
@@ -2003,45 +2024,78 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
     const quantityToCancel = cancelItem.quantity || item.quantity;
     if (quantityToCancel <= 0 || quantityToCancel > item.quantity) continue;
 
-    // Stok iadesi (ikram edilen ürünler hariç)
-    if (!item.isGift) {
-      await increaseProductStock(item.product_id, quantityToCancel);
-    }
+    // Yan ürün kontrolü
+    const isYanUrun = typeof item.product_id === 'string' && item.product_id.startsWith('yan_urun_');
+    
+    if (isYanUrun) {
+      // Yan ürünler için stok iadesi yapma (yan ürünler stok takibi yapmaz)
+      // Yan ürünler için kasa yazıcısından yazdır
+      const cashierPrinter = db.settings.cashierPrinter;
+      if (!cashierPrinter || !cashierPrinter.printerName) {
+        continue; // Kasa yazıcısı yoksa atla
+      }
 
-    // Ürün bilgilerini al
-    const product = db.products.find(p => p.id === item.product_id);
-    if (!product) continue;
+      // Yan ürünler için özel grup oluştur
+      if (!categoryGroups.has(YAN_URUNLER_CATEGORY_ID)) {
+        categoryGroups.set(YAN_URUNLER_CATEGORY_ID, {
+          categoryName: 'Yan Ürünler',
+          printerName: cashierPrinter.printerName,
+          printerType: cashierPrinter.printerType,
+          items: [],
+          totalQuantity: 0,
+          totalAmount: 0
+        });
+      }
 
-    const category = db.categories.find(c => c.id === product.category_id);
-    const categoryName = category ? category.name : 'Diğer';
-
-    // Kategoriye göre grupla
-    if (!categoryGroups.has(product.category_id)) {
-      const assignment = db.printerAssignments.find(a => {
-        const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
-        return assignmentCategoryId === product.category_id;
+      const categoryGroup = categoryGroups.get(YAN_URUNLER_CATEGORY_ID);
+      categoryGroup.items.push({
+        productName: item.product_name,
+        quantity: quantityToCancel,
+        price: item.price
       });
+      categoryGroup.totalQuantity += quantityToCancel;
+      categoryGroup.totalAmount += item.isGift ? 0 : (item.price * quantityToCancel);
+    } else {
+      // Normal ürünler için stok iadesi (ikram edilen ürünler hariç)
+      if (!item.isGift) {
+        await increaseProductStock(item.product_id, quantityToCancel);
+      }
 
-      if (!assignment) continue; // Yazıcı ataması yoksa atla
+      // Ürün bilgilerini al
+      const product = db.products.find(p => p.id === item.product_id);
+      if (!product) continue;
 
-      categoryGroups.set(product.category_id, {
-        categoryName,
-        printerName: assignment.printerName,
-        printerType: assignment.printerType,
-        items: [],
-        totalQuantity: 0,
-        totalAmount: 0
+      const category = db.categories.find(c => c.id === product.category_id);
+      const categoryName = category ? category.name : 'Diğer';
+
+      // Kategoriye göre grupla
+      if (!categoryGroups.has(product.category_id)) {
+        const assignment = db.printerAssignments.find(a => {
+          const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+          return assignmentCategoryId === product.category_id;
+        });
+
+        if (!assignment) continue; // Yazıcı ataması yoksa atla
+
+        categoryGroups.set(product.category_id, {
+          categoryName,
+          printerName: assignment.printerName,
+          printerType: assignment.printerType,
+          items: [],
+          totalQuantity: 0,
+          totalAmount: 0
+        });
+      }
+
+      const categoryGroup = categoryGroups.get(product.category_id);
+      categoryGroup.items.push({
+        productName: item.product_name,
+        quantity: quantityToCancel,
+        price: item.price
       });
+      categoryGroup.totalQuantity += quantityToCancel;
+      categoryGroup.totalAmount += item.isGift ? 0 : (item.price * quantityToCancel);
     }
-
-    const categoryGroup = categoryGroups.get(product.category_id);
-    categoryGroup.items.push({
-      productName: item.product_name,
-      quantity: quantityToCancel,
-      price: item.price
-    });
-    categoryGroup.totalQuantity += quantityToCancel;
-    categoryGroup.totalAmount += item.isGift ? 0 : (item.price * quantityToCancel);
 
     // İptal edilecek tutarı hesapla
     const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
@@ -2342,9 +2396,10 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
   order.status = 'completed';
 
   // Satış geçmişine ekle (seçilen ödeme yöntemi ile)
-  const now = new Date();
-  const saleDate = now.toLocaleDateString('tr-TR');
-  const saleTime = getFormattedTime(now);
+  // Masa açılış tarihini kullan (masa hangi tarihte açıldıysa o tarihin cirosuna geçer)
+  // Bu sayede çift sayım önlenir ve masa açılış tarihine göre ciraya eklenir
+  const saleDate = order.order_date || new Date().toLocaleDateString('tr-TR');
+  const saleTime = order.order_time || getFormattedTime(new Date());
 
   // Yeni satış ID'si
   const saleId = db.sales.length > 0 
@@ -2519,9 +2574,11 @@ ipcMain.handle('update-table-order-amount', async (event, orderId, paidAmount) =
 
 // Kısmi ödeme için satış kaydı oluştur
 ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
-  const now = new Date();
-  const saleDate = now.toLocaleDateString('tr-TR');
-  const saleTime = getFormattedTime(now);
+  // Masa açılış tarihini kullan (masa hangi tarihte açıldıysa o tarihin cirosuna geçer)
+  // Bu sayede çift sayım önlenir ve masa açılış tarihine göre ciraya eklenir
+  const order = db.tableOrders.find(o => o.id === saleData.orderId);
+  const saleDate = (order && order.order_date) ? order.order_date : new Date().toLocaleDateString('tr-TR');
+  const saleTime = (order && order.order_time) ? order.order_time : getFormattedTime(new Date());
 
   // Yeni satış ID'si
   const saleId = db.sales.length > 0 
@@ -2697,9 +2754,10 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
   saveDatabase();
 
   // Satış kaydı oluştur (sadece bu ürün için)
-  const now = new Date();
-  const saleDate = now.toLocaleDateString('tr-TR');
-  const saleTime = getFormattedTime(now);
+  // Masa açılış tarihini kullan (masa hangi tarihte açıldıysa o tarihin cirosuna geçer)
+  // Bu sayede çift sayım önlenir ve masa açılış tarihine göre ciraya eklenir
+  const saleDate = order.order_date || new Date().toLocaleDateString('tr-TR');
+  const saleTime = order.order_time || getFormattedTime(new Date());
 
   const saleId = db.sales.length > 0 
     ? Math.max(...db.sales.map(s => s.id)) + 1 
@@ -7930,6 +7988,7 @@ function generateMobileHTML(serverURL) {
     let selectedTable = null;
     let categories = [];
     let products = [];
+    let yanUrunler = []; // Yan ürünler için ayrı liste
     let cart = [];
     let selectedCategoryId = null;
     let currentStaff = null;
@@ -7937,6 +7996,7 @@ function generateMobileHTML(serverURL) {
     let tables = [];
     let currentTableType = 'inside';
     let orderNote = '';
+    const YAN_URUNLER_CATEGORY_ID = 999999; // Özel kategori ID'si
     
     // PIN oturum yönetimi (1 saat)
     const SESSION_DURATION = 60 * 60 * 1000;
@@ -8359,7 +8419,11 @@ function generateMobileHTML(serverURL) {
       document.getElementById('searchInput').value = '';
       // Mevcut siparişleri yükle
       await loadExistingOrders(id);
-      if (categories.length > 0) selectCategory(categories[0].id);
+      if (categories.length > 0) {
+        // İlk kategoriyi seç (yan ürünler kategorisi değilse)
+        const firstCategory = categories.find(c => c.id !== YAN_URUNLER_CATEGORY_ID) || categories[0];
+        await selectCategory(firstCategory.id);
+      }
     }
     
     async function loadExistingOrders(tableId) {
@@ -8714,13 +8778,20 @@ function generateMobileHTML(serverURL) {
         }
       });
       
+      // Yan Ürünler kategorisini bul
+      const yanUrunlerCategory = categories.find(cat => cat.id === 999999 || cat.name === 'Yan Ürünler');
+      
       // Üst satıra diğer kategorileri de ekle (eğer yer varsa)
       // Milk Shakeler'i üst satırdan kesinlikle çıkar
       const firstRow = [...topRowCategories, ...otherCategories].filter(cat => {
         const catNameLower = cat.name.toLowerCase().trim();
         return catNameLower !== 'milk shakeler' && catNameLower !== 'milkshakeler' && !(catNameLower.includes('milk') && catNameLower.includes('shake'));
       });
-      const secondRow = bottomRowCategories;
+      // Alt satıra Yan Ürünler kategorisini ekle (eğer varsa)
+      const secondRow = [...bottomRowCategories];
+      if (yanUrunlerCategory && !secondRow.find(cat => cat.id === yanUrunlerCategory.id)) {
+        secondRow.push(yanUrunlerCategory);
+      }
       
       // Soft pastel renk paleti (çeşitli renkler - flu tonlar)
       const softColors = [
@@ -8767,9 +8838,32 @@ function generateMobileHTML(serverURL) {
       }).join('');
     }
     
-    function selectCategory(categoryId) {
+    async function selectCategory(categoryId) {
       selectedCategoryId = categoryId;
       renderCategories();
+      
+      // Yan Ürünler kategorisi seçildiyse yan ürünleri yükle
+      if (categoryId === YAN_URUNLER_CATEGORY_ID) {
+        try {
+          const response = await fetch(API_URL + '/products?category_id=' + YAN_URUNLER_CATEGORY_ID);
+          yanUrunler = await response.json();
+          // Yan ürünleri products listesine ekle (renderProducts için)
+          products = yanUrunler;
+        } catch (error) {
+          console.error('Yan ürünler yüklenirken hata:', error);
+          products = [];
+        }
+      } else {
+        // Normal kategoriler için ürünleri yükle
+        try {
+          const response = await fetch(API_URL + '/products?category_id=' + categoryId);
+          products = await response.json();
+        } catch (error) {
+          console.error('Ürünler yüklenirken hata:', error);
+          products = [];
+        }
+      }
+      
       renderProducts();
     }
     
@@ -8894,12 +8988,38 @@ function generateMobileHTML(serverURL) {
       // Arama sorgusu varsa tüm kategorilerden ara, yoksa sadece seçili kategoriden göster
       if (searchQuery) {
         // Arama yapıldığında tüm kategorilerden ara
-        filtered = products.filter(p => 
-          p.name.toLowerCase().includes(searchQuery)
-        );
+        // Yan ürünler kategorisi seçiliyse yan ürünlerden ara, değilse normal ürünlerden ara
+        if (selectedCategoryId === YAN_URUNLER_CATEGORY_ID) {
+          filtered = products.filter(p => 
+            p.name.toLowerCase().includes(searchQuery)
+          );
+        } else {
+          // Tüm ürünleri yükle (arama için)
+          try {
+            const allProductsRes = await fetch(API_URL + '/products');
+            const allProducts = await allProductsRes.json();
+            // Yan ürünleri de ekle
+            const yanUrunlerRes = await fetch(API_URL + '/products?category_id=' + YAN_URUNLER_CATEGORY_ID);
+            const yanUrunler = await yanUrunlerRes.json();
+            const allProductsWithYanUrunler = [...allProducts, ...yanUrunler];
+            filtered = allProductsWithYanUrunler.filter(p => 
+              p.name.toLowerCase().includes(searchQuery)
+            );
+          } catch (error) {
+            console.error('Arama için ürünler yüklenirken hata:', error);
+            filtered = products.filter(p => 
+              p.name.toLowerCase().includes(searchQuery)
+            );
+          }
+        }
       } else {
         // Arama yoksa sadece seçili kategoriden göster
-        filtered = products.filter(p => p.category_id === selectedCategoryId);
+        filtered = products.filter(p => {
+          if (selectedCategoryId === YAN_URUNLER_CATEGORY_ID) {
+            return p.category_id === YAN_URUNLER_CATEGORY_ID || p.isYanUrun;
+          }
+          return p.category_id === selectedCategoryId;
+        });
       }
       
       const grid = document.getElementById('productsGrid');
@@ -8922,7 +9042,9 @@ function generateMobileHTML(serverURL) {
         const isTurkishCoffee = prod.name.toLowerCase().includes('türk kahvesi') || prod.name.toLowerCase().includes('turk kahvesi');
         const isMenengicCoffee = prod.name.toLowerCase().includes('menengiç kahve') || prod.name.toLowerCase().includes('menengic kahve');
         const needsCoffeeModal = isTurkishCoffee || isMenengicCoffee;
-        const onClickHandler = isOutOfStock ? '' : (needsCoffeeModal ? 'onclick="showTurkishCoffeeModal(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"' : 'onclick="addToCart(' + prod.id + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"');
+        // ID'yi string olarak geç (yan ürünler için gerekli)
+        const productIdStr = typeof prod.id === 'string' ? '\\'' + prod.id + '\\'' : prod.id;
+        const onClickHandler = isOutOfStock ? '' : (needsCoffeeModal ? 'onclick="showTurkishCoffeeModal(' + productIdStr + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"' : 'onclick="addToCart(' + productIdStr + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"');
         const cardStyle = isOutOfStock ? backgroundStyle + ' opacity: 0.6; cursor: not-allowed; pointer-events: none;' : backgroundStyle;
         
         // Kilit ikonu (sadece stok 0 olduğunda)
@@ -9058,24 +9180,36 @@ function generateMobileHTML(serverURL) {
     }
     
     function addToCart(productId, name, price) {
-      // Stok kontrolü
-      const product = products.find(p => p.id === productId);
-      if (product) {
-        const trackStock = product.trackStock === true;
-        const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
-        const isOutOfStock = trackStock && stock !== null && stock === 0;
-        
-        if (isOutOfStock) {
-          showToast('error', 'Stok Yok', name + ' için stok kalmadı');
-          return;
+      // Yan ürün kontrolü
+      const isYanUrun = typeof productId === 'string' && productId.startsWith('yan_urun_');
+      
+      // Stok kontrolü (yan ürünler için yapma)
+      if (!isYanUrun) {
+        const product = products.find(p => p.id === productId);
+        if (product) {
+          const trackStock = product.trackStock === true;
+          const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
+          const isOutOfStock = trackStock && stock !== null && stock === 0;
+          
+          if (isOutOfStock) {
+            showToast('error', 'Stok Yok', name + ' için stok kalmadı');
+            return;
+          }
         }
       }
       
-      const existing = cart.find(item => item.id === productId && item.name === name);
+      // ID karşılaştırması için string/number uyumluluğu
+      const existing = cart.find(item => {
+        // ID'leri karşılaştırırken string/number uyumluluğunu kontrol et
+        const itemId = String(item.id);
+        const productIdStr = String(productId);
+        return itemId === productIdStr && item.name === name;
+      });
+      
       if (existing) {
         existing.quantity++;
       } else {
-        cart.push({ id: productId, name, price, quantity: 1, isGift: false });
+        cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun: isYanUrun });
       }
       updateCart();
       
@@ -9103,16 +9237,18 @@ function generateMobileHTML(serverURL) {
         itemsDiv.innerHTML = '<div style="text-align: center; padding: 40px 20px; color: #9ca3af; font-size: 14px;">Sepetiniz boş</div>';
       } else {
         itemsDiv.innerHTML = cart.map(item => {
+          // ID'yi string olarak geç (yan ürünler için gerekli)
+          const itemIdStr = typeof item.id === 'string' ? '\\'' + item.id + '\\'' : item.id;
           return '<div class="cart-item">' +
             '<div style="flex: 1;">' +
               '<div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 4px; display: flex; align-items: center;">' + item.name + '</div>' +
               '<div style="color: #6b7280; font-size: 13px; font-weight: 600;">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + (item.price * item.quantity).toFixed(2) + ' ₺</div>' +
             '</div>' +
             '<div class="cart-item-controls" style="display: flex; align-items: center; gap: 8px;">' +
-              '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', -1)" title="Azalt">-</button>' +
+              '<button class="qty-btn" onclick="changeQuantity(' + itemIdStr + ', -1)" title="Azalt">-</button>' +
               '<span style="min-width: 36px; text-align: center; font-weight: 700; color: #1f2937; font-size: 15px;">' + item.quantity + '</span>' +
-              '<button class="qty-btn" onclick="changeQuantity(' + item.id + ', 1)" title="Artır">+</button>' +
-              '<button class="qty-btn" onclick="removeFromCart(' + item.id + ')" style="background: #ef4444; color: white; border-color: #ef4444; font-size: 18px;" title="Sil">×</button>' +
+              '<button class="qty-btn" onclick="changeQuantity(' + itemIdStr + ', 1)" title="Artır">+</button>' +
+              '<button class="qty-btn" onclick="removeFromCart(' + itemIdStr + ')" style="background: #ef4444; color: white; border-color: #ef4444; font-size: 18px;" title="Sil">×</button>' +
             '</div>' +
           '</div>';
         }).join('');
@@ -9126,11 +9262,31 @@ function generateMobileHTML(serverURL) {
     }
     
     function changeQuantity(productId, delta) {
-      const item = cart.find(item => item.id === productId);
-      if (item) { item.quantity += delta; if (item.quantity <= 0) removeFromCart(productId); else updateCart(); }
+      // ID karşılaştırması için string/number uyumluluğu
+      const item = cart.find(item => {
+        const itemId = String(item.id);
+        const productIdStr = String(productId);
+        return itemId === productIdStr;
+      });
+      if (item) { 
+        item.quantity += delta; 
+        if (item.quantity <= 0) {
+          removeFromCart(productId);
+        } else {
+          updateCart();
+        }
+      }
     }
     
-    function removeFromCart(productId) { cart = cart.filter(item => item.id !== productId); updateCart(); }
+    function removeFromCart(productId) {
+      // ID karşılaştırması için string/number uyumluluğu
+      cart = cart.filter(item => {
+        const itemId = String(item.id);
+        const productIdStr = String(productId);
+        return itemId !== productIdStr;
+      });
+      updateCart();
+    }
     
     function toggleCart() {
       const cartEl = document.getElementById('cart');
@@ -9663,7 +9819,8 @@ function generateMobileHTML(serverURL) {
               name: item.name,
               price: item.price,
               quantity: item.quantity,
-              isGift: item.isGift || false
+              isGift: item.isGift || false,
+              isYanUrun: item.isYanUrun || (typeof item.id === 'string' && item.id.startsWith('yan_urun_'))
             })), 
             totalAmount, 
             tableId: selectedTable.id, 
@@ -9770,21 +9927,67 @@ function startAPIServer() {
           return a.id - b.id;
         });
         
+        // Yan Ürünler kategorisini ekle
+        const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
+        // Eğer zaten eklenmemişse ekle
+        if (!categories.find(c => c.id === YAN_URUNLER_CATEGORY_ID)) {
+          categories.push({
+            id: YAN_URUNLER_CATEGORY_ID,
+            name: 'Yan Ürünler',
+            order_index: 9999 // En sona ekle
+          });
+        }
+        
         res.json(categories);
       } else {
         // Firebase yoksa local database'den çek
-        res.json(db.categories.sort((a, b) => a.order_index - b.order_index));
+        const localCategories = db.categories.sort((a, b) => a.order_index - b.order_index);
+        // Yan Ürünler kategorisini ekle
+        const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
+        // Eğer zaten eklenmemişse ekle
+        if (!localCategories.find(c => c.id === YAN_URUNLER_CATEGORY_ID)) {
+          localCategories.push({
+            id: YAN_URUNLER_CATEGORY_ID,
+            name: 'Yan Ürünler',
+            order_index: 9999 // En sona ekle
+          });
+        }
+        res.json(localCategories);
       }
     } catch (error) {
       console.error('❌ Kategoriler çekilirken hata:', error);
       // Hata durumunda local database'den çek
-      res.json(db.categories.sort((a, b) => a.order_index - b.order_index));
+      const localCategories = db.categories.sort((a, b) => a.order_index - b.order_index);
+      // Yan Ürünler kategorisini ekle
+      const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
+      localCategories.push({
+        id: YAN_URUNLER_CATEGORY_ID,
+        name: 'Yan Ürünler',
+        order_index: 9999 // En sona ekle
+      });
+      res.json(localCategories);
     }
   });
 
   appExpress.get('/api/products', async (req, res) => {
     try {
       const categoryId = req.query.category_id;
+      const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
+      
+      // Yan Ürünler kategorisi seçildiyse yan ürünleri döndür
+      if (categoryId && Number(categoryId) === YAN_URUNLER_CATEGORY_ID) {
+        const yanUrunler = (db.yanUrunler || []).map(urun => ({
+          id: `yan_urun_${urun.id}`, // Özel ID formatı
+          name: urun.name,
+          price: urun.price,
+          category_id: YAN_URUNLER_CATEGORY_ID,
+          image: null,
+          trackStock: false,
+          stock: null,
+          isYanUrun: true
+        }));
+        return res.json(yanUrunler);
+      }
       
       let products = [];
       
@@ -10301,24 +10504,44 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Geçersiz iptal miktarı' });
       }
 
-      // Ürün bilgilerini al (kategori ve yazıcı için)
-      const product = db.products.find(p => p.id === item.product_id);
-      if (!product) {
-        return res.status(404).json({ success: false, error: 'Ürün bilgisi bulunamadı' });
-      }
+      // Yan ürün kontrolü
+      const isYanUrun = typeof item.product_id === 'string' && item.product_id.startsWith('yan_urun_');
+      let categoryName = 'Yan Ürünler';
+      let printerName = null;
+      let printerType = null;
 
-      // Kategori bilgisini al
-      const category = db.categories.find(c => c.id === product.category_id);
-      const categoryName = category ? category.name : 'Diğer';
+      if (isYanUrun) {
+        // Yan ürünler için kasa yazıcısından yazdır
+        const cashierPrinter = db.settings.cashierPrinter;
+        if (!cashierPrinter || !cashierPrinter.printerName) {
+          return res.status(400).json({ success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen ayarlardan kasa yazıcısı seçin.' });
+        }
+        printerName = cashierPrinter.printerName;
+        printerType = cashierPrinter.printerType;
+        categoryName = 'Yan Ürünler';
+      } else {
+        // Normal ürünler için ürün bilgilerini al (kategori ve yazıcı için)
+        const product = db.products.find(p => p.id === item.product_id);
+        if (!product) {
+          return res.status(404).json({ success: false, error: 'Ürün bilgisi bulunamadı' });
+        }
 
-      // Bu kategoriye atanmış yazıcıyı bul
-      const assignment = db.printerAssignments.find(a => {
-        const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
-        return assignmentCategoryId === product.category_id;
-      });
+        // Kategori bilgisini al
+        const category = db.categories.find(c => c.id === product.category_id);
+        categoryName = category ? category.name : 'Diğer';
 
-      if (!assignment) {
-        return res.status(400).json({ success: false, error: 'Bu ürünün kategorisine yazıcı atanmamış' });
+        // Bu kategoriye atanmış yazıcıyı bul
+        const assignment = db.printerAssignments.find(a => {
+          const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+          return assignmentCategoryId === product.category_id;
+        });
+
+        if (!assignment) {
+          return res.status(400).json({ success: false, error: 'Bu ürünün kategorisine yazıcı atanmamış' });
+        }
+
+        printerName = assignment.printerName;
+        printerType = assignment.printerType;
       }
 
       // İptal açıklaması kontrolü - açıklama yoksa fiş yazdırma, sadece açıklama iste
@@ -10354,7 +10577,7 @@ function startAPIServer() {
       };
 
       // Yazıcıya gönderme işlemini arka planda yap (await kullanmadan)
-      printCancelReceipt(assignment.printerName, assignment.printerType, cancelReceiptData).catch(error => {
+      printCancelReceipt(printerName, printerType, cancelReceiptData).catch(error => {
         console.error('İptal fişi yazdırma hatası:', error);
         // Yazdırma hatası olsa bile iptal işlemi zaten tamamlandı
       });
@@ -10362,8 +10585,8 @@ function startAPIServer() {
       // İptal edilecek tutarı hesapla (ikram değilse)
       const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
 
-      // Stok iadesi (ikram edilen ürünler hariç, sadece stok takibi yapılan ürünler için)
-      if (!item.isGift) {
+      // Stok iadesi (ikram edilen ürünler hariç, sadece stok takibi yapılan ürünler için, yan ürünler hariç)
+      if (!item.isGift && !isYanUrun) {
         const product = db.products.find(p => p.id === item.product_id);
         if (product && product.trackStock) {
           await increaseProductStock(item.product_id, quantityToCancel);

@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.17">
+  <link rel="manifest" href="/manifest.json?v=2.4.19">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.17';
+      const APP_VERSION = '2.4.19';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -1459,12 +1459,13 @@
       
       // Dışarı masalar (61-84)
       for (let i = 1; i <= 24; i++) {
-        const tableId = `outside-${i}`;
+        const tableNumber = 60 + i; // 61-84
+        const tableId = `outside-${tableNumber}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `Dışarı ${i + 60}`,
+          table_name: `Dışarı ${tableNumber}`,
           table_type: 'outside',
-          table_number: i + 60,
+          table_number: tableNumber,
           is_occupied: false,
           total_amount: 0,
           items: []
@@ -1668,6 +1669,8 @@
     }
     
     // Aktif masalardaki toplam tutarı hesapla
+    // SADECE bugünkü iş günü içinde açılan masalar aktif masalara eklenir
+    // Bu sayede çift sayım önlenir (masa açılış tarihine göre ciraya eklenir)
     function calculateActiveTablesRevenue() {
       let totalRevenue = 0;
       let cashRevenue = 0;
@@ -1682,16 +1685,32 @@
                           (table.items && Array.isArray(table.items) && table.items.length > 0);
         
         if (isOccupied && table.total_amount) {
-          const amount = parseFloat(table.total_amount || 0);
-          totalRevenue += amount;
+          // Masa açılış tarihini kontrol et - sadece bugünkü iş günü içinde açılan masalar
+          const orderDate = table.order_date;
+          const orderTime = table.order_time || '00:00';
           
-          // Ödeme yöntemini kontrol et (eğer masa verisinde varsa)
-          // Masa verisinde payment_method yoksa varsayılan olarak Nakit sayılır
-          const paymentMethod = table.payment_method || 'Nakit';
-          if (paymentMethod === 'Kart') {
-            cardRevenue += amount;
-          } else {
-            cashRevenue += amount;
+          // Eğer masa açılış tarihi yoksa, masa açılış tarihini kontrol etme (geriye dönük uyumluluk için)
+          // Ancak mümkünse sadece bugünkü iş günü içinde açılan masaları say
+          let isTableInCurrentBusinessDay = true; // Varsayılan olarak true (geriye dönük uyumluluk)
+          
+          if (orderDate && orderTime) {
+            // Masa açılış tarihi bugünkü iş günü içinde mi kontrol et
+            isTableInCurrentBusinessDay = isInCurrentBusinessDay(orderDate, orderTime);
+          }
+          
+          // Sadece bugünkü iş günü içinde açılan masaları aktif masalara ekle
+          if (isTableInCurrentBusinessDay) {
+            const amount = parseFloat(table.total_amount || 0);
+            totalRevenue += amount;
+            
+            // Ödeme yöntemini kontrol et (eğer masa verisinde varsa)
+            // Masa verisinde payment_method yoksa varsayılan olarak Nakit sayılır
+            const paymentMethod = table.payment_method || 'Nakit';
+            if (paymentMethod === 'Kart') {
+              cardRevenue += amount;
+            } else {
+              cashRevenue += amount;
+            }
           }
         }
       });
@@ -3097,12 +3116,13 @@
       
       // Dışarı masalar (61-84)
       for (let i = 1; i <= 24; i++) {
-        const tableId = `outside-${i}`;
+        const tableNumber = 60 + i; // 61-84
+        const tableId = `outside-${tableNumber}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `Dışarı ${i + 60}`,
+          table_name: `Dışarı ${tableNumber}`,
           table_type: 'outside',
-          table_number: i + 60,
+          table_number: tableNumber,
           is_occupied: false,
           total_amount: 0,
           items: []

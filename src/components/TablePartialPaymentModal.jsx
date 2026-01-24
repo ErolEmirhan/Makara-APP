@@ -93,6 +93,187 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     setSelectedQuantities(initialQuantities);
   }, [items]);
 
+  // Kalan ödemeyi al - Tüm kalan ürünleri direkt ödeme al
+  const handlePayRemaining = async () => {
+    if (remainingAmount <= 0.01) {
+      showToast('Kalan tutar yok', 'info');
+      return;
+    }
+
+    if (!window.electronAPI || !window.electronAPI.payTableOrderItem) {
+      showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
+      return;
+    }
+
+    // Tüm kalan ürünleri bul
+    const remainingItems = itemsWithPayment.filter(item => {
+      if (item.isGift) return false;
+      const paidQty = item.groupedPaidQuantity || 0;
+      const remainingQty = item.groupedQuantity - paidQty;
+      return remainingQty > 0;
+    });
+
+    if (remainingItems.length === 0) {
+      showToast('Kalan ürün bulunamadı', 'warning');
+      return;
+    }
+
+    // Ödeme yöntemi seçimi
+    const paymentMethod = await new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
+      
+      // Kalan tutarı hesapla
+      const remainingTotal = remainingItems.reduce((sum, item) => {
+        const paidQty = item.groupedPaidQuantity || 0;
+        const remainingQty = item.groupedQuantity - paidQty;
+        return sum + (item.price * remainingQty);
+      }, 0);
+      
+      modal.innerHTML = `
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+          <div class="bg-gradient-to-r from-orange-600 to-amber-600 px-6 py-4">
+            <h3 class="text-xl font-bold text-white mb-1">Kalan Ödemeyi Al</h3>
+            <p class="text-sm text-white/90">Toplam: ₺${remainingTotal.toFixed(2)}</p>
+          </div>
+          <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  <span class="text-base">Nakit</span>
+                </div>
+              </button>
+              <button id="cardBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                  </svg>
+                  <span class="text-base">Kredi Kartı</span>
+                </div>
+              </button>
+            </div>
+            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">
+              İptal
+            </button>
+          </div>
+        </div>
+      `;
+      
+      document.body.appendChild(modal);
+      
+      modal.querySelector('#cashBtn').onclick = () => {
+        document.body.removeChild(modal);
+        resolve('Nakit');
+      };
+      
+      modal.querySelector('#cardBtn').onclick = () => {
+        document.body.removeChild(modal);
+        resolve('Kredi Kartı');
+      };
+      
+      modal.querySelector('#cancelBtn').onclick = () => {
+        document.body.removeChild(modal);
+        resolve(null);
+      };
+    });
+
+    if (!paymentMethod) return;
+
+    setProcessingItemId('bulk');
+
+    try {
+      const paymentResults = [];
+
+      // Her kalan ürün için ödeme al
+      for (const item of remainingItems) {
+        const paidQty = item.groupedPaidQuantity || 0;
+        const remainingQty = item.groupedQuantity - paidQty;
+        
+        if (remainingQty <= 0) continue;
+
+        // Gruplanmış ürünler için, orijinal item'lar arasında ödemeyi dağıt
+        const originalIds = item.originalIds || [item.id];
+        let remainingSelectedQty = remainingQty;
+        
+        // Her orijinal item için ödeme al
+        for (const originalId of originalIds) {
+          if (remainingSelectedQty <= 0) break;
+          
+          // Orijinal item'ı bul (items prop'undan)
+          const originalItem = items.find(i => i.id === originalId);
+          if (!originalItem) {
+            // Eğer bulunamazsa, bu bir grup item'ı olabilir, direkt ödeme al
+            try {
+              const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, remainingSelectedQty);
+              if (result.success) {
+                paymentResults.push({ itemId: originalId, paymentMethod, quantity: remainingSelectedQty });
+                remainingSelectedQty = 0;
+              }
+            } catch (error) {
+              console.error(`Ürün (ID: ${originalId}) için ödeme hatası:`, error);
+            }
+            continue;
+          }
+          
+          const originalPaidQty = originalItem.paid_quantity || 0;
+          const originalRemainingQty = originalItem.quantity - originalPaidQty;
+          
+          // Bu item için ödenecek miktarı belirle
+          const qtyToPayForThisItem = Math.min(remainingSelectedQty, originalRemainingQty);
+          
+          if (qtyToPayForThisItem <= 0) continue;
+
+          try {
+            const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, qtyToPayForThisItem);
+            
+            if (result.success) {
+              paymentResults.push({ itemId: originalId, paymentMethod, quantity: qtyToPayForThisItem });
+              remainingSelectedQty -= qtyToPayForThisItem;
+            } else {
+              console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme alınamadı:`, result.error);
+            }
+          } catch (error) {
+            console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme hatası:`, error);
+          }
+        }
+        
+        // Grup item'ı güncelle
+        const newPaidQuantity = paidQty + remainingQty;
+        const isFullyPaid = newPaidQuantity >= item.groupedQuantity;
+        
+        setItemsWithPayment(prev => prev.map(i => 
+          i.id === item.id 
+            ? { 
+                ...i, 
+                isPaid: isFullyPaid,
+                groupedPaidQuantity: newPaidQuantity,
+                paymentMethod: i.groupedPaidQuantity > 0 ? `${i.paymentMethod || ''}, ${paymentMethod}` : paymentMethod
+              }
+            : i
+        ));
+      }
+
+      // onComplete callback'ini çağır
+      if (onComplete && paymentResults.length > 0) {
+        onComplete(paymentResults);
+      }
+
+      if (paymentResults.length > 0) {
+        showToast(`Kalan ${paymentResults.length} ürün için ödeme başarıyla alındı!`, 'success');
+      } else {
+        showToast('Ödeme alınamadı', 'error');
+      }
+    } catch (error) {
+      console.error('Kalan ödeme hatası:', error);
+      showToast('Ödeme alınırken bir hata oluştu', 'error');
+    } finally {
+      setProcessingItemId(null);
+    }
+  };
+
   // Toplu ödeme al - Tüm seçilen ürünler için
   const handleBulkPayment = async () => {
     if (!window.electronAPI || !window.electronAPI.payTableOrderItem) {
@@ -316,14 +497,21 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     if (item.isGift) return false;
     return (item.groupedPaidQuantity || 0) > 0;
   });
+  // Orijinal toplam tutar (items'ları toplayarak - değişmemeli)
+  const originalTotalAmount = itemsWithPayment.reduce((sum, item) => {
+    if (item.isGift) return sum;
+    return sum + (item.price * item.groupedQuantity);
+  }, 0);
+  
   // Toplam ödenen tutar (ödenen miktarlar üzerinden)
   const paidAmount = itemsWithPayment.reduce((sum, item) => {
     if (item.isGift) return sum;
     const paidQty = item.groupedPaidQuantity || 0;
     return sum + (item.price * paidQty);
   }, 0);
-  // Kalan tutar
-  const remainingAmount = totalAmount - paidAmount;
+  
+  // Kalan tutar (orijinal toplam - ödenen)
+  const remainingAmount = originalTotalAmount - paidAmount;
 
   return (
     <>
@@ -350,7 +538,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
           <div className="grid grid-cols-4 gap-6">
             <div>
               <p className="text-xs text-gray-500 mb-1 font-medium">Toplam Tutar</p>
-              <p className="text-xl font-bold text-gray-900">₺{totalAmount.toFixed(2)}</p>
+              <p className="text-xl font-bold text-gray-900">₺{originalTotalAmount.toFixed(2)}</p>
             </div>
             <div>
               <p className="text-xs text-gray-500 mb-1 font-medium">Ödenen</p>
@@ -506,27 +694,52 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
                 <p className="text-sm text-gray-300 mb-1">Toplam:</p>
                 <p className="text-2xl font-bold text-white">₺{selectedItemsTotal.toFixed(2)}</p>
               </div>
-              <button
-                onClick={handleBulkPayment}
-                disabled={selectedItemsInfo.length === 0 || processingItemId === 'bulk'}
-                className={`px-8 py-3 rounded-lg font-bold text-white text-base transition-all shadow-lg ${
-                  selectedItemsInfo.length === 0 || processingItemId === 'bulk'
-                    ? 'bg-gray-600 cursor-not-allowed'
-                    : 'bg-blue-600 hover:bg-blue-700 hover:shadow-xl'
-                }`}
-              >
-                {processingItemId === 'bulk' ? (
-                  <span className="flex items-center space-x-2">
-                    <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    <span>İşleniyor...</span>
-                  </span>
-                ) : (
-                  'Ödeme Al'
+              <div className="flex items-center space-x-3">
+                {remainingAmount > 0.01 && (
+                  <button
+                    onClick={handlePayRemaining}
+                    disabled={processingItemId === 'bulk'}
+                    className={`px-6 py-3 rounded-lg font-bold text-white text-base transition-all shadow-lg ${
+                      processingItemId === 'bulk'
+                        ? 'bg-gray-600 cursor-not-allowed'
+                        : 'bg-orange-600 hover:bg-orange-700 hover:shadow-xl'
+                    }`}
+                  >
+                    {processingItemId === 'bulk' ? (
+                      <span className="flex items-center space-x-2">
+                        <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>İşleniyor...</span>
+                      </span>
+                    ) : (
+                      `Kalan Ödemeyi Al (₺${remainingAmount.toFixed(2)})`
+                    )}
+                  </button>
                 )}
-              </button>
+                <button
+                  onClick={handleBulkPayment}
+                  disabled={selectedItemsInfo.length === 0 || processingItemId === 'bulk'}
+                  className={`px-8 py-3 rounded-lg font-bold text-white text-base transition-all shadow-lg ${
+                    selectedItemsInfo.length === 0 || processingItemId === 'bulk'
+                      ? 'bg-gray-600 cursor-not-allowed'
+                      : 'bg-blue-600 hover:bg-blue-700 hover:shadow-xl'
+                  }`}
+                >
+                  {processingItemId === 'bulk' ? (
+                    <span className="flex items-center space-x-2">
+                      <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      <span>İşleniyor...</span>
+                    </span>
+                  ) : (
+                    'Ödeme Al'
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>

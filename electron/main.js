@@ -2317,8 +2317,8 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
   };
 });
 
-// Tüm masayı iptal et - hiçbir kayıt tutmadan, sanki hiç açılmamış gibi
-ipcMain.handle('cancel-entire-table-order', async (event, orderId) => {
+// Tüm masayı iptal et - tek grup iptal kaydı Firebase'e yazılır, sonra sipariş silinir
+ipcMain.handle('cancel-entire-table-order', async (event, orderId, cancelReason = '') => {
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
     return { success: false, error: 'Sipariş bulunamadı' };
@@ -2330,12 +2330,47 @@ ipcMain.handle('cancel-entire-table-order', async (event, orderId) => {
 
   const tableId = order.table_id;
 
-  // Tüm sipariş item'larını bul ve sil
+  // Tüm sipariş item'larını bul
   const orderItems = db.tableOrderItems.filter(oi => oi.order_id === orderId);
+
+  // Firebase'e tek grup iptal kaydı ekle (admin dashboard'da ayrı ayrı değil, bir grup olarak görünsün)
+  if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp && orderItems.length > 0) {
+    try {
+      const now = new Date();
+      const cancelDate = now.toLocaleDateString('tr-TR');
+      const cancelTime = getFormattedTime(now);
+      const items_array = orderItems.map(oi => ({
+        product_name: oi.product_name,
+        quantity: oi.quantity,
+        price: oi.price,
+        isGift: oi.isGift || false
+      }));
+      const total_amount = orderItems.reduce((s, oi) => s + (oi.isGift ? 0 : oi.price * oi.quantity), 0);
+      const cancelRef = firebaseCollection(firestore, 'cancels');
+      await firebaseAddDoc(cancelRef, {
+        is_group: true,
+        order_id: order.id,
+        table_id: order.table_id,
+        table_name: order.table_name,
+        table_type: order.table_type,
+        cancel_reason: cancelReason || '',
+        cancel_date: cancelDate,
+        cancel_time: cancelTime,
+        items_array,
+        total_amount,
+        source: 'desktop',
+        staff_name: null,
+        order_staff_name: order.staff_name || null,
+        created_at: firebaseServerTimestamp()
+      });
+      console.log('✅ Tüm masa iptali (grup) Firebase\'e kaydedildi');
+    } catch (err) {
+      console.error('❌ Tüm masa iptal kaydı Firebase\'e yazılamadı:', err);
+    }
+  }
   
   // Stok iadesi yapma - hiçbir şey değişmeyecek
   // Fiş yazdırma - hiçbir şey yazdırılmayacak
-  // Firebase kaydı - hiçbir kayıt tutulmayacak
   
   // Sadece siparişi ve item'ları sil
   const orderIndex = db.tableOrders.findIndex(o => o.id === orderId);
@@ -9147,12 +9182,23 @@ function generateMobileHTML(serverURL) {
       }
       
       // Ürün ismini seçeneğe göre güncelle
-      // Eğer Menengiç Kahve ise "Sade Menengiç Kahve", "Orta Menengiç Kahve", "Şekerli Menengiç Kahve"
-      // Eğer Türk Kahvesi ise "Sade Türk Kahvesi", "Orta Türk Kahvesi", "Şekerli Türk Kahvesi"
-      const originalName = pendingTurkishCoffeeProduct.name.toLowerCase();
-      const isMenengic = originalName.includes('menengiç kahve') || originalName.includes('menengic kahve');
+      // Özel prefix'leri koru (Double, Triple vb.)
+      // "Double Türk Kahvesi" -> "Double Şekerli Türk Kahvesi"
+      // "Türk Kahvesi" -> "Şekerli Türk Kahvesi"
+      const originalName = pendingTurkishCoffeeProduct.name;
+      const originalNameLower = originalName.toLowerCase();
+      const isMenengic = originalNameLower.includes('menengiç kahve') || originalNameLower.includes('menengic kahve');
       const coffeeType = isMenengic ? 'Menengiç Kahve' : 'Türk Kahvesi';
-      const productName = option + ' ' + coffeeType;
+      
+      // Prefix'i çıkart (Double, Triple, Quad vb.)
+      let prefix = '';
+      const coffeeTypeRegex = new RegExp('(.*?)\\s*' + (isMenengic ? '(menengiç kahve|menengic kahve)' : '(türk kahvesi|turk kahvesi)'), 'i');
+      const match = originalName.match(coffeeTypeRegex);
+      if (match && match[1] && match[1].trim()) {
+        prefix = match[1].trim() + ' ';
+      }
+      
+      const productName = prefix + option + ' ' + coffeeType;
       
       const existing = cart.find(item => item.id === pendingTurkishCoffeeProduct.id && item.name === productName);
       if (existing) {

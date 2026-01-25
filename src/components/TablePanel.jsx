@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
-import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, getDoc } from 'firebase/firestore';
+import { initializeApp, getApp } from 'firebase/app';
+import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
 import TablePartialPaymentModal from './TablePartialPaymentModal';
 import TableTransferModal from './TableTransferModal';
 import OnlineOrderModal from './OnlineOrderModal';
 import OnlineProductManagementModal from './OnlineProductManagementModal';
 import Toast from './Toast';
+import orderSound from '../sound/order.mp3';
 
 const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [selectedType, setSelectedType] = useState('inside'); // 'inside', 'outside', or 'online'
@@ -42,8 +43,16 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [showPaymentConfirmModal, setShowPaymentConfirmModal] = useState(false);
   const [orderToMarkAsPaid, setOrderToMarkAsPaid] = useState(null);
   const [showOnlineProductManagement, setShowOnlineProductManagement] = useState(false);
+  const [showPaidOrders, setShowPaidOrders] = useState(false);
+  const [paidOrders, setPaidOrders] = useState([]);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [orderToDelete, setOrderToDelete] = useState(null);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isOnlineActive, setIsOnlineActive] = useState(false);
   const [loadingOnlineStatus, setLoadingOnlineStatus] = useState(false);
+  const [showSoundModal, setShowSoundModal] = useState(false);
+  const [soundMuted, setSoundMuted] = useState(false);
+  const [soundVolume, setSoundVolume] = useState(100);
   const selectedTypeRef = useRef(selectedType);
 
   const showToast = (message, type = 'info') => {
@@ -129,8 +138,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         measurementId: "G-MKPPB635ZZ"
       };
 
-      // Online Firebase'i başlat (sadece bu bölüm için)
-      const app = initializeApp(onlineFirebaseConfig, 'onlineOrders');
+      // Online Firebase'i başlat (App.jsx zaten 'onlineOrders' ile başlatmış olabilir)
+      let app;
+      try { app = getApp('onlineOrders'); } catch { app = initializeApp(onlineFirebaseConfig, 'onlineOrders'); }
       const db = getFirestore(app);
       setOnlineFirebaseApp(app);
       setOnlineFirestore(db);
@@ -138,14 +148,22 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       // Online siparişleri yükle (her zaman dinle, bildirim badge'i için)
       loadOnlineOrders(db);
       
-      // Online aktif durumunu yükle
-      loadOnlineActiveStatus(db);
+      // Online aktif durumunu dinle (manuel + otomatik 12:30/23:30 değişiklikleri anında yansır)
+      const unsubActive = loadOnlineActiveStatus(db);
+      return () => { unsubActive?.(); };
     } catch (error) {
       console.error('Online Firebase başlatılamadı:', error);
       showToast('Online siparişler yüklenemedi', 'error');
     }
-    
   }, []); // Sadece component mount olduğunda çalış
+
+  // Ses ayarları modalı açıldığında localStorage'dan yükle
+  useEffect(() => {
+    if (showSoundModal) {
+      setSoundMuted(localStorage.getItem('onlineOrderSoundMuted') === 'true');
+      setSoundVolume(Math.round((parseFloat(localStorage.getItem('onlineOrderSoundVolume') || '1') * 100)));
+    }
+  }, [showSoundModal]);
 
   // selectedType değiştiğinde ref'i güncelle
   useEffect(() => {
@@ -908,7 +926,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
   };
 
-  // Siparişi Onayla - Onaylandıktan sonra en yakın kuryeye gönder
+  // Siparişi Onayla - Sipariş durumunu onaylandı olarak işaretle
   const confirmMarkAsPaid = async () => {
     if (!orderToMarkAsPaid || selectedType !== 'online') return;
     
@@ -920,66 +938,14 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
 
     try {
-      // Sipariş adresini al
-      const address = orderToMarkAsPaid.customer_address || orderToMarkAsPaid.address || '';
-      
-      if (!address) {
-        showToast('Sipariş adresi bulunamadı', 'error');
-        return;
-      }
-
-      // Adresi koordinatlara çevir
-      // Önce adresin zaten koordinat formatında olup olmadığını kontrol et
-      let coordinates = null;
-      
-      // Koordinat formatı kontrolü: "37.86233187486326, 32.47140102577743" veya benzeri
-      const coordMatch = address.match(/(-?\d+\.?\d*)\s*,\s*(-?\d+\.?\d*)/);
-      if (coordMatch) {
-        // Zaten koordinat formatında
-        coordinates = {
-          lat: parseFloat(coordMatch[1]),
-          lng: parseFloat(coordMatch[2])
-        };
-        console.log('Adres zaten koordinat formatında:', coordinates);
-      } else {
-        // Adresi koordinatlara çevir
-        showToast('Adres konumuna çevriliyor...', 'info');
-        coordinates = await geocodeAddress(address);
-        
-        if (!coordinates) {
-          showToast('Adres koordinatlara çevrilemedi. Lütfen daha sonra tekrar deneyin.', 'error');
-          setShowPaymentConfirmModal(false);
-          setOrderToMarkAsPaid(null);
-          return; // Koordinat bulunamazsa işlemi durdur
-        }
-      }
-      
-      // En yakın kuryeyi bul
-      showToast('En yakın kurye aranıyor...', 'info');
-      const nearestCourier = await findNearestCourier(coordinates.lat, coordinates.lng);
-      
-      if (!nearestCourier) {
-        showToast('Aktif kurye bulunamadı. Lütfen kurye ekleyin veya kuryelerin giriş yaptığından emin olun.', 'error');
-        setShowPaymentConfirmModal(false);
-        setOrderToMarkAsPaid(null);
-        return; // Kurye bulunamazsa işlemi durdur
-      }
-      
-      // Siparişi en yakın kuryeye ata
+      // Siparişi onaylandı olarak işaretle
       const orderRef = doc(onlineFirestore, 'orders', orderToMarkAsPaid.id);
       await updateDoc(orderRef, {
-        status: 'courier',
-        assignedCourierId: nearestCourier,
-        deliveryCoordinates: {
-          latitude: coordinates.lat,
-          longitude: coordinates.lng
-      }
+        status: 'paid' // Sipariş onaylandı olarak işaretlenir
       });
       
-      console.log(`✅ Sipariş en yakın kuryeye atandı: ${nearestCourier}`, orderToMarkAsPaid.id);
-      showToast(`Sipariş ${nearestCourier} kuryesine atandı`, 'success');
-      
-      console.log('Online sipariş kurye sistemine gönderildi:', orderToMarkAsPaid.id);
+      console.log('✅ Online sipariş onaylandı:', orderToMarkAsPaid.id);
+      showToast('Sipariş başarıyla onaylandı', 'success');
       
       // Satış geçmişine kaydet
       if (window.electronAPI && window.electronAPI.createSale) {
@@ -1012,6 +978,14 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           
           if (saleResult.success) {
             console.log('✅ Online satış geçmişe kaydedildi:', saleResult.saleId);
+            // Sale ID'yi order'a kaydet (sipariş silinirken satış kaydını da silmek için)
+            try {
+              await updateDoc(orderRef, {
+                sale_id: saleResult.saleId
+              });
+            } catch (err) {
+              console.warn('Sale ID order\'a kaydedilemedi:', err);
+            }
           } else {
             console.error('❌ Satış geçmişe kaydedilemedi:', saleResult.error);
             showToast('Satış geçmişe kaydedilemedi: ' + (saleResult.error || 'Bilinmeyen hata'), 'error');
@@ -1022,7 +996,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         }
       }
       
-      showToast('Sipariş kurye sistemine gönderildi', 'success');
+      // Toast mesajı zaten yukarıda gösterildi
       
       // Modal'ları kapat
       setShowPaymentConfirmModal(false);
@@ -1050,21 +1024,21 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     setShowCancelConfirmModal(true);
   };
 
-  // Online aktif durumunu yükle
-  const loadOnlineActiveStatus = async (db) => {
+  // Online aktif durumunu yükle ve dinle (otomatik 12:30/23:30 ve manuel değişiklikler için)
+  const loadOnlineActiveStatus = (db) => {
     try {
       const activeRef = doc(db, 'active', 'dGRsJ5V5lgHcpRMXwDm2');
-      const activeDoc = await getDoc(activeRef);
-      
-      if (activeDoc.exists()) {
-        const data = activeDoc.data();
-        setIsOnlineActive(data.is_active === true);
-      } else {
+      return onSnapshot(activeRef, (snap) => {
+        if (snap.exists()) setIsOnlineActive(snap.data().is_active === true);
+        else setIsOnlineActive(false);
+      }, (err) => {
+        console.error('Online aktif durumu dinlenirken hata:', err);
         setIsOnlineActive(false);
-      }
+      });
     } catch (error) {
       console.error('Online aktif durumu yüklenemedi:', error);
       setIsOnlineActive(false);
+      return () => {};
     }
   };
 
@@ -1268,8 +1242,8 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       {/* Online Siparişler - Kart Görünümü */}
       {selectedType === 'online' ? (
         <div className="space-y-4">
-          {/* Online Ürün Yönetimi Butonu */}
-          <div className="flex justify-end mb-4">
+          {/* Online Ürün Yönetimi ve Alınmış Ödemeler Butonları */}
+          <div className="flex justify-end mb-4 gap-3">
             <button
               onClick={() => setShowOnlineProductManagement(true)}
               className="px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
@@ -1278,6 +1252,73 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
               </svg>
               <span>Online Ürün Yönetimi</span>
+            </button>
+            
+            <button
+              onClick={async () => {
+                setShowPaidOrders(true);
+                // Tüm paid siparişleri yükle (zaman filtresi kaldırıldı - en son 50 sipariş)
+                if (onlineFirestore) {
+                  try {
+                    const ordersRef = collection(onlineFirestore, 'orders');
+                    // Sadece status filtresi ile çek (composite index gerektirmez)
+                    const q = query(
+                      ordersRef,
+                      where('status', '==', 'paid')
+                    );
+                    const snapshot = await getDocs(q);
+                    console.log('📦 Toplam paid sipariş sayısı:', snapshot.docs.length);
+                    
+                    // Tüm paid siparişleri al, tarihe göre sırala (en yeni önce)
+                    const orders = snapshot.docs
+                      .map(doc => {
+                        const data = doc.data();
+                        console.log('📄 Sipariş:', doc.id, data);
+                        return {
+                          id: doc.id,
+                          ...data
+                        };
+                      })
+                      .sort((a, b) => {
+                        // createdAt yoksa en alta at
+                        if (!a.createdAt && !b.createdAt) return 0;
+                        if (!a.createdAt) return 1;
+                        if (!b.createdAt) return -1;
+                        
+                        const dateA = a.createdAt.toDate ? a.createdAt.toDate() : new Date(a.createdAt);
+                        const dateB = b.createdAt.toDate ? b.createdAt.toDate() : new Date(b.createdAt);
+                        return dateB - dateA; // En yeni önce
+                      })
+                      .slice(0, 50); // En son 50 sipariş
+                    
+                    console.log('✅ Gösterilecek sipariş sayısı:', orders.length);
+                    setPaidOrders(orders);
+                    
+                    if (orders.length === 0) {
+                      showToast('Henüz onaylanmış sipariş yok', 'info');
+                    }
+                  } catch (error) {
+                    console.error('Paid siparişler yüklenirken hata:', error);
+                    showToast('Siparişler yüklenemedi: ' + error.message, 'error');
+                  }
+                }
+              }}
+              className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>Alınmış Ödemeler</span>
+            </button>
+
+            <button
+              onClick={() => setShowSoundModal(true)}
+              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 2.337-1.707 2.707L5.586 15z" />
+              </svg>
+              <span>Ses Ayarları</span>
             </button>
           </div>
 
@@ -1303,6 +1344,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                       ? 'Müşteriler online sipariş verebilir' 
                       : 'Online siparişler şu anda kapalı'}
                   </p>
+                  <p className="text-xs text-gray-400 mt-1">Otomatik: 12:30 açılış, 23:30 kapanış</p>
                 </div>
               </div>
               <button
@@ -1374,6 +1416,12 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                           <span className="font-medium">{order.formattedDate}</span>
                           <span className="text-slate-300">•</span>
                           <span>{order.formattedTime}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-slate-600 ml-12 mt-1">
+                          <svg className="w-4 h-4 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                          </svg>
+                          <span className="font-medium truncate">{order.customer_phone || order.phone || '-'}</span>
                         </div>
                       </div>
                       {order.status === 'pending' && (
@@ -1695,7 +1743,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             <div className="text-center mb-8">
               <h3 className="text-2xl font-bold text-gray-900 mb-3">Siparişi Onayla</h3>
               <p className="text-gray-600 leading-relaxed mb-4">
-                Bu online siparişi onaylayıp kurye sistemine göndermek istediğinizden <span className="font-semibold text-gray-900">emin misiniz?</span>
+                Bu online siparişi onaylamak istediğinizden <span className="font-semibold text-gray-900">emin misiniz?</span>
               </p>
               <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
                 <div className="space-y-2">
@@ -1739,6 +1787,188 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         <OnlineProductManagementModal
           onClose={() => setShowOnlineProductManagement(false)}
         />
+      )}
+
+      {/* Ses Ayarları Modal */}
+      {showSoundModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setShowSoundModal(false)}>
+          <div className="bg-white rounded-3xl shadow-2xl max-w-md w-full overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-amber-500 to-orange-600 px-6 py-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 2.337-1.707 2.707L5.586 15z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-xl font-bold text-white">Ses Ayarları</h2>
+                  <p className="text-sm text-amber-100">Online sipariş bildirim sesi</p>
+                </div>
+              </div>
+              <button onClick={() => setShowSoundModal(false)} className="w-10 h-10 bg-white/20 hover:bg-white/30 rounded-xl flex items-center justify-center transition-all text-white">
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <div className="p-6 space-y-6">
+              {/* Online sipariş sesi: Açık / Kapalı (switch) */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-semibold text-gray-800">Online sipariş sesi</p>
+                  <p className="text-sm text-gray-500">{soundMuted ? 'Kapalı' : 'Açık'}</p>
+                </div>
+                <button
+                  role="switch"
+                  aria-checked={!soundMuted}
+                  onClick={() => {
+                    const next = !soundMuted;
+                    setSoundMuted(next);
+                    localStorage.setItem('onlineOrderSoundMuted', next ? 'true' : 'false');
+                  }}
+                  className={`relative inline-flex h-10 w-20 shrink-0 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-amber-400 focus:ring-offset-2 ${
+                    soundMuted ? 'bg-gray-300' : 'bg-gradient-to-r from-amber-500 to-orange-500'
+                  }`}
+                >
+                  <span className={`inline-block h-8 w-8 transform rounded-full bg-white shadow transition-transform duration-200 ${soundMuted ? 'translate-x-1' : 'translate-x-12'}`} />
+                </button>
+              </div>
+              {/* Ses yüksekliği */}
+              <div>
+                <div className="flex justify-between mb-2">
+                  <label className="font-semibold text-gray-800">Ses yüksekliği</label>
+                  <span className="text-sm font-medium text-amber-600">{soundVolume}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={soundVolume}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    setSoundVolume(v);
+                    localStorage.setItem('onlineOrderSoundVolume', (v / 100).toFixed(2));
+                  }}
+                  className="w-full h-2.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                />
+              </div>
+              {/* Oynat butonu */}
+              <button
+                onClick={() => {
+                  const a = new Audio(orderSound);
+                  a.volume = Math.max(0, Math.min(1, soundVolume / 100));
+                  a.play().catch(() => {});
+                }}
+                className="w-full py-3.5 bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white font-semibold rounded-xl shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M8 5v14l11-7z" />
+                </svg>
+                Oynat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Alınmış Ödemeler Modal */}
+      {showPaidOrders && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-green-600 to-emerald-600 px-8 py-6 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
+                  <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <div>
+                  <h2 className="text-2xl font-bold text-white">Alınmış Ödemeler</h2>
+                  <p className="text-sm text-green-100">Onaylanmış siparişler (en son 50 sipariş)</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowPaidOrders(false)}
+                className="w-10 h-10 bg-white/20 hover:bg-white/30 rounded-xl flex items-center justify-center transition-all text-white"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {paidOrders.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+                  <svg className="w-20 h-20 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+                  </svg>
+                  <p className="text-xl font-semibold">Henüz onaylanmış sipariş yok</p>
+                  <p className="text-sm mt-2">Onaylanmış sipariş bulunamadı</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {paidOrders.map((order) => (
+                    <div key={order.id} className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-6 border-2 border-green-200 hover:border-green-300 transition-all">
+                      <div className="flex items-start justify-between mb-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <h3 className="text-xl font-bold text-gray-900">{order.customer_name || order.name || 'İsimsiz Müşteri'}</h3>
+                            <span className="px-3 py-1 bg-green-600 text-white text-xs font-bold rounded-full">ONAYLANDI</span>
+                          </div>
+                          <p className="text-sm text-gray-600 mb-1">
+                            <span className="font-semibold">Tel:</span> {order.customer_phone || order.phone || '-'}
+                          </p>
+                          <p className="text-sm text-gray-600 mb-1">
+                            <span className="font-semibold">Adres:</span> {order.customer_address || order.address || '-'}
+                          </p>
+                          <p className="text-sm text-gray-500">
+                            {order.createdAt?.toDate ? new Date(order.createdAt.toDate()).toLocaleString('tr-TR') : '-'}
+                          </p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-2xl font-bold text-green-700">₺{(order.total_amount || order.total || 0).toFixed(2)}</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {order.paymentMethod === 'card' ? 'Kart' : order.paymentMethod === 'cash' ? 'Nakit' : 'Diğer'}
+                          </p>
+                        </div>
+                      </div>
+                      
+                      {/* Ürünler */}
+                      {order.items && order.items.length > 0 && (
+                        <div className="mb-4 bg-white/60 rounded-lg p-3">
+                          <p className="text-xs font-semibold text-gray-600 mb-2">Sipariş İçeriği:</p>
+                          <div className="space-y-1">
+                            {order.items.map((item, idx) => (
+                              <div key={idx} className="flex justify-between text-sm">
+                                <span className="text-gray-700">{item.name || item.product_name} x{item.quantity}</span>
+                                <span className="font-semibold text-gray-900">₺{((item.price || 0) * (item.quantity || 1)).toFixed(2)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Sil Butonu */}
+                      <button
+                        onClick={() => {
+                          setOrderToDelete(order);
+                          setShowDeleteConfirm(true);
+                        }}
+                        className="w-full mt-4 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-lg transition-all flex items-center justify-center gap-2 hover:shadow-lg transform hover:scale-[1.02] active:scale-95"
+                      >
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                        Siparişi Sil
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* İptal Onay Modal - Modern ve Profesyonel */}
@@ -1789,6 +2019,138 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
                 İptal Et
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Sipariş Silme Onay Modal - Modern, Profesyonel ve Kurumsal */}
+      {showDeleteConfirm && orderToDelete && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-[3000] animate-fade-in px-4">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl transform animate-scale-in relative overflow-hidden border border-gray-100">
+            {/* Üst gradient çizgi - Tehlike rengi */}
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-500 via-rose-500 to-red-500"></div>
+            
+            {/* Icon ve Başlık */}
+            <div className="pt-10 pb-6 px-8 text-center">
+              {/* Uyarı İkonu */}
+              <div className="flex items-center justify-center mb-6">
+                <div className="w-20 h-20 bg-gradient-to-br from-red-50 to-rose-100 rounded-2xl flex items-center justify-center border-2 border-red-200 shadow-lg">
+                  <svg className="w-10 h-10 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+              </div>
+
+              <h3 className="text-2xl font-bold text-gray-900 mb-3 tracking-tight">
+                Siparişi Kalıcı Olarak Sil
+              </h3>
+              
+              <p className="text-sm text-gray-600 leading-relaxed mb-6">
+                <span className="font-semibold text-gray-900">{orderToDelete.customer_name || orderToDelete.name || 'Bu müşteri'}</span> adlı müşterinin siparişini <span className="font-semibold text-red-600">kalıcı olarak silmek</span> istediğinize emin misiniz?
+              </p>
+
+              {/* Sipariş Özeti Kartı */}
+              <div className="bg-gradient-to-br from-red-50 to-rose-50 rounded-xl p-5 border-2 border-red-200 mb-6">
+                <div className="space-y-2.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-semibold text-gray-700">Müşteri Adı:</span>
+                    <span className="text-sm font-bold text-gray-900">{orderToDelete.customer_name || orderToDelete.name || 'İsimsiz'}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-semibold text-gray-700">Telefon:</span>
+                    <span className="text-sm font-medium text-gray-800">{orderToDelete.customer_phone || orderToDelete.phone || '-'}</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm font-semibold text-gray-700">Adres:</span>
+                    <span className="text-sm font-medium text-gray-800 text-right max-w-[250px] truncate" title={orderToDelete.customer_address || orderToDelete.address || '-'}>
+                      {orderToDelete.customer_address || orderToDelete.address || '-'}
+                    </span>
+                  </div>
+                  <div className="h-px bg-red-200 my-2"></div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-base font-semibold text-gray-900">Toplam Tutar:</span>
+                    <span className="text-xl font-bold text-red-600">₺{(orderToDelete.total_amount || orderToDelete.total || 0).toFixed(2)}</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Uyarı Mesajı */}
+              <div className="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4 mb-6">
+                <div className="flex items-start gap-3">
+                  <svg className="w-5 h-5 text-yellow-600 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                  <p className="text-xs text-yellow-800 font-semibold leading-relaxed text-left">
+                    <span className="font-bold block mb-1">⚠️ Dikkat!</span>
+                    Bu işlem geri alınamaz. Sipariş veritabanından kalıcı olarak silinecek ve bu işlem geri döndürülemeyecektir.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Butonlar */}
+            <div className="px-8 pb-8 flex items-center gap-4 border-t border-gray-100 pt-6">
+              <button
+                onClick={() => {
+                  setShowDeleteConfirm(false);
+                  setOrderToDelete(null);
+                }}
+                disabled={isDeleting}
+                className="flex-1 py-3.5 bg-gradient-to-r from-gray-100 to-gray-200 hover:from-gray-200 hover:to-gray-300 rounded-xl text-gray-700 hover:text-gray-900 font-bold text-base transition-all duration-300 shadow-md hover:shadow-lg transform hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Vazgeç
+              </button>
+              <button
+                onClick={async () => {
+                  setIsDeleting(true);
+                  try {
+                    // 1. Önce satış kaydını sil (eğer varsa)
+                    if (orderToDelete.sale_id && window.electronAPI && window.electronAPI.deleteSale) {
+                      try {
+                        const deleteResult = await window.electronAPI.deleteSale(orderToDelete.sale_id);
+                        if (deleteResult.success) {
+                          console.log('✅ Satış kaydı silindi:', orderToDelete.sale_id);
+                        }
+                      } catch (err) {
+                        console.warn('Satış kaydı silinirken hata:', err);
+                      }
+                    }
+                    
+                    // 2. Sonra siparişi sil
+                    if (onlineFirestore) {
+                      await deleteDoc(doc(onlineFirestore, 'orders', orderToDelete.id));
+                      setPaidOrders(prev => prev.filter(o => o.id !== orderToDelete.id));
+                      showToast('Sipariş ve satış kaydı başarıyla silindi', 'success');
+                      setShowDeleteConfirm(false);
+                      setOrderToDelete(null);
+                    }
+                  } catch (error) {
+                    console.error('Sipariş silinirken hata:', error);
+                    showToast('Sipariş silinemedi: ' + error.message, 'error');
+                  } finally {
+                    setIsDeleting(false);
+                  }
+                }}
+                disabled={isDeleting}
+                className="flex-1 py-3.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 rounded-xl text-white font-bold text-base transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isDeleting ? (
+                  <>
+                    <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    <span>Siliniyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                    <span>Evet, Sil</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

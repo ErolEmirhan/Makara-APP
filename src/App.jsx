@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { initializeApp, getApp } from 'firebase/app';
+import { getFirestore, collection, query, where, onSnapshot, doc, setDoc } from 'firebase/firestore';
+import orderSound from './sound/order.mp3';
 import Navbar from './components/Navbar';
 import CategoryPanel from './components/CategoryPanel';
 import TablePanel from './components/TablePanel';
@@ -90,6 +93,93 @@ function App() {
         return cleanup;
       }
     }
+  }, []);
+
+  // Online sipariş düştüğünde ses çal (hangi ekranda olursak olalım)
+  useEffect(() => {
+    const onlineFirebaseConfig = {
+      apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
+      authDomain: "makaraonline-5464e.firebaseapp.com",
+      projectId: "makaraonline-5464e",
+      storageBucket: "makaraonline-5464e.firebasestorage.app",
+      messagingSenderId: "1041589485836",
+      appId: "1:1041589485836:web:06119973a19da0a14f0929",
+      measurementId: "G-MKPPB635ZZ"
+    };
+    let unsubscribe;
+    try {
+      let app;
+      try { app = getApp('onlineOrders'); } catch { app = initializeApp(onlineFirebaseConfig, 'onlineOrders'); }
+      const db = getFirestore(app);
+      const ordersRef = collection(db, 'orders');
+      const q = query(ordersRef, where('status', '==', 'pending'));
+      const prevIdsRef = { current: new Set() };
+      let isFirstLoad = true;
+      unsubscribe = onSnapshot(q, (snapshot) => {
+        const ids = new Set();
+        snapshot.forEach((d) => ids.add(d.id));
+        if (isFirstLoad) {
+          isFirstLoad = false;
+          prevIdsRef.current = ids;
+          return;
+        }
+        const added = [...ids].filter((id) => !prevIdsRef.current.has(id));
+        if (added.length > 0) {
+          if (localStorage.getItem('onlineOrderSoundMuted') === 'true') return;
+          try {
+            const a = new Audio(orderSound);
+            a.volume = Math.max(0, Math.min(1, parseFloat(localStorage.getItem('onlineOrderSoundVolume') || '1')));
+            a.play().catch(() => {});
+          } catch (_) {}
+        }
+        prevIdsRef.current = ids;
+      });
+    } catch (e) {
+      console.error('Online sipariş sesi listener başlatılamadı:', e);
+    }
+    return () => { if (unsubscribe) unsubscribe(); };
+  }, []);
+
+  // Online sipariş: her gün 12:30 aktif, 23:30 pasif (otomatik)
+  useEffect(() => {
+    const onlineFirebaseConfig = {
+      apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
+      authDomain: "makaraonline-5464e.firebaseapp.com",
+      projectId: "makaraonline-5464e",
+      storageBucket: "makaraonline-5464e.firebasestorage.app",
+      messagingSenderId: "1041589485836",
+      appId: "1:1041589485836:web:06119973a19da0a14f0929",
+      measurementId: "G-MKPPB635ZZ"
+    };
+    let activeRef;
+    try {
+      let app;
+      try { app = getApp('onlineOrders'); } catch { app = initializeApp(onlineFirebaseConfig, 'onlineOrders'); }
+      const db = getFirestore(app);
+      activeRef = doc(db, 'active', 'dGRsJ5V5lgHcpRMXwDm2');
+    } catch (e) {
+      console.error('Online otomatik saat başlatılamadı:', e);
+      return;
+    }
+    const run = () => {
+      const now = new Date();
+      const today = now.getFullYear() + '-' + (now.getMonth() + 1).toString().padStart(2, '0') + '-' + now.getDate().toString().padStart(2, '0');
+      const h = now.getHours();
+      const m = now.getMinutes();
+      if (h === 12 && m === 30 && localStorage.getItem('lastAutoOnlineActivate') !== today) {
+        setDoc(activeRef, { is_active: true }, { merge: true }).then(() => {
+          localStorage.setItem('lastAutoOnlineActivate', today);
+        }).catch((e) => console.error('12:30 aktif yapılamadı:', e));
+      }
+      if (h === 23 && m === 30 && localStorage.getItem('lastAutoOnlinePassive') !== today) {
+        setDoc(activeRef, { is_active: false }, { merge: true }).then(() => {
+          localStorage.setItem('lastAutoOnlinePassive', today);
+        }).catch((e) => console.error('23:30 pasif yapılamadı:', e));
+      }
+    };
+    run();
+    const id = setInterval(run, 60 * 1000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {

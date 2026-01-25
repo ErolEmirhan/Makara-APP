@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelTableOrderItem: (itemId, cancelQuantity, cancelReason) => ipcRenderer.invoke('cancel-table-order-item', itemId, cancelQuantity, cancelReason),
   cancelTableOrderItemsBulk: (itemsToCancel, cancelReason) => ipcRenderer.invoke('cancel-table-order-items-bulk', itemsToCancel, cancelReason),
   previewCancelReceipt: (itemId, cancelQuantity) => ipcRenderer.invoke('preview-cancel-receipt', itemId, cancelQuantity),
-  cancelEntireTableOrder: (orderId) => ipcRenderer.invoke('cancel-entire-table-order', orderId),
+  cancelEntireTableOrder: (orderId, cancelReason) => ipcRenderer.invoke('cancel-entire-table-order', orderId, cancelReason),
   completeTableOrder: (orderId, paymentMethod) => ipcRenderer.invoke('complete-table-order', orderId, paymentMethod),
   transferTableOrder: (sourceTableId, targetTableId) => ipcRenderer.invoke('transfer-table-order', sourceTableId, targetTableId),
   // Settings API

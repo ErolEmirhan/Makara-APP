@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
 import { initializeApp, getApp } from 'firebase/app';
-import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
 import TablePartialPaymentModal from './TablePartialPaymentModal';
 import TableTransferModal from './TableTransferModal';
@@ -826,6 +826,32 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     setShowPaymentConfirmModal(true);
   };
 
+  // Hazırlanıyor durumunu toggle et
+  const handleTogglePreparing = async (order) => {
+    if (!order || selectedType !== 'online') return;
+    
+    if (!onlineFirestore) {
+      showToast('Firebase bağlantısı bulunamadı', 'error');
+      return;
+    }
+
+    try {
+      const orderRef = doc(onlineFirestore, 'orders', order.id);
+      const currentPreparingStatus = order.isPreparing || false;
+      const newPreparingStatus = !currentPreparingStatus;
+      
+      await updateDoc(orderRef, {
+        isPreparing: newPreparingStatus
+      });
+      
+      console.log(`✅ Sipariş hazırlanma durumu güncellendi: ${order.id} -> ${newPreparingStatus}`);
+      showToast(newPreparingStatus ? 'Sipariş hazırlanıyor olarak işaretlendi' : 'Hazırlanıyor durumu kaldırıldı', 'success');
+    } catch (error) {
+      console.error('Hazırlanıyor durumu güncellenirken hata:', error);
+      showToast('Durum güncellenemedi: ' + error.message, 'error');
+    }
+  };
+
   // İki koordinat arasındaki mesafeyi hesapla (Haversine formülü - km cinsinden)
   const calculateDistance = (lat1, lon1, lat2, lon2) => {
     const R = 6371; // Dünya yarıçapı (km)
@@ -938,14 +964,16 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
 
     try {
-      // Siparişi onaylandı olarak işaretle
+      // Siparişi onaylandı olarak işaretle ve onaylama bilgilerini kaydet
       const orderRef = doc(onlineFirestore, 'orders', orderToMarkAsPaid.id);
       await updateDoc(orderRef, {
-        status: 'paid' // Sipariş onaylandı olarak işaretlenir
+        status: 'paid', // Sipariş onaylandı olarak işaretlenir
+        confirmedAt: serverTimestamp(), // Onaylama zamanı
+        isConfirmed: true // Onaylandı durumu
       });
       
-      console.log('✅ Online sipariş onaylandı:', orderToMarkAsPaid.id);
-      showToast('Sipariş başarıyla onaylandı', 'success');
+      console.log('✅ Online sipariş onaylandı ve Firebase\'e kaydedildi:', orderToMarkAsPaid.id);
+      showToast('Sipariş başarıyla onaylandı ve kaydedildi', 'success');
       
       // Satış geçmişine kaydet
       if (window.electronAPI && window.electronAPI.createSale) {
@@ -1068,7 +1096,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
   };
 
-  // İptal işlemini onayla
+  // İptal işlemini onayla - Sadece is_decline: true olarak işaretle
   const confirmCancelOrder = async () => {
     if (!selectedOrder || selectedType !== 'online') return;
     
@@ -1079,14 +1107,16 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
 
     try {
-      // Firebase'de sipariş status'unu 'cancelled' olarak güncelle
       const orderRef = doc(onlineFirestore, 'orders', selectedOrder.id);
+      
+      // is_decline: true olarak işaretle
       await updateDoc(orderRef, {
-        status: 'cancelled'
+        is_decline: true,
+        declinedAt: serverTimestamp()
       });
       
-      console.log('Online sipariş iptal edildi:', selectedOrder.id);
-      showToast('Sipariş iptal edildi', 'success');
+      console.log('✅ Online sipariş iptal edildi ve is_decline: true olarak kaydedildi:', selectedOrder.id);
+      showToast('Sipariş iptal edildi ve kaydedildi', 'success');
       
       // Modal'ları kapat
       setShowCancelConfirmModal(false);
@@ -1424,16 +1454,26 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                           <span className="font-medium truncate">{order.customer_phone || order.phone || '-'}</span>
                         </div>
                       </div>
-                      {order.status === 'pending' && (
-                        <span className="px-3 py-1.5 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-700 rounded-xl text-xs font-semibold border border-amber-200/60 shadow-sm whitespace-nowrap">
-                          Beklemede
-                        </span>
-                      )}
-                      {order.status === 'completed' && (
-                        <span className="px-3 py-1.5 bg-gradient-to-r from-emerald-50 to-green-50 text-emerald-700 rounded-xl text-xs font-semibold border border-emerald-200/60 shadow-sm whitespace-nowrap">
-                          Tamamlandı
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {order.status === 'pending' && (
+                          <span className="px-3 py-1.5 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-700 rounded-xl text-xs font-semibold border border-amber-200/60 shadow-sm whitespace-nowrap">
+                            Beklemede
+                          </span>
+                        )}
+                        {order.status === 'completed' && (
+                          <span className="px-3 py-1.5 bg-gradient-to-r from-emerald-50 to-green-50 text-emerald-700 rounded-xl text-xs font-semibold border border-emerald-200/60 shadow-sm whitespace-nowrap">
+                            Tamamlandı
+                          </span>
+                        )}
+                        {order.isPreparing && (
+                          <span className="px-3 py-1.5 bg-gradient-to-r from-orange-100 to-orange-200 text-orange-700 rounded-xl text-xs font-semibold border border-orange-300 shadow-sm whitespace-nowrap flex items-center gap-1">
+                            <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                            Hazırlanıyor
+                          </span>
+                        )}
+                      </div>
                     </div>
                     
                     {/* Divider */}
@@ -1454,20 +1494,38 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                       </p>
                     </div>
                     
-                    {/* Siparişi Onayla Butonu - Sadece pending siparişler için */}
+                    {/* Siparişi Onayla ve Hazırlanıyor Butonları - Sadece pending siparişler için */}
                     {order.status === 'pending' && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation(); // Kart tıklamasını engelle
-                          handleMarkAsPaid(order);
-                        }}
-                        className="w-full px-4 py-2.5 bg-green-500 hover:bg-green-600 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow border border-green-600"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                        </svg>
-                        <span>Siparişi Onayla</span>
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation(); // Kart tıklamasını engelle
+                            handleMarkAsPaid(order);
+                          }}
+                          className="flex-1 px-4 py-2.5 bg-green-500 hover:bg-green-600 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow border border-green-600"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                          </svg>
+                          <span>Siparişi Onayla</span>
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation(); // Kart tıklamasını engelle
+                            handleTogglePreparing(order);
+                          }}
+                          className={`flex-1 px-4 py-2.5 font-semibold text-xs rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow border ${
+                            order.isPreparing
+                              ? 'bg-orange-500 hover:bg-orange-600 text-white border-orange-600'
+                              : 'bg-orange-100 hover:bg-orange-200 text-orange-700 border-orange-300'
+                          }`}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <span>{order.isPreparing ? 'Hazırlanıyor ✓' : 'Hazırlanıyor'}</span>
+                        </button>
+                      </div>
                     )}
                     
                     {/* Hover indicator */}

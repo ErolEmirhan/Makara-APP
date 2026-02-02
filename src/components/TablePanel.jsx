@@ -228,6 +228,12 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         snapshot.forEach((doc) => {
           const data = doc.data();
           const orderId = doc.id;
+          
+          // İptal edilmiş siparişleri (is_decline: true) filtrele
+          if (data.is_decline === true) {
+            return; // Bu siparişi atla
+          }
+          
           newOrderIds.add(orderId);
           
           // Tarih formatlaması - createdAt timestamp'ini kullan
@@ -661,6 +667,25 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       // Müşteri ismini al
       const customerName = selectedOrder.customer_name || selectedOrder.name || 'İsimsiz Müşteri';
       
+      // İndirim bilgilerini al (firstOrderDiscount vb.)
+      const discountInfo = selectedOrder.firstOrderDiscount || null;
+      
+      // Ara toplam hesapla (indirim öncesi)
+      const subtotal = adisyonItems.reduce((sum, item) => {
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
+      
+      // İndirim tutarını hesapla
+      let discountAmount = 0;
+      let finalTotal = subtotal;
+      
+      if (discountInfo && discountInfo.applied === true) {
+        // İndirim bilgisi varsa kullan
+        discountAmount = discountInfo.discountAmount || 0;
+        finalTotal = discountInfo.finalTotal || (subtotal - discountAmount);
+      }
+      
       const adisyonData = {
         items: adisyonItems,
         tableName: `Online Sipariş Müşteri: ${customerName}`, // Format: "Online Sipariş Müşteri: [İsim]"
@@ -672,7 +697,13 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         // Online sipariş müşteri bilgileri
         customer_name: selectedOrder.customer_name || selectedOrder.name || null,
         customer_phone: selectedOrder.customer_phone || selectedOrder.phone || null,
-        customer_address: selectedOrder.customer_address || selectedOrder.address || null
+        customer_address: selectedOrder.customer_address || selectedOrder.address || null,
+        address_note: selectedOrder.address_note || selectedOrder.addressNote || null,
+        // İndirim bilgileri
+        discountInfo: discountInfo,
+        subtotal: subtotal,
+        discountAmount: discountAmount,
+        finalTotal: finalTotal
       };
 
       try {

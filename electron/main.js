@@ -4841,9 +4841,14 @@ function generateReceiptHTML(receiptData) {
       
       <div class="info">
         ${receiptData.tableName ? (receiptData.tableType === 'online' ? `
-        <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 2px solid #e2e8f0;">
-          <div style="font-size: 9px; font-weight: 700; color: #6366f1; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.8px;">Online Sipariş Müşteri:</div>
-          <div style="font-size: 17px; font-weight: 900; color: #1e293b; font-family: 'Montserrat', sans-serif; line-height: 1.4; letter-spacing: 0.3px;">${receiptData.tableName.replace('Online Sipariş Müşteri: ', '')}</div>
+        <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 2px solid #000;">
+          <div style="font-size: 9px; font-weight: 700; color: #000; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;">ONLINE SİPARİŞ MÜŞTERİ:</div>
+          <div style="font-size: 14px; font-weight: 900; color: #000; font-family: 'Montserrat', sans-serif; line-height: 1.3; margin-bottom: 6px;">${receiptData.tableName.replace('Online Sipariş Müşteri: ', '')}</div>
+          ${receiptData.customer_phone ? `
+          <div style="font-size: 9px; font-weight: 700; color: #000; margin-bottom: 6px;">
+            <span style="font-weight: 900;">Tel:</span> ${receiptData.customer_phone}
+          </div>
+          ` : ''}
         </div>
         ` : `
         <div>
@@ -4851,6 +4856,17 @@ function generateReceiptHTML(receiptData) {
           <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName}</span>
         </div>
         `) : ''}
+        ${receiptData.tableType === 'online' && receiptData.customer_address ? `
+        <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #000;">
+          <div style="font-size: 9px; font-weight: 700; color: #000; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px;">ADRES:</div>
+          <div style="font-size: 9px; font-weight: 900; color: #000; line-height: 1.4; word-wrap: break-word;">${receiptData.customer_address}</div>
+          ${receiptData.address_note ? `
+          <div style="font-size: 8px; font-weight: 700; color: #000; margin-top: 4px; padding-top: 4px; border-top: 1px dashed #666; line-height: 1.3; word-wrap: break-word;">
+            ${receiptData.address_note}
+          </div>
+          ` : ''}
+        </div>
+        ` : ''}
         <div>
           <span>Tarih:</span>
           <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.sale_date || new Date().toLocaleDateString('tr-TR')}</span>
@@ -4889,19 +4905,53 @@ function generateReceiptHTML(receiptData) {
       ` : ''}
 
       <div class="total">
+        ${receiptData.discountInfo && receiptData.discountInfo.applied === true ? `
+        <div style="margin-bottom: 6px; padding-bottom: 6px; border-bottom: 1px dashed #ccc;">
+          <div style="display: flex; justify-content: space-between; font-size: 10px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
+            <span>Ara Toplam:</span>
+            <span>₺${(receiptData.subtotal || receiptData.items.reduce((sum, item) => {
+              if (item.isGift) return sum;
+              return sum + (item.price * item.quantity);
+            }, 0)).toFixed(2)}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; font-size: 10px; color: #dc2626; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif; margin-top: 4px;">
+            <span>İndirim (${receiptData.discountInfo.discountPercent || 0}%):</span>
+            <span>-₺${(receiptData.discountAmount || 0).toFixed(2)}</span>
+          </div>
+          ${receiptData.discountInfo.discountDescription ? `
+          <div style="font-size: 8px; color: #6b7280; font-weight: 700; font-style: italic; font-family: 'Montserrat', sans-serif; margin-top: 2px; text-align: right;">
+            ${receiptData.discountInfo.discountDescription}
+          </div>
+          ` : ''}
+        </div>
+        ` : ''}
         <div>
           <span>TOPLAM:</span>
-          <span>₺${receiptData.items.reduce((sum, item) => {
+          <span>₺${(receiptData.finalTotal !== undefined ? receiptData.finalTotal : receiptData.items.reduce((sum, item) => {
             // İkram edilen ürünleri toplamdan çıkar
             if (item.isGift) return sum;
             return sum + (item.price * item.quantity);
-          }, 0).toFixed(2)}</span>
+          }, 0)).toFixed(2)}</span>
         </div>
         <div style="font-size: 11px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
           <span>Ödeme:</span>
           <span>${receiptData.paymentMethod || 'Nakit'}</span>
         </div>
       </div>
+      
+      ${receiptData.qrCodeDataURL && receiptData.tableType === 'online' ? `
+      <div class="footer" style="text-align: center; margin-top: 15px; padding-top: 15px; border-top: 2px solid #000;">
+        <div style="font-size: 9px; font-weight: 900; font-style: italic; color: #000; margin-bottom: 8px; font-family: 'Montserrat', sans-serif;">
+          ADRES İÇİN QR KOD
+        </div>
+        <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 6px;">
+          <img src="${receiptData.qrCodeDataURL}" alt="QR Code" style="width: 120px; height: 120px; border: 2px solid #000; padding: 4px; background: #fff;" />
+        </div>
+        <div style="font-size: 8px; font-weight: 700; font-style: italic; color: #000; font-family: 'Montserrat', sans-serif; line-height: 1.2;">
+          QR kodu okutarak<br/>adresi Google Maps'te açın
+        </div>
+      </div>
+      ` : ''}
 
     </body>
     </html>
@@ -5317,10 +5367,31 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
         return { success: false, error: 'Kasa yazıcısı ayarlanmamış' };
       }
       
+      // Online sipariş için QR kod oluştur (adres varsa)
+      let qrCodeDataURL = null;
+      if (adisyonData.tableType === 'online' && adisyonData.customer_address) {
+        try {
+          // Google Maps URL oluştur
+          const mapsURL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(adisyonData.customer_address)}`;
+          // QR kod oluştur
+          qrCodeDataURL = await QRCode.toDataURL(mapsURL, {
+            width: 150,
+            margin: 1,
+            color: {
+              dark: '#000000',
+              light: '#FFFFFF'
+            }
+          });
+          console.log('   ✅ QR kod oluşturuldu (Google Maps adres linki)');
+        } catch (qrError) {
+          console.error('   ⚠️ QR kod oluşturulamadı:', qrError);
+        }
+      }
+      
       // Receipt formatında fiyatlı fiş oluştur
       const receiptData = {
         sale_id: null,
-        totalAmount: items.reduce((sum, item) => {
+        totalAmount: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
           if (item.isGift) return sum;
           return sum + (item.price * item.quantity);
         }, 0),
@@ -5331,7 +5402,25 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
         orderNote: adisyonData.orderNote || null,
         tableName: adisyonData.tableName || null,
         tableType: adisyonData.tableType || null,
-        cashierOnly: true
+        cashierOnly: true,
+        // Online sipariş müşteri bilgileri
+        customer_name: adisyonData.customer_name || null,
+        customer_phone: adisyonData.customer_phone || null,
+        customer_address: adisyonData.customer_address || null,
+        address_note: adisyonData.address_note || null,
+        // İndirim bilgileri
+        discountInfo: adisyonData.discountInfo || null,
+        subtotal: adisyonData.subtotal !== undefined ? adisyonData.subtotal : items.reduce((sum, item) => {
+          if (item.isGift) return sum;
+          return sum + (item.price * item.quantity);
+        }, 0),
+        discountAmount: adisyonData.discountAmount || 0,
+        finalTotal: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
+          if (item.isGift) return sum;
+          return sum + (item.price * item.quantity);
+        }, 0),
+        // QR kod (varsa)
+        qrCodeDataURL: qrCodeDataURL
       };
       
       // Kasa yazıcısından fiyatlı fiş yazdır

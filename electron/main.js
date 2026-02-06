@@ -5640,10 +5640,10 @@ async function printAdisyonToPrinter(printerName, printerType, items, adisyonDat
       startPrint();
     }, 3000);
 
-    // Yazdırma işleminin tamamlanmasını bekle (max 10 saniye)
+    // Yazdırma işleminin tamamlanmasını bekle (max 18 saniye - yazıcı kuyruğu için)
     await Promise.race([
       printPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Adisyon yazdırma timeout')), 10000))
+      new Promise((_, reject) => setTimeout(() => reject(new Error('Adisyon yazdırma timeout')), 18000))
     ]);
 
     console.log(`   [printAdisyonToPrinter] Adisyon yazdırma işlemi tamamlandı`);
@@ -5826,14 +5826,28 @@ async function printAdisyonByCategory(items, adisyonData) {
         console.log(`      Kategori sayısı: ${job.categories.length}`);
         console.log(`      Toplam ürün sayısı: ${allItemsWithCategory.length}`);
         
-        await printAdisyonToPrinter(
+        let result = await printAdisyonToPrinter(
           job.printerName,
           job.printerType,
           allItemsWithCategory,
           printerAdisyonData
-        ).catch(err => {
-          console.error(`      ❌ Adisyon yazdırma hatası:`, err);
-        });
+        );
+        if (!result || !result.success) {
+          console.error(`      ❌ Adisyon yazdırma hatası:`, result?.error);
+          // Bir kez yeniden dene (geçici yazıcı/kuyruk hataları için)
+          await new Promise(resolve => setTimeout(resolve, 1200));
+          result = await printAdisyonToPrinter(
+            job.printerName,
+            job.printerType,
+            allItemsWithCategory,
+            printerAdisyonData
+          );
+          if (!result || !result.success) {
+            console.error(`      ❌ Yeniden deneme de başarısız:`, result?.error);
+            throw new Error(`Fiş yazdırılamadı (${job.printerName}): ${result?.error || 'Bilinmeyen hata'}`);
+          }
+          console.log(`      ✅ Yeniden deneme başarılı: "${job.printerName}"`);
+        }
         
         // Yazıcılar arası kısa bekleme
         if (i < printJobs.length - 1) {
@@ -6394,11 +6408,17 @@ function generateMobileHTML(serverURL) {
   <title>MAKARA - Mobil Sipariş</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
+    html {
+      touch-action: manipulation;
+      -ms-touch-action: manipulation;
+    }
     body { 
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
       background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%); 
       min-height: 100vh; 
-      padding: 10px; 
+      padding: 10px;
+      touch-action: manipulation;
+      -ms-touch-action: manipulation;
     }
     .container { 
       max-width: 600px; 
@@ -6720,65 +6740,66 @@ function generateMobileHTML(serverURL) {
       bottom: 0;
       left: 0;
       right: 0;
-      background: white;
-      border-top: 3px solid #a855f7;
-      box-shadow: 0 -8px 30px rgba(0,0,0,0.15);
-      border-radius: 20px 20px 0 0;
-      transform: translateY(calc(100% - 70px));
-      transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      background: #fff;
+      box-shadow: 0 -2px 20px rgba(0,0,0,0.08);
+      border-radius: 16px 16px 0 0;
+      transform: translateY(calc(100% - 56px));
+      transition: transform 0.25s ease;
       z-index: 1000;
-      max-height: 80vh;
+      max-height: 75vh;
     }
     .cart.open {
       transform: translateY(0);
     }
     .cart-header {
-      padding: 16px 20px;
-      border-bottom: 2px solid #e5e7eb;
+      padding: 12px 16px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       cursor: pointer;
-      background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
-      border-radius: 20px 20px 0 0;
+      min-height: 56px;
+      border-bottom: 1px solid #f0f0f0;
     }
-    .cart-header-title {
+    .cart-header-left {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 10px;
     }
-    .cart-header-title span:first-child {
-      font-size: 18px;
-      font-weight: 700;
-      color: #1f2937;
-    }
-    .cart-header-title span:last-child {
-      font-size: 14px;
+    .cart-header-badge {
+      font-size: 12px;
       font-weight: 600;
-      color: #6b7280;
-      background: white;
-      padding: 4px 10px;
-      border-radius: 12px;
+      color: #64748b;
+      background: #f1f5f9;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+    .cart-header-total {
+      font-size: 17px;
+      font-weight: 700;
+      color: #0f172a;
+    }
+    .cart-header-total .currency {
+      font-size: 13px;
+      font-weight: 600;
+      color: #64748b;
     }
     .cart-header-icon {
-      width: 44px;
-      height: 44px;
-      border-radius: 12px;
-      background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      background: #f1f5f9;
       display: flex;
       align-items: center;
       justify-content: center;
-      color: white;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);
+      color: #475569;
+      transition: transform 0.2s;
     }
     .cart-header-icon:active {
-      transform: scale(0.95);
-      box-shadow: 0 2px 6px rgba(168, 85, 247, 0.4);
+      transform: scale(0.92);
     }
     .cart-content {
-      padding: 20px;
-      max-height: calc(80vh - 80px);
+      padding: 12px 16px 16px;
+      max-height: calc(75vh - 56px);
       overflow-y: auto;
       display: none;
     }
@@ -6786,75 +6807,137 @@ function generateMobileHTML(serverURL) {
       display: block;
     }
     .cart-content::-webkit-scrollbar {
-      width: 6px;
-    }
-    .cart-content::-webkit-scrollbar-track {
-      background: #f1f1f1;
-      border-radius: 10px;
+      width: 4px;
     }
     .cart-content::-webkit-scrollbar-thumb {
-      background: #a855f7;
-      border-radius: 10px;
+      background: #cbd5e1;
+      border-radius: 4px;
     }
     .cart-items {
-      max-height: 250px;
+      max-height: 200px;
       overflow-y: auto;
-      margin-bottom: 20px;
-      padding-right: 5px;
-    }
-    .cart-items::-webkit-scrollbar {
-      width: 6px;
-    }
-    .cart-items::-webkit-scrollbar-track {
-      background: #f1f1f1;
-      border-radius: 10px;
-    }
-    .cart-items::-webkit-scrollbar-thumb {
-      background: #a855f7;
-      border-radius: 10px;
+      margin-bottom: 12px;
     }
     .cart-item {
       display: flex;
-      justify-content: space-between;
       align-items: center;
-      padding: 14px;
-      margin-bottom: 10px;
-      background: #f9fafb;
-      border: 1px solid #e5e7eb;
-      border-radius: 12px;
-      transition: all 0.3s;
+      justify-content: space-between;
+      padding: 10px 0;
+      border-bottom: 1px solid #f1f5f9;
+      gap: 10px;
     }
-    .cart-item:hover {
-      background: #f3f4f6;
-      border-color: #d1d5db;
+    .cart-item:last-child {
+      border-bottom: none;
     }
-    .cart-item-controls {
+    .cart-item-name {
+      flex: 1;
+      font-size: 14px;
+      font-weight: 600;
+      color: #1e293b;
+      min-width: 0;
+    }
+    .cart-item-meta {
+      font-size: 12px;
+      color: #94a3b8;
+      margin-top: 2px;
+    }
+    .cart-item-right {
       display: flex;
       align-items: center;
-      gap: 8px;
+      gap: 6px;
+      flex-shrink: 0;
     }
-    .qty-btn {
-      width: 36px;
-      height: 36px;
-      border: 2px solid #a855f7;
-      border-radius: 10px;
-      background: white;
-      color: #a855f7;
+    .cart-item-qty {
+      min-width: 28px;
+      text-align: center;
+      font-size: 14px;
       font-weight: 700;
-      cursor: pointer;
+      color: #334155;
+    }
+    .cart-qty-btn {
+      width: 28px;
+      height: 28px;
+      border: none;
+      border-radius: 8px;
+      background: #e2e8f0;
+      color: #475569;
       font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: all 0.3s;
+      line-height: 1;
+      transition: background 0.15s;
     }
-    .qty-btn:hover {
-      background: #a855f7;
-      color: white;
-      transform: scale(1.05);
+    .cart-qty-btn:active {
+      background: #cbd5e1;
     }
-    .qty-btn:active {
-      transform: scale(0.95);
+    .cart-remove-btn {
+      width: 28px;
+      height: 28px;
+      border: none;
+      border-radius: 8px;
+      background: #fee2e2;
+      color: #dc2626;
+      font-size: 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      line-height: 1;
+      transition: background 0.15s;
+    }
+    .cart-remove-btn:active {
+      background: #fecaca;
+    }
+    .cart-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .cart-note-btn {
+      flex: 0 0 auto;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+      background: #fff;
+      color: #475569;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cart-note-btn:active {
+      background: #f8fafc;
+    }
+    .cart-send-btn {
+      flex: 1;
+      padding: 12px 16px;
+      border-radius: 10px;
+      border: none;
+      background: #6366f1;
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: background 0.15s;
+    }
+    .cart-send-btn:active {
+      background: #4f46e5;
+    }
+    .cart-empty {
+      text-align: center;
+      padding: 24px 16px;
+      color: #94a3b8;
+      font-size: 14px;
+      font-weight: 500;
     }
     .gift-btn {
       transition: all 0.3s;
@@ -7835,34 +7918,29 @@ function generateMobileHTML(serverURL) {
   
   <div class="cart" id="cart">
     <div class="cart-header" onclick="toggleCart()">
-      <div class="cart-header-title">
-        <span>Siparişi Gönder</span>
-        <span id="cartItemCount">0 ürün</span>
+      <div class="cart-header-left">
+        <span class="cart-header-badge" id="cartItemCount">0 ürün</span>
+        <span class="cart-header-total"><span id="cartTotal">0.00</span> <span class="currency">₺</span></span>
       </div>
-      <div style="display: flex; align-items: center; gap: 12px;">
-        <span style="font-size: 20px; font-weight: 800; background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;"><span id="cartTotal">0.00</span> ₺</span>
-        <div class="cart-header-icon" id="cartToggleIcon">
-          <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="3">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 15.75l7.5-7.5 7.5 7.5"/>
-          </svg>
-        </div>
+      <div class="cart-header-icon" id="cartToggleIcon">
+        <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5"/>
+        </svg>
       </div>
     </div>
     <div class="cart-content">
       <div class="cart-items" id="cartItems"></div>
-      <div style="display: flex; gap: 10px; margin-top: 20px;">
-        <button onclick="showNoteModal()" style="flex: 0 0 auto; padding: 12px 16px; background: #f3f4f6; color: #374151; border: 2px solid #d1d5db; border-radius: 12px; font-size: 14px; font-weight: 700; cursor: pointer; transition: all 0.3s; display: flex; align-items: center; gap: 6px;" onmouseover="this.style.background='#e5e7eb';" onmouseout="this.style.background='#f3f4f6';">
-          <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0115.75 21H5.25A2.25 2.25 0 013 18.75V8.25A2.25 2.25 0 015.25 6H10"/>
-          </svg>
-          <span id="noteButtonText">Not Ekle</span>
+      <div class="cart-actions">
+        <button type="button" class="cart-note-btn" onclick="showNoteModal()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
+          <span id="noteButtonText">Not</span>
         </button>
-        <button class="send-btn" onclick="sendOrder()" style="flex: 1; margin-top: 0;">
-          <span style="display: inline-flex; align-items: center; gap: 8px;">
-            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+        <button type="button" id="sendOrderBtn" class="cart-send-btn" onclick="sendOrder()">
+          <span id="sendOrderBtnContent" style="display: inline-flex; align-items: center; gap: 6px;">
+            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M6 12L3.269 3.126A59.768 59.768 0 0121.485 12 59.77 59.77 0 013.27 20.876L5.999 12zm0 0h7.5"/>
             </svg>
-            Siparişi Gönder
+            Gönder
           </span>
         </button>
       </div>
@@ -7904,7 +7982,13 @@ function generateMobileHTML(serverURL) {
         </div>
       </div>
       <div style="padding: 20px;">
-        <textarea id="noteInput" placeholder="Sipariş notu yazın..." style="width: 100%; min-height: 120px; padding: 12px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 15px; font-family: inherit; resize: vertical; outline: none;" onfocus="this.style.borderColor='#a855f7';" onblur="this.style.borderColor='#e5e7eb';"></textarea>
+        <p style="margin: 0 0 8px 0; font-size: 13px; font-weight: 600; color: #6b7280;">Hızlı notlar</p>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
+          <button type="button" onclick="appendQuickNote('Çay tatlıyla birlikte')" style="padding: 8px 14px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;">Çay tatlıyla birlikte</button>
+          <button type="button" onclick="appendQuickNote('Soğuk su')" style="padding: 8px 14px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;">Soğuk su</button>
+          <button type="button" onclick="appendQuickNote('Dışardan su')" style="padding: 8px 14px; background: #f3e8ff; color: #7c3aed; border: 1px solid #c4b5fd; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.2s;">Dışardan su</button>
+        </div>
+        <textarea id="noteInput" placeholder="Sipariş notu yazın veya yukarıdan seçin..." style="width: 100%; min-height: 100px; padding: 12px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 15px; font-family: inherit; resize: vertical; outline: none;" onfocus="this.style.borderColor='#a855f7';" onblur="this.style.borderColor='#e5e7eb';"></textarea>
       </div>
       <div style="border-top: 1px solid #e5e7eb; padding: 16px; display: flex; justify-content: flex-end; gap: 12px;">
         <button onclick="hideNoteModal()" style="padding: 12px 24px; background: #f3f4f6; color: #374151; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s;" onmouseover="this.style.background='#e5e7eb';" onmouseout="this.style.background='#f3f4f6';">İptal</button>
@@ -9369,23 +9453,20 @@ function generateMobileHTML(serverURL) {
       const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
       
       if (cart.length === 0) {
-        itemsDiv.innerHTML = '<div style="text-align: center; padding: 40px 20px; color: #9ca3af; font-size: 14px;">Sepetiniz boş</div>';
+        itemsDiv.innerHTML = '<div class="cart-empty">Sepet boş</div>';
       } else {
         itemsDiv.innerHTML = cart.map(item => {
-          // ID'yi string olarak geç (yan ürünler için gerekli)
           const itemIdStr = typeof item.id === 'string' ? '\\'' + item.id + '\\'' : item.id;
+          const lineTotal = (item.price * item.quantity).toFixed(2);
           return '<div class="cart-item">' +
-            '<div style="flex: 1;">' +
-              '<div style="font-weight: 700; font-size: 15px; color: #1f2937; margin-bottom: 4px; display: flex; align-items: center;">' + item.name + '</div>' +
-              '<div style="color: #6b7280; font-size: 13px; font-weight: 600;">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + (item.price * item.quantity).toFixed(2) + ' ₺</div>' +
-            '</div>' +
-            '<div class="cart-item-controls" style="display: flex; align-items: center; gap: 8px;">' +
-              '<button class="qty-btn" onclick="changeQuantity(' + itemIdStr + ', -1)" title="Azalt">-</button>' +
-              '<span style="min-width: 36px; text-align: center; font-weight: 700; color: #1f2937; font-size: 15px;">' + item.quantity + '</span>' +
-              '<button class="qty-btn" onclick="changeQuantity(' + itemIdStr + ', 1)" title="Artır">+</button>' +
-              '<button class="qty-btn" onclick="removeFromCart(' + itemIdStr + ')" style="background: #ef4444; color: white; border-color: #ef4444; font-size: 18px;" title="Sil">×</button>' +
-            '</div>' +
-          '</div>';
+            '<div><div class="cart-item-name">' + item.name + '</div>' +
+            '<div class="cart-item-meta">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + lineTotal + ' ₺</div></div>' +
+            '<div class="cart-item-right">' +
+              '<button type="button" class="cart-qty-btn" onclick="changeQuantity(' + itemIdStr + ', -1)">−</button>' +
+              '<span class="cart-item-qty">' + item.quantity + '</span>' +
+              '<button type="button" class="cart-qty-btn" onclick="changeQuantity(' + itemIdStr + ', 1)">+</button>' +
+              '<button type="button" class="cart-remove-btn" onclick="removeFromCart(' + itemIdStr + ')">×</button>' +
+            '</div></div>';
         }).join('');
       }
       
@@ -9913,6 +9994,14 @@ function generateMobileHTML(serverURL) {
       document.getElementById('noteModal').style.display = 'none';
     }
     
+    function appendQuickNote(text) {
+      const el = document.getElementById('noteInput');
+      if (!el) return;
+      const current = el.value.trim();
+      el.value = current ? current + ', ' + text : text;
+      el.focus();
+    }
+    
     function saveNote() {
       orderNote = document.getElementById('noteInput').value.trim();
       updateNoteButton();
@@ -9938,14 +10027,21 @@ function generateMobileHTML(serverURL) {
         return; 
       }
       
-      // İkram edilen ürünleri toplamdan çıkar
-      const totalAmount = cart.reduce((sum, item) => {
+      var sendBtn = document.getElementById('sendOrderBtn');
+      var sendBtnContent = document.getElementById('sendOrderBtnContent');
+      var originalSendHTML = sendBtnContent ? sendBtnContent.innerHTML : '';
+      if (sendBtn) {
+        sendBtn.disabled = true;
+        if (sendBtnContent) sendBtnContent.innerHTML = '<span style="display: inline-block; width: 20px; height: 20px; border: 2px solid rgba(255,255,255,0.9); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;"></span> Gönderiliyor...';
+      }
+      
+      var totalAmount = cart.reduce(function(sum, item) {
         if (item.isGift) return sum;
         return sum + (item.price * item.quantity);
       }, 0);
       
       try {
-        const response = await fetch(API_URL + '/orders', {
+        var response = await fetch(API_URL + '/orders', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
@@ -9996,6 +10092,11 @@ function generateMobileHTML(serverURL) {
       } catch (error) { 
         console.error('Sipariş gönderme hatası:', error); 
         showToast('error', 'Bağlantı Hatası', 'Sunucuya bağlanılamadı. Lütfen tekrar deneyin.');
+      } finally {
+        if (sendBtn) {
+          sendBtn.disabled = false;
+          if (sendBtnContent) sendBtnContent.innerHTML = originalSendHTML;
+        }
       }
     }
   </script>
@@ -11162,8 +11263,8 @@ function startAPIServer() {
           staff_name: adisyonStaffName
         };
         
-        // Kategori bazlı adisyon yazdırma
-        printAdisyonByCategory(itemsWithStaff, adisyonData).catch(err => {
+        // Kategori bazlı adisyon yazdırma - fiş çıkana kadar bekle, sonra yanıt gönder (gecikme/çıkmama olmasın)
+        await printAdisyonByCategory(itemsWithStaff, adisyonData).catch(err => {
           console.error('Mobil sipariş kategori bazlı adisyon yazdırma hatası:', err);
         });
       } catch (error) {

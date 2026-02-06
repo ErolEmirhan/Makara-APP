@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, onSaveToTable, totalAmount, selectedTable, orderNote, onOrderNoteChange, onToggleGift, onRequestAdisyon }) => {
+const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, onSaveToTable, isSavingToTable = false, totalAmount, selectedTable, orderNote, onOrderNoteChange, onToggleGift, onRequestAdisyon }) => {
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteText, setNoteText] = useState(orderNote || '');
   const textareaRef = useRef(null);
@@ -204,18 +204,27 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
           <div className="space-y-3">
             <button
               onClick={onSaveToTable}
-              disabled={cart.length === 0}
-              className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
-                cart.length === 0
+              disabled={cart.length === 0 || isSavingToTable}
+              className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 flex items-center justify-center gap-2 ${
+                cart.length === 0 || isSavingToTable
                   ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
                   : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
               }`}
             >
               <div className="flex items-center justify-center space-x-2">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                <span>Masaya Kaydet</span>
+                {isSavingToTable ? (
+                  <>
+                    <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" style={{ animationDuration: '0.8s' }} />
+                    <span>Gönderiliyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    <span>Masaya Kaydet</span>
+                  </>
+                )}
               </div>
             </button>
             <button

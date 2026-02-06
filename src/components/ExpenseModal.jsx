@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import Toast from './Toast';
 
-const ExpenseModal = ({ onClose, onSave }) => {
+const ExpenseModal = ({ onClose, onSave, isSubmitting = false }) => {
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
@@ -15,25 +15,15 @@ const ExpenseModal = ({ onClose, onSave }) => {
   };
 
   const handleSave = () => {
-    if (!title.trim() || !amount.trim()) {
-      showToast('Lütfen tüm alanları doldurun', 'warning');
-      return;
-    }
-
+    if (isSubmitting || !title.trim() || !amount.trim()) return;
     const amountValue = parseFloat(amount);
     if (isNaN(amountValue) || amountValue <= 0) {
       showToast('Lütfen geçerli bir miktar girin', 'warning');
       return;
     }
-
-    onSave({
-      title: title.trim(),
-      amount: amountValue
-    });
-
+    onSave({ title: title.trim(), amount: amountValue });
     setTitle('');
     setAmount('');
-    onClose();
   };
 
   return (
@@ -102,9 +92,17 @@ const ExpenseModal = ({ onClose, onSave }) => {
               </button>
               <button
                 onClick={handleSave}
-                className="flex-1 px-4 py-2.5 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 rounded-lg text-white font-bold transition-all shadow-lg hover:shadow-xl"
+                disabled={isSubmitting}
+                className="flex-1 px-4 py-2.5 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-lg text-white font-bold transition-all shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
               >
-                Kaydet
+                {isSubmitting ? (
+                  <>
+                    <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" style={{ animationDuration: '0.8s' }} />
+                    <span>Kaydediliyor...</span>
+                  </>
+                ) : (
+                  'Kaydet'
+                )}
               </button>
             </div>
           </div>

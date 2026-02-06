@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Toast from './Toast';
 
-const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose }) => {
+const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose, isSubmitting = false }) => {
   const [payments, setPayments] = useState([]); // [{ amount: 50, method: 'Nakit' }, ...]
   const [currentPaymentMethod, setCurrentPaymentMethod] = useState('Nakit');
   const [currentAmount, setCurrentAmount] = useState('');
@@ -228,14 +228,23 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose 
           </button>
           <button
             onClick={handleComplete}
-            disabled={payments.length === 0 || remainingAmount > 0.01}
+            disabled={payments.length === 0 || remainingAmount > 0.01 || isSubmitting}
             className="flex-1 py-4 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
           >
             <div className="flex items-center justify-center space-x-2">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-              <span>Ödemeleri Tamamla</span>
+              {isSubmitting ? (
+                <>
+                  <span className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" style={{ animationDuration: '0.8s' }} />
+                  <span>İşleniyor...</span>
+                </>
+              ) : (
+                <>
+                  <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>Ödemeleri Tamamla</span>
+                </>
+              )}
             </div>
           </button>
         </div>

@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.22">
+  <link rel="manifest" href="/manifest.json?v=2.4.23">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.22';
+      const APP_VERSION = '2.4.23';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -165,6 +165,8 @@
     let isLoadingMoreCancels = false; // İptal yükleme durumu
     let categoryViewDate = null; // Kategori ciro: günlük görünüm için seçili tarih (dd.mm.yyyy)
     let lastReportSales = null; // moveCategoryDate ile sadece içerik yenilenirken kullanılır
+    let saleToDeleteId = null; // Silme onayı için seçilen satış id
+    let saleToDeleteLabel = ''; // Silme onayı modalında gösterilecek etiket
 
     try {
       // Ana Firebase zaten başlatılmış mı kontrol et
@@ -1147,6 +1149,9 @@
                           <p class="expense-value">₺${parseFloat(sale.total_amount || 0).toFixed(2)}</p>
                         </div>
                       </div>
+                      <div class="sale-card-footer">
+                        <button type="button" class="sale-delete-btn" onclick="openDeleteSaleConfirm('${sale.id}', 'Masraf: ${(expenseTitle || '').replace(/'/g, "\\'")} - ₺${parseFloat(sale.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Kalıcı olarak sil">Sil</button>
+                      </div>
                     </div>
                   `;
                 }
@@ -1189,6 +1194,9 @@
                     <div class="items-list">
                       ${itemsHtml}
                     </div>
+                  </div>
+                  <div class="sale-card-footer">
+                    <button type="button" class="sale-delete-btn" onclick="openDeleteSaleConfirm('${sale.id}', 'Satış #${(sale.sale_id || sale.id)} - ₺${parseFloat(sale.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Kalıcı olarak sil">Sil</button>
                   </div>
                 </div>
               `;
@@ -1233,6 +1241,43 @@
         renderSales(allSales, false);
         isLoadingMoreSales = false;
       }, 300);
+    }
+
+    function openDeleteSaleConfirm(saleId, label) {
+      saleToDeleteId = saleId;
+      saleToDeleteLabel = label || '';
+      const modal = document.getElementById('deleteSaleModal');
+      const labelEl = document.getElementById('deleteSaleModalLabel');
+      if (labelEl) labelEl.textContent = label || saleId;
+      if (modal) {
+        modal.style.display = 'flex';
+      }
+    }
+
+    function closeDeleteSaleModal() {
+      saleToDeleteId = null;
+      saleToDeleteLabel = '';
+      const modal = document.getElementById('deleteSaleModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    async function confirmDeleteSale() {
+      if (!saleToDeleteId || !db) return;
+      const btn = document.getElementById('confirmDeleteSaleBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Siliniyor...'; }
+      try {
+        await db.collection('sales').doc(saleToDeleteId).delete();
+        closeDeleteSaleModal();
+        allSales = allSales.filter(s => s.id !== saleToDeleteId);
+        renderSales(allSales, true);
+        if (typeof updateStats === 'function') updateStats(allSales);
+        if (typeof showToast === 'function') showToast('success', 'Silindi', 'Satış kalıcı olarak silindi.');
+      } catch (err) {
+        console.error('Satış silinirken hata:', err);
+        if (typeof showToast === 'function') showToast('error', 'Hata', err.message || 'Satış silinemedi.');
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Sil'; }
+      }
     }
 
     // Satış geçmişi için scroll listener
@@ -8029,6 +8074,31 @@
       margin-top: 8px;
     }
 
+    .sale-card-footer {
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid #f3f4f6;
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .sale-delete-btn {
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #b91c1c;
+      background: #fef2f2;
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+
+    .sale-delete-btn:hover {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
     .items-label {
       font-size: 12px;
       font-weight: 500;
@@ -12277,6 +12347,26 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
           </svg>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Satış Silme Onay Modal -->
+  <div id="deleteSaleModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) closeDeleteSaleModal()">
+    <div style="background: white; border-radius: 24px; width: 100%; max-width: 420px; overflow: hidden; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;" onclick="event.stopPropagation();">
+      <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; padding: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0; font-size: 22px; font-weight: 900;">Satışı Sil</h2>
+          <button type="button" onclick="closeDeleteSaleModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold;">×</button>
+        </div>
+      </div>
+      <div style="padding: 24px;">
+        <p style="margin: 0 0 12px 0; font-size: 15px; color: #374151; font-weight: 600;">Bu satışı veritabanından kalıcı olarak silmek istediğinize emin misiniz?</p>
+        <p id="deleteSaleModalLabel" style="margin: 0; font-size: 14px; color: #6b7280; background: #f3f4f6; padding: 12px; border-radius: 12px; word-break: break-word;"></p>
+      </div>
+      <div style="border-top: 1px solid #e5e7eb; padding: 20px; display: flex; justify-content: flex-end; gap: 12px; background: #f9fafb;">
+        <button type="button" onclick="closeDeleteSaleModal()" style="padding: 14px 24px; background: #f3f4f6; color: #374151; border: none; border-radius: 12px; font-weight: 700; cursor: pointer;">Vazgeç</button>
+        <button type="button" id="confirmDeleteSaleBtn" onclick="confirmDeleteSale()" style="padding: 14px 24px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 12px; font-weight: 700; cursor: pointer;">Sil</button>
       </div>
     </div>
   </div>

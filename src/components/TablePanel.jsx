@@ -7,6 +7,7 @@ import TableTransferModal from './TableTransferModal';
 import OnlineOrderModal from './OnlineOrderModal';
 import OnlineProductManagementModal from './OnlineProductManagementModal';
 import Toast from './Toast';
+import Spinner from './Spinner';
 import orderSound from '../sound/order.mp3';
 
 const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
@@ -53,13 +54,190 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [showSoundModal, setShowSoundModal] = useState(false);
   const [soundMuted, setSoundMuted] = useState(false);
   const [soundVolume, setSoundVolume] = useState(100);
+  const [isConfirmingOrder, setIsConfirmingOrder] = useState(false);
+  const [togglingPreparingId, setTogglingPreparingId] = useState(null);
   const selectedTypeRef = useRef(selectedType);
+  // Geçmiş Adisyon modal
+  const [showAdisyonModal, setShowAdisyonModal] = useState(false);
+  const [recentSales, setRecentSales] = useState([]);
+  const [loadingRecentSales, setLoadingRecentSales] = useState(false);
+  const [selectedSaleForAdisyon, setSelectedSaleForAdisyon] = useState(null);
+  const [expandedOrderIds, setExpandedOrderIds] = useState(() => new Set());
+  const [adisyonLoadingOrderId, setAdisyonLoadingOrderId] = useState(null);
+  const [prepareLoadingOrderId, setPrepareLoadingOrderId] = useState(null);
+  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
+  const [adisyonSuccessOrderId, setAdisyonSuccessOrderId] = useState(null);
+  const [prepareSuccessOrderId, setPrepareSuccessOrderId] = useState(null);
+  const [isCancelSuccess, setIsCancelSuccess] = useState(false);
+  const loadingOverlayStartRef = useRef(0);
+  const OVERLAY_MIN_MS = 2000;
+  const SUCCESS_OVERLAY_MS = 2200;
+  const [orderTimeTick, setOrderTimeTick] = useState(0);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
     setTimeout(() => {
       setToast(prev => ({ ...prev, show: false }));
     }, 3000);
+  };
+
+  const parseDateTime = (dateStr, timeStr) => {
+    if (!dateStr || !timeStr) return null;
+    try {
+      const [day, month, year] = dateStr.split('.');
+      const [hour, minute, second] = timeStr.split(':');
+      return new Date(year, month - 1, day, hour || 0, minute || 0, second || 0);
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const groupPartialPayments = (sales) => {
+    const grouped = {};
+    const standalone = [];
+    const sortedSales = [...sales].sort((a, b) => {
+      const dateA = `${a.sale_date || ''} ${a.sale_time || ''}`;
+      const dateB = `${b.sale_date || ''} ${b.sale_time || ''}`;
+      return dateA.localeCompare(dateB);
+    });
+    const tableGroups = {};
+    sortedSales.forEach(sale => {
+      if (sale.table_name && sale.sale_date && sale.sale_time && sale.payment_method) {
+        const tableKey = `${sale.table_name || ''}_${sale.table_type || ''}`;
+        if (!tableGroups[tableKey]) tableGroups[tableKey] = [];
+        tableGroups[tableKey].push(sale);
+      } else {
+        standalone.push(sale);
+      }
+    });
+    Object.keys(tableGroups).forEach(tableKey => {
+      const tableSales = tableGroups[tableKey];
+      const sessions = [];
+      let currentSession = [];
+      for (let i = 0; i < tableSales.length; i++) {
+        const sale = tableSales[i];
+        const saleDateTime = parseDateTime(sale.sale_date, sale.sale_time);
+        const itemCount = sale.items_array && Array.isArray(sale.items_array)
+          ? sale.items_array.length
+          : (sale.items ? sale.items.split(',').length : 0);
+        const isTableClosingSale = itemCount >= 2;
+        if (currentSession.length === 0) {
+          currentSession.push(sale);
+        } else {
+          const prevSale = currentSession[currentSession.length - 1];
+          const prevDateTime = parseDateTime(prevSale.sale_date, prevSale.sale_time);
+          const prevItemCount = prevSale.items_array && Array.isArray(prevSale.items_array)
+            ? prevSale.items_array.length
+            : (prevSale.items ? prevSale.items.split(',').length : 0);
+          const prevIsTableClosingSale = prevItemCount >= 2;
+          if (prevIsTableClosingSale) {
+            sessions.push([...currentSession]);
+            currentSession = [sale];
+          } else if (saleDateTime && prevDateTime) {
+            const diffMinutes = (saleDateTime - prevDateTime) / (1000 * 60);
+            if (diffMinutes > 30) {
+              sessions.push([...currentSession]);
+              currentSession = [sale];
+            } else {
+              currentSession.push(sale);
+            }
+          } else {
+            currentSession.push(sale);
+          }
+        }
+      }
+      if (currentSession.length > 0) sessions.push(currentSession);
+      sessions.forEach((session, sessionIndex) => {
+        if (session.length === 1) {
+          standalone.push(session[0]);
+          return;
+        }
+        const sessionKey = `${tableKey}_session_${sessionIndex}`;
+        if (session.length > 0) {
+          const firstSale = session[0];
+          const lastSale = session[session.length - 1];
+          grouped[sessionKey] = {
+            id: firstSale.id,
+            table_name: firstSale.table_name,
+            table_type: firstSale.table_type,
+            sale_date: firstSale.sale_date,
+            sale_time: firstSale.sale_time,
+            last_sale_date: lastSale.sale_date,
+            last_sale_time: lastSale.sale_time,
+            payment_methods: new Set(),
+            total_amount: 0,
+            items_array: [],
+            staff_names: new Set(),
+            original_sales: []
+          };
+          session.forEach(sale => {
+            grouped[sessionKey].total_amount += parseFloat(sale.total_amount || 0);
+            grouped[sessionKey].payment_methods.add(sale.payment_method);
+            if (sale.items_array && Array.isArray(sale.items_array)) {
+              grouped[sessionKey].items_array.push(...sale.items_array);
+            } else if (sale.items) {
+              if (!grouped[sessionKey].items_strings) grouped[sessionKey].items_strings = [];
+              grouped[sessionKey].items_strings.push(sale.items);
+            }
+            if (sale.staff_name) grouped[sessionKey].staff_names.add(sale.staff_name);
+            grouped[sessionKey].original_sales.push(sale);
+          });
+        }
+      });
+    });
+    const groupedSales = Object.values(grouped).map(group => {
+      let itemsText = '';
+      if (group.items_array && group.items_array.length > 0) {
+        const itemMap = {};
+        group.items_array.forEach(item => {
+          const itemKey = `${item.product_id || item.product_name}_${item.price}`;
+          if (!itemMap[itemKey]) {
+            itemMap[itemKey] = {
+              product_id: item.product_id,
+              product_name: item.product_name,
+              price: item.price,
+              quantity: 0,
+              isGift: item.isGift || false
+            };
+          }
+          itemMap[itemKey].quantity += (item.quantity || 0);
+          if (item.isGift) itemMap[itemKey].isGift = true;
+        });
+        itemsText = Object.values(itemMap).map(item => {
+          const giftText = item.isGift ? ' (İKRAM)' : '';
+          return `${item.product_name} x${item.quantity}${giftText}`;
+        }).join(', ');
+        group.items_array = Object.values(itemMap);
+      } else if (group.items_strings && group.items_strings.length > 0) {
+        itemsText = group.items_strings.join(', ');
+      }
+      const paymentMethods = Array.from(group.payment_methods);
+      const paymentMethodText = paymentMethods.length > 1
+        ? `${paymentMethods.join(' + ')} (Toplam)`
+        : paymentMethods[0] || 'Bilinmiyor';
+      return {
+        id: group.id,
+        table_name: group.table_name,
+        table_type: group.table_type,
+        sale_date: group.sale_date,
+        sale_time: group.sale_time,
+        last_sale_date: group.last_sale_date,
+        last_sale_time: group.last_sale_time,
+        payment_method: paymentMethodText,
+        total_amount: group.total_amount,
+        items: itemsText,
+        items_array: group.items_array || [],
+        staff_name: Array.from(group.staff_names).join(', ') || null,
+        isGrouped: true,
+        original_sales: group.original_sales
+      };
+    });
+    const allSales = [...groupedSales, ...standalone].sort((a, b) => {
+      const dateA = `${a.sale_date} ${a.sale_time}`;
+      const dateB = `${b.sale_date} ${b.sale_time}`;
+      return dateB.localeCompare(dateA);
+    });
+    return allSales;
   };
 
   const insideTables = Array.from({ length: 20 }, (_, i) => ({
@@ -169,6 +347,13 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   useEffect(() => {
     selectedTypeRef.current = selectedType;
   }, [selectedType]);
+
+  // Sipariş kartlarındaki "X dk önce" güncellemesi (dakikada bir)
+  useEffect(() => {
+    if (selectedType !== 'online' || onlineOrders.length === 0) return;
+    const id = setInterval(() => setOrderTimeTick(t => t + 1), 60000);
+    return () => clearInterval(id);
+  }, [selectedType, onlineOrders.length]);
 
   // Masa tipi değiştiğinde siparişleri yenile
   useEffect(() => {
@@ -561,15 +746,37 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           </div>
         `;
         
-        // Event listener'ları yeniden ekle
-        modal.querySelector('#cashBtn').onclick = () => {
-          document.body.removeChild(modal);
-          resolve({ paymentMethod: 'Nakit', campaignPercentage: selectedCampaign });
+        const closeModal = () => {
+          if (modal.parentNode) document.body.removeChild(modal);
         };
-        
+        const setModalLoading = () => {
+          const wrap = modal.querySelector('.bg-white.rounded-2xl');
+          if (wrap) {
+            wrap.innerHTML = `
+              <div class="flex flex-col items-center justify-center py-10 px-4">
+                <div class="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" style="animation-duration: 0.8s;"></div>
+                <p class="mt-4 text-gray-700 font-semibold">Masa sonlandırılıyor...</p>
+              </div>
+            `;
+          }
+        };
+        modal.querySelector('#cashBtn').onclick = () => {
+          const btn = modal.querySelector('#cashBtn');
+          const cardBtn = modal.querySelector('#cardBtn');
+          if (btn.disabled) return;
+          btn.disabled = true;
+          if (cardBtn) cardBtn.disabled = true;
+          setModalLoading();
+          resolve({ paymentMethod: 'Nakit', campaignPercentage: selectedCampaign, closeModal });
+        };
         modal.querySelector('#cardBtn').onclick = () => {
-          document.body.removeChild(modal);
-          resolve({ paymentMethod: 'Kredi Kartı', campaignPercentage: selectedCampaign });
+          const btn = modal.querySelector('#cardBtn');
+          const cashBtn = modal.querySelector('#cashBtn');
+          if (btn.disabled) return;
+          btn.disabled = true;
+          if (cashBtn) cashBtn.disabled = true;
+          setModalLoading();
+          resolve({ paymentMethod: 'Kredi Kartı', campaignPercentage: selectedCampaign, closeModal });
         };
         
         modal.querySelector('#campaignBtn').onclick = () => {
@@ -610,28 +817,26 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       return; // Kullanıcı iptal etti
     }
 
-    const { paymentMethod, campaignPercentage } = paymentResult;
+    const { paymentMethod, campaignPercentage, closeModal } = paymentResult;
 
     try {
       const result = await window.electronAPI.completeTableOrder(selectedOrder.id, paymentMethod, campaignPercentage);
       
       if (result.success) {
-        // Modal'ı kapat ve siparişleri yenile
         setShowModal(false);
         setSelectedOrder(null);
         setOrderItems([]);
         await loadTableOrders();
-        // Başarı toast'ı göster
         setShowSuccessToast(true);
-        setTimeout(() => {
-          setShowSuccessToast(false);
-        }, 1000);
+        setTimeout(() => setShowSuccessToast(false), 1000);
       } else {
         showToast('Masa sonlandırılamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('Masa sonlandırılırken hata:', error);
       showToast('Masa sonlandırılamadı: ' + error.message, 'error');
+    } finally {
+      if (typeof closeModal === 'function') closeModal();
     }
   };
 
@@ -644,13 +849,14 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   // Adisyon yazdır
   const handleRequestAdisyon = async () => {
     if (!selectedOrder || orderItems.length === 0) return;
-    
     if (!window.electronAPI || !window.electronAPI.printAdisyon) {
       console.error('printAdisyon API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
       showToast('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
-    
+    loadingOverlayStartRef.current = Date.now();
+    setAdisyonLoadingOrderId(selectedOrder.id);
+    try {
     // Online sipariş için özel format
     if (selectedType === 'online') {
       // Online sipariş items'ı adisyon formatına çevir
@@ -713,7 +919,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         
         if (result.success) {
           console.log('Adisyon başarıyla yazdırıldı');
-          showToast('Adisyon başarıyla yazdırıldı', 'success');
+          setAdisyonLoadingOrderId(null);
+          setAdisyonSuccessOrderId(selectedOrder.id);
+          setTimeout(() => setAdisyonSuccessOrderId(null), SUCCESS_OVERLAY_MS);
         } else {
           console.error('Adisyon yazdırılamadı:', result.error);
           showToast('Adisyon yazdırılamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
@@ -765,18 +973,25 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       console.error('Adisyon yazdırılırken hata:', error);
       showToast('Adisyon yazdırılamadı: ' + error.message, 'error');
     }
+    } finally {
+      const elapsed = Date.now() - loadingOverlayStartRef.current;
+      const remaining = Math.max(0, OVERLAY_MIN_MS - elapsed);
+      if (remaining > 0) setTimeout(() => setAdisyonLoadingOrderId(null), remaining);
+      else setAdisyonLoadingOrderId(null);
+    }
   };
 
   // Ürünleri Hazırlat - Kategori bazlı yazdırma
   const handlePrepareProducts = async () => {
     if (!selectedOrder || orderItems.length === 0) return;
-    
     if (!window.electronAPI || !window.electronAPI.printAdisyon) {
       console.error('printAdisyon API mevcut değil. Lütfen uygulamayı yeniden başlatın.');
       showToast('Hata: Adisyon yazdırma API\'si yüklenemedi. Lütfen uygulamayı yeniden başlatın.', 'error');
       return;
     }
-    
+    loadingOverlayStartRef.current = Date.now();
+    setPrepareLoadingOrderId(selectedOrder.id);
+    try {
     // Online sipariş için kategori bazlı yazdırma
     if (selectedType === 'online') {
       // Tüm ürünleri çek (kategori bilgisi için)
@@ -837,7 +1052,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         
         if (result.success) {
           console.log('Ürünler kategori bazlı yazıcılara gönderildi');
-          showToast('Ürünler hazırlatıldı', 'success');
+          setPrepareLoadingOrderId(null);
+          setPrepareSuccessOrderId(selectedOrder.id);
+          setTimeout(() => setPrepareSuccessOrderId(null), SUCCESS_OVERLAY_MS);
         } else {
           console.error('Ürünler hazırlatılamadı:', result.error);
           showToast('Ürünler hazırlatılamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
@@ -847,6 +1064,12 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         showToast('Ürünler hazırlatılamadı: ' + error.message, 'error');
       }
       return;
+    }
+    } finally {
+      const elapsed = Date.now() - loadingOverlayStartRef.current;
+      const remaining = Math.max(0, OVERLAY_MIN_MS - elapsed);
+      if (remaining > 0) setTimeout(() => setPrepareLoadingOrderId(null), remaining);
+      else setPrepareLoadingOrderId(null);
     }
   };
 
@@ -866,6 +1089,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       return;
     }
 
+    setTogglingPreparingId(order.id);
     try {
       const orderRef = doc(onlineFirestore, 'orders', order.id);
       const currentPreparingStatus = order.isPreparing || false;
@@ -880,6 +1104,8 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     } catch (error) {
       console.error('Hazırlanıyor durumu güncellenirken hata:', error);
       showToast('Durum güncellenemedi: ' + error.message, 'error');
+    } finally {
+      setTogglingPreparingId(null);
     }
   };
 
@@ -994,6 +1220,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       return;
     }
 
+    setIsConfirmingOrder(true);
     try {
       // Siparişi onaylandı olarak işaretle ve onaylama bilgilerini kaydet
       const orderRef = doc(onlineFirestore, 'orders', orderToMarkAsPaid.id);
@@ -1074,6 +1301,8 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       showToast('Ödeme alındı işaretlenemedi: ' + error.message, 'error');
       setShowPaymentConfirmModal(false);
       setOrderToMarkAsPaid(null);
+    } finally {
+      setIsConfirmingOrder(false);
     }
   };
 
@@ -1130,13 +1359,13 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   // İptal işlemini onayla - Sadece is_decline: true olarak işaretle
   const confirmCancelOrder = async () => {
     if (!selectedOrder || selectedType !== 'online') return;
-    
     if (!onlineFirestore) {
       showToast('Firebase bağlantısı bulunamadı', 'error');
       setShowCancelConfirmModal(false);
       return;
     }
-
+    loadingOverlayStartRef.current = Date.now();
+    setIsCancellingOrder(true);
     try {
       const orderRef = doc(onlineFirestore, 'orders', selectedOrder.id);
       
@@ -1147,19 +1376,25 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       });
       
       console.log('✅ Online sipariş iptal edildi ve is_decline: true olarak kaydedildi:', selectedOrder.id);
-      showToast('Sipariş iptal edildi ve kaydedildi', 'success');
-      
-      // Modal'ları kapat
-      setShowCancelConfirmModal(false);
-      setShowModal(false);
-      setSelectedOrder(null);
-      setOrderItems([]);
-      
-      // Siparişler otomatik olarak güncellenecek (real-time listener sayesinde)
+      setIsCancellingOrder(false);
+      setIsCancelSuccess(true);
+      setTimeout(() => {
+        setIsCancelSuccess(false);
+        setShowCancelConfirmModal(false);
+        setShowModal(false);
+        setSelectedOrder(null);
+        setOrderItems([]);
+        setExpandedOrderIds(prev => { const n = new Set(prev); if (selectedOrder) n.delete(selectedOrder.id); return n; });
+      }, SUCCESS_OVERLAY_MS);
     } catch (error) {
       console.error('Sipariş iptal edilirken hata:', error);
       showToast('Sipariş iptal edilemedi: ' + error.message, 'error');
       setShowCancelConfirmModal(false);
+    } finally {
+      const elapsed = Date.now() - loadingOverlayStartRef.current;
+      const remaining = Math.max(0, OVERLAY_MIN_MS - elapsed);
+      if (remaining > 0) setTimeout(() => setIsCancellingOrder(false), remaining);
+      else setIsCancellingOrder(false);
     }
   };
 
@@ -1228,72 +1463,86 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
 
   return (
     <div className="mb-4">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-bold gradient-text">Masalar</h2>
-        <button
-          onClick={() => setShowTransferModal(true)}
-          className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
-        >
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-          </svg>
-          <span>Masa Aktar</span>
-        </button>
+      <div className="text-center mb-4">
+        <h2 className="text-4xl font-black tracking-tight heading-display">Masalar</h2>
       </div>
-      
-      {/* Masa Tipi Seçimi - Büyük ve Ortalanmış */}
+      <div className="flex justify-end gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={async () => {
+              setShowAdisyonModal(true);
+              setLoadingRecentSales(true);
+              try {
+                const recent = await window.electronAPI.getRecentSales(12);
+                setRecentSales(groupPartialPayments(recent || []));
+              } catch (error) {
+                console.error('Son satışlar yüklenemedi:', error);
+                showToast('Son satışlar yüklenemedi', 'error');
+              } finally {
+                setLoadingRecentSales(false);
+              }
+            }}
+            className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <span>Geçmiş Adisyon İste</span>
+          </button>
+          <button
+            onClick={() => setShowTransferModal(true)}
+            className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+            <span>Masa Aktar</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Masa Tipi Seçimi */}
       <div className="flex justify-center gap-4 mb-4">
         <button
           onClick={() => setSelectedType('inside')}
-          className={`px-8 py-4 rounded-xl font-bold transition-all duration-300 text-lg ${
+          className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
             selectedType === 'inside'
-              ? 'bg-gradient-to-r from-blue-500 to-indigo-500 text-white shadow-lg transform scale-105'
-              : 'bg-blue-50 text-blue-600 hover:bg-blue-100 hover:text-blue-700'
+              ? 'bg-gradient-to-r from-pink-500 to-rose-500 border-pink-400 text-white shadow-md'
+              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
           }`}
         >
-          <div className="flex items-center space-x-3">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-            </svg>
-            <span>İçeri</span>
-          </div>
+          <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+          </svg>
+          <span>İçeri</span>
         </button>
-        
         <button
           onClick={() => setSelectedType('outside')}
-          className={`px-8 py-4 rounded-xl font-bold transition-all duration-300 text-lg ${
+          className={`px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
             selectedType === 'outside'
-              ? 'bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-lg transform scale-105'
-              : 'bg-orange-50 text-orange-600 hover:bg-orange-100 hover:text-orange-700'
+              ? 'bg-gradient-to-r from-pink-500 to-rose-500 border-pink-400 text-white shadow-md'
+              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
           }`}
         >
-          <div className="flex items-center space-x-3">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-            </svg>
-            <span>Dışarı</span>
-          </div>
+          <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+          </svg>
+          <span>Dışarı</span>
         </button>
-
         <button
-          onClick={() => {
-            setSelectedType('online');
-          }}
-          className={`relative px-8 py-4 rounded-xl font-bold transition-all duration-300 text-lg ${
+          onClick={() => setSelectedType('online')}
+          className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
             selectedType === 'online'
-              ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg transform scale-105'
-              : 'bg-purple-50 text-purple-600 hover:bg-purple-100 hover:text-purple-700'
+              ? 'bg-gradient-to-r from-pink-500 to-rose-500 border-pink-400 text-white shadow-md'
+              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
           }`}
         >
-          <div className="flex items-center space-x-3">
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-            </svg>
-            <span>Online</span>
-          </div>
-          {/* Bildirim Badge */}
+          <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+          </svg>
+          <span>Online</span>
           {unseenOnlineOrdersCount > 0 && (
-            <span className="absolute -top-2 -right-2 min-w-[24px] h-6 px-2 bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs font-bold rounded-full flex items-center justify-center shadow-lg animate-pulse border-2 border-white">
+            <span className="absolute -top-2 -right-2 min-w-[26px] h-[26px] px-1.5 bg-red-600 text-white text-sm font-medium rounded-full flex items-center justify-center">
               {unseenOnlineOrdersCount > 99 ? '99+' : unseenOnlineOrdersCount}
             </span>
           )}
@@ -1432,138 +1681,255 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           </div>
           
           {onlineOrders.length === 0 ? (
-            <div className="text-center py-12 bg-white/50 backdrop-blur-sm rounded-2xl border border-gray-200">
-              <svg className="w-16 h-16 mx-auto text-gray-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div className="text-center py-16 bg-white/80 backdrop-blur-sm rounded-3xl border border-slate-200 shadow-sm">
+              <svg className="w-16 h-16 mx-auto text-slate-300 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
               </svg>
-              <p className="text-gray-600 font-medium text-lg">Henüz online sipariş bulunmuyor</p>
+              <p className="text-slate-500 font-medium text-lg">Henüz online sipariş bulunmuyor</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {onlineOrders.map((order) => (
-                <div
-                  key={order.id}
-                  className="group relative bg-gradient-to-br from-white to-slate-50 rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 border border-slate-200/60 cursor-pointer transform hover:-translate-y-1 overflow-hidden"
-                  onClick={() => {
-                    setSelectedOrder(order);
-                    setOrderItems(order.items || []);
-                    setShowModal(true);
-                  }}
-                >
-                  {/* Subtle gradient overlay on hover */}
-                  <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/0 to-purple-500/0 group-hover:from-indigo-500/5 group-hover:to-purple-500/5 transition-all duration-300 pointer-events-none" />
-                  
-                  {/* Modern Kart Tasarımı */}
-                  <div className="relative p-6">
-                    {/* Header with status badge */}
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-md">
-                            <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-                            </svg>
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-lg font-bold text-slate-900 truncate">
-                              {order.customer_name || order.name || 'İsimsiz Müşteri'}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+              {onlineOrders.map((order) => {
+                const isExpanded = expandedOrderIds.has(order.id);
+                const items = order.items || [];
+                const orderDate = order.createdAt
+                  ? (order.createdAt.toDate ? order.createdAt.toDate() : new Date((order.createdAt.seconds || 0) * 1000))
+                  : null;
+                const minutesAgo = orderDate ? Math.floor((Date.now() - orderDate.getTime()) / 60000) : null;
+                const timeLabel = minutesAgo == null ? '—' : minutesAgo === 0 ? 'Az önce' : `${minutesAgo} dk önce`;
+                const timeColor = minutesAgo == null ? 'slate' : minutesAgo < 5 ? 'green' : minutesAgo < 10 ? 'yellow' : 'red';
+                return (
+                  <div
+                    key={order.id}
+                    onClick={() => {
+                      const willExpand = !expandedOrderIds.has(order.id);
+                      setExpandedOrderIds(prev => {
+                        const next = new Set(prev);
+                        if (next.has(order.id)) next.delete(order.id);
+                        else next.add(order.id);
+                        return next;
+                      });
+                      if (willExpand) {
+                        setSelectedOrder(order);
+                        setOrderItems(order.items || []);
+                      }
+                    }}
+                    className="group relative rounded-3xl overflow-hidden cursor-pointer transition-all duration-300 shadow-lg hover:shadow-xl min-h-[220px] flex flex-col"
+                    style={{
+                      backgroundImage: 'url(https://images.unsplash.com/photo-1555396273-367ea4eb4db5?w=800)',
+                      backgroundSize: 'cover',
+                      backgroundPosition: 'center',
+                      backgroundColor: '#312e81'
+                    }}
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-purple-900/85 via-indigo-900/80 to-purple-800/85" />
+                    
+                    {/* Sipariş süresi - üst orta, belirgin renkler, profesyonel */}
+                    <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-10 px-5 py-2.5 rounded-2xl border-2 shadow-xl ${
+                      timeColor === 'green'
+                        ? 'bg-emerald-500/95 border-emerald-300 text-white'
+                        : timeColor === 'yellow'
+                        ? 'bg-amber-500/95 border-amber-300 text-white'
+                        : 'bg-red-500/95 border-red-300 text-white'
+                    }`}>
+                      <span className="text-base font-bold tracking-tight drop-shadow-sm">
+                        {timeLabel}
+                      </span>
+                    </div>
+                    
+                    {/* Adisyon / Ürünleri Hazırlat overlay - loading veya success (min 2 sn) */}
+                    {(adisyonLoadingOrderId === order.id || prepareLoadingOrderId === order.id || adisyonSuccessOrderId === order.id || prepareSuccessOrderId === order.id) && (
+                      <div className="absolute inset-0 z-20 rounded-3xl bg-black/70 backdrop-blur-md flex flex-col items-center justify-center gap-4 animate-fade-in">
+                        {adisyonSuccessOrderId === order.id || prepareSuccessOrderId === order.id ? (
+                          <>
+                            <div className="w-20 h-20 rounded-full bg-emerald-500/90 flex items-center justify-center shadow-2xl animate-success-pop">
+                              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                              </svg>
+                            </div>
+                            <p className="text-xl font-semibold tracking-tight text-white">
+                              {adisyonSuccessOrderId === order.id ? 'Adisyon Yazdırıldı' : 'Ürünler Hazırlatıldı'}
                             </p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-slate-500 ml-12">
-                          <svg className="w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-                          </svg>
-                          <span className="font-medium">{order.formattedDate}</span>
-                          <span className="text-slate-300">•</span>
-                          <span>{order.formattedTime}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-sm text-slate-600 ml-12 mt-1">
-                          <svg className="w-4 h-4 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                          </svg>
-                          <span className="font-medium truncate">{order.customer_phone || order.phone || '-'}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {order.status === 'pending' && (
-                          <span className="px-3 py-1.5 bg-gradient-to-r from-amber-50 to-orange-50 text-amber-700 rounded-xl text-xs font-semibold border border-amber-200/60 shadow-sm whitespace-nowrap">
-                            Beklemede
-                          </span>
+                          </>
+                        ) : (
+                          <>
+                            <Spinner size="lg" className="text-white" />
+                            <p className="text-xl font-semibold tracking-tight text-white">
+                              {adisyonLoadingOrderId === order.id ? 'Adisyon Yazdırılıyor' : 'Ürünler Hazırlatılıyor'}
+                            </p>
+                          </>
                         )}
-                        {order.status === 'completed' && (
-                          <span className="px-3 py-1.5 bg-gradient-to-r from-emerald-50 to-green-50 text-emerald-700 rounded-xl text-xs font-semibold border border-emerald-200/60 shadow-sm whitespace-nowrap">
-                            Tamamlandı
-                          </span>
-                        )}
-                        {order.isPreparing && (
-                          <span className="px-3 py-1.5 bg-gradient-to-r from-orange-100 to-orange-200 text-orange-700 rounded-xl text-xs font-semibold border border-orange-300 shadow-sm whitespace-nowrap flex items-center gap-1">
-                            <svg className="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                            </svg>
-                            Hazırlanıyor
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    
-                    {/* Divider */}
-                    <div className="h-px bg-gradient-to-r from-transparent via-slate-200 to-transparent mb-4" />
-                    
-                    {/* Footer with total */}
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-100 to-purple-100 flex items-center justify-center">
-                          <svg className="w-4 h-4 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                        </div>
-                        <span className="text-xs font-medium text-slate-500 uppercase tracking-wide">Toplam</span>
-                      </div>
-                      <p className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent">
-                        ₺{(order.total_amount || order.total || 0).toFixed(2)}
-                      </p>
-                    </div>
-                    
-                    {/* Siparişi Onayla ve Hazırlanıyor Butonları - Sadece pending siparişler için */}
-                    {order.status === 'pending' && (
-                      <div className="flex gap-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation(); // Kart tıklamasını engelle
-                            handleMarkAsPaid(order);
-                          }}
-                          className="flex-1 px-4 py-2.5 bg-green-500 hover:bg-green-600 text-white font-semibold text-xs rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow border border-green-600"
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                          </svg>
-                          <span>Siparişi Onayla</span>
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation(); // Kart tıklamasını engelle
-                            handleTogglePreparing(order);
-                          }}
-                          className={`flex-1 px-4 py-2.5 font-semibold text-xs rounded-lg transition-all flex items-center justify-center gap-2 shadow-sm hover:shadow border ${
-                            order.isPreparing
-                              ? 'bg-orange-500 hover:bg-orange-600 text-white border-orange-600'
-                              : 'bg-orange-100 hover:bg-orange-200 text-orange-700 border-orange-300'
-                          }`}
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                          </svg>
-                          <span>{order.isPreparing ? 'Hazırlanıyor ✓' : 'Hazırlanıyor'}</span>
-                        </button>
                       </div>
                     )}
                     
-                    {/* Hover indicator */}
-                    <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-left" />
+                    <div className="relative flex flex-col flex-1 p-6 text-white">
+                      {/* Üst: Müşteri + Tarih + Durum */}
+                      <div className="flex items-start justify-between gap-4 mb-4">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-xl font-bold tracking-tight truncate">
+                            {order.customer_name || order.name || 'İsimsiz Müşteri'}
+                          </p>
+                          <p className="text-sm text-white/80 mt-1">
+                            {order.formattedDate} · {order.formattedTime}
+                          </p>
+                          <div className="mt-2 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white/10 backdrop-blur-sm border border-white/20">
+                            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 shrink-0">
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
+                              </svg>
+                            </span>
+                            <span className="text-base font-semibold text-white truncate">{order.customer_phone || order.phone || '-'}</span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-2 shrink-0">
+                          <span className={`px-3 py-1.5 rounded-xl text-xs font-semibold ${
+                            order.status === 'pending' ? 'bg-amber-500/90 text-white' :
+                            order.status === 'completed' ? 'bg-emerald-500/90 text-white' :
+                            order.isPreparing ? 'bg-orange-500/90 text-white' : 'bg-slate-500/90 text-white'
+                          }`}>
+                            {order.status === 'pending' && !order.isPreparing && 'Beklemede'}
+                            {order.status === 'pending' && order.isPreparing && 'Hazırlanıyor'}
+                            {order.status === 'completed' && 'Tamamlandı'}
+                          </span>
+                          <p className="text-2xl font-bold tracking-tight">₺{(order.total_amount || order.total || 0).toFixed(2)}</p>
+                        </div>
+                      </div>
+
+                      {/* Onayla + Hazırlanıyor - Her zaman görünür (pending için) */}
+                      {order.status === 'pending' && (
+                        <div className="flex gap-3 mt-2" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            onClick={() => handleMarkAsPaid(order)}
+                            className="flex-1 px-4 py-2.5 bg-white/95 hover:bg-white text-purple-800 font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm"
+                          >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                            </svg>
+                            Onayla
+                          </button>
+                          <button
+                            onClick={() => handleTogglePreparing(order)}
+                            disabled={togglingPreparingId === order.id}
+                            className={`flex-1 px-4 py-2.5 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-70 ${
+                              order.isPreparing ? 'bg-orange-500/90 text-white' : 'bg-white/20 text-white hover:bg-white/30'
+                            }`}
+                          >
+                            {togglingPreparingId === order.id ? (
+                              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                              </svg>
+                            )}
+                            {order.isPreparing ? 'Hazırlanıyor' : 'Hazırlanıyor'}
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Genişleyen alan: Modal içeriği (müşteri, ürünler, adisyon, iptal) */}
+                      <div className={`grid transition-all duration-300 ease-out ${isExpanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                        <div className="overflow-hidden min-h-0">
+                          <div className="pt-4 border-t border-white/20 space-y-4" onClick={(e) => e.stopPropagation()}>
+                            {/* Müşteri bilgileri - koyu slate cam, başlıklar yeşil gradient */}
+                            <div className="bg-slate-800/50 backdrop-blur-xl rounded-2xl p-4 border border-slate-600/20">
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] mb-3 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Müşteri</p>
+                              <div className="grid grid-cols-2 gap-3 text-sm">
+                                <div><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">İsim</span><p className="font-medium text-slate-100 truncate">{order.customer_name || order.name || '-'}</p></div>
+                                <div><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Telefon</span><p className="font-medium text-slate-100 truncate">{order.customer_phone || order.phone || '-'}</p></div>
+                                <div className="col-span-2"><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Ödeme</span><p className="font-medium text-slate-100">{order.paymentMethod === 'card' ? 'Kart' : order.paymentMethod === 'cash' ? 'Nakit' : order.paymentMethod || '-'}</p></div>
+                                <div className="col-span-2"><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Adres</span><p className="font-medium text-slate-200 line-clamp-2">{order.customer_address || order.address || '-'}</p></div>
+                              </div>
+                              {(order.note || order.orderNote || order.order_note) && (
+                                <div className="mt-3 pt-3 border-t border-slate-600/30">
+                                  <span className="text-[10px] font-medium uppercase tracking-wider bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Not</span>
+                                  <p className="text-sm text-slate-200 line-clamp-2 mt-0.5">{order.note || order.orderNote || order.order_note}</p>
+                                </div>
+                              )}
+                            </div>
+                            {/* Ürünler - aynı palet */}
+                            <div className="bg-slate-800/50 backdrop-blur-xl rounded-2xl p-4 border border-slate-600/20">
+                              <div className="flex items-center justify-between mb-3">
+                                <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-400">Ürünler</p>
+                                <span className="text-[10px] text-slate-500 bg-slate-700/40 px-2 py-1 rounded-md font-medium tracking-wider">{items.length} adet</span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 max-h-44 overflow-y-auto pr-1">
+                                {(items || []).map((item, idx) => {
+                                  const name = item.name || item.product_name || '';
+                                  const price = item.price || 0;
+                                  const qty = item.quantity || 1;
+                                  const total = price * qty;
+                                  return (
+                                    <div key={idx} className="rounded-xl p-[2px] bg-gradient-to-br from-purple-500 to-indigo-500">
+                                      <div className="rounded-[10px] bg-slate-700/30 p-2.5 h-full">
+                                        <p className="text-xs font-medium text-slate-100 truncate">{name}</p>
+                                        <div className="flex justify-between items-end mt-2 gap-2">
+                                          <span className="text-emerald-400 font-semibold text-base">{qty}x ₺{price.toFixed(2)}</span>
+                                          <span className="text-2xl font-bold text-white tabular-nums">₺{total.toFixed(2)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                            {/* Adisyon, Ürünleri Hazırlat - sade cam, mor gradient yazı */}
+                            <div className="flex flex-col gap-2">
+                              <button
+                                onClick={() => { setSelectedOrder(order); setOrderItems(order.items || []); handleRequestAdisyon(); }}
+                                disabled={adisyonLoadingOrderId === order.id}
+                                className="w-full px-4 py-3 bg-white hover:bg-gray-50 font-medium rounded-xl flex items-center justify-center gap-2 text-sm border border-gray-200 transition-all disabled:opacity-70 disabled:cursor-not-allowed [&>span]:bg-gradient-to-r [&>span]:from-purple-600 [&>span]:to-indigo-600 [&>span]:bg-clip-text [&>span]:text-transparent"
+                              >
+                                {adisyonLoadingOrderId === order.id ? (
+                                  <Spinner size="sm" className="text-indigo-600 shrink-0" />
+                                ) : (
+                                  <svg className="w-4 h-4 text-indigo-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                  </svg>
+                                )}
+                                <span>Adisyon Yazdır</span>
+                              </button>
+                              <button
+                                onClick={() => { setSelectedOrder(order); setOrderItems(order.items || []); handlePrepareProducts(); }}
+                                disabled={prepareLoadingOrderId === order.id}
+                                className="w-full px-4 py-3 bg-white hover:bg-gray-50 font-medium rounded-xl flex items-center justify-center gap-2 text-sm border border-gray-200 transition-all disabled:opacity-70 disabled:cursor-not-allowed [&>span]:bg-gradient-to-r [&>span]:from-purple-600 [&>span]:to-indigo-600 [&>span]:bg-clip-text [&>span]:text-transparent"
+                              >
+                                {prepareLoadingOrderId === order.id ? (
+                                  <Spinner size="sm" className="text-indigo-600 shrink-0" />
+                                ) : (
+                                  <svg className="w-4 h-4 text-indigo-600 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
+                                  </svg>
+                                )}
+                                <span>Ürünleri Hazırlat</span>
+                              </button>
+                              {order.status === 'pending' && (
+                                <button
+                                  onClick={() => { setSelectedOrder(order); setOrderItems(order.items || []); handleCancelOrder(); }}
+                                  className="w-full px-4 py-3 bg-red-900/30 hover:bg-red-900/50 text-red-200 font-medium rounded-xl flex items-center justify-center gap-2 text-sm border border-red-500/40 transition-colors"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                  İptal Et
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {!isExpanded && (
+                        <div className="mt-auto pt-4 flex items-center justify-center gap-2 text-white/60 text-sm">
+                          <span>Detay için tıklayın</span>
+                          <svg className="w-4 h-4 transition-transform group-hover:translate-y-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1636,62 +2002,43 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             })}
           </div>
 
-          {/* PAKET Başlığı */}
-          <div className="mb-6 mt-8">
-            <div className="flex items-center justify-center mb-4">
-              <div className="flex items-center space-x-3 px-8 py-3 bg-gradient-to-r from-orange-500 via-amber-500 to-yellow-500 rounded-2xl shadow-xl transform hover:scale-105 transition-all duration-300">
-                <svg className="w-7 h-7 text-white drop-shadow-lg" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                </svg>
-                <h3 className="text-2xl font-black text-white tracking-wider drop-shadow-lg">PAKET</h3>
-              </div>
-            </div>
-
-            {/* Paket Masaları Grid */}
-            <div className="grid grid-cols-5 gap-2">
+          {/* Paket Masaları - Kurumsal */}
+          <div className="mb-6 mt-10">
+            <h3 className="text-center text-sm font-semibold uppercase tracking-widest text-slate-400 mb-4">Paket Masaları</h3>
+            <div className="grid grid-cols-5 gap-3">
               {packageTables.map((table) => {
                 const hasOrder = getTableOrder(table.id);
                 return (
                   <button
                     key={table.id}
                     onClick={() => handleTableClick(table)}
-                    className={`table-btn group relative overflow-hidden rounded-lg p-2 border-2 transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 ${
+                    className={`table-btn group relative overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-md active:scale-[0.98] ${
                       hasOrder
-                        // Paket masalar dolu – kırmızı ton
-                        ? 'bg-gradient-to-br from-rose-100 to-red-200 border-red-500 hover:border-red-600'
-                        : 'bg-gradient-to-br from-white to-orange-50 border-orange-300 hover:border-orange-400'
+                        ? 'bg-slate-100 border-slate-300 hover:border-slate-400'
+                        : 'bg-white border-slate-200 hover:border-slate-300'
                     }`}
                   >
-                    <div className="flex flex-col items-center justify-center space-y-1.5 h-full">
-                      <div className={`w-12 h-12 rounded-full flex items-center justify-center shadow-md group-hover:shadow-lg transition-shadow ${
-                        hasOrder
-                          ? 'bg-gradient-to-br from-red-600 to-red-900'
-                          : 'bg-gradient-to-br from-orange-400 to-yellow-400'
+                    <div className="flex flex-col items-center justify-center p-4 space-y-3 h-full min-h-[100px]">
+                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+                        hasOrder ? 'bg-slate-600 text-white' : 'bg-slate-100 text-slate-500'
                       }`}>
                         {hasOrder ? (
-                          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                           </svg>
                         ) : (
-                          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
                           </svg>
                         )}
                       </div>
-                      <span className="font-extrabold text-sm text-gray-800 leading-tight">{table.name}</span>
-                      <div
-                        className={`text-[10px] font-semibold mt-1 px-2 py-0.5 rounded-md ${
-                          hasOrder
-                            ? 'bg-red-900 text-red-100'
-                            : 'bg-orange-100 text-orange-700'
-                        }`}
-                      >
+                      <span className={`text-sm font-medium leading-tight ${hasOrder ? 'text-slate-700' : 'text-slate-500'}`}>
+                        {table.name}
+                      </span>
+                      <span className={`text-xs font-medium ${hasOrder ? 'text-slate-500' : 'text-slate-400'}`}>
                         {hasOrder ? 'Dolu' : 'Boş'}
-                      </div>
-                      {hasOrder && (
-                        <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-red-400 rounded-full animate-pulse"></span>
-                      )}
+                      </span>
                     </div>
                   </button>
                 );
@@ -1771,6 +2118,181 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           }}
           onTransfer={handleTransferTable}
         />
+      )}
+
+      {/* Geçmiş Adisyon Modal */}
+      {showAdisyonModal && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-3xl font-bold gradient-text">Geçmiş Adisyon İste</h2>
+              <button
+                onClick={() => {
+                  setShowAdisyonModal(false);
+                  setSelectedSaleForAdisyon(null);
+                  setRecentSales([]);
+                }}
+                className="text-gray-500 hover:text-gray-700 transition-colors p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <p className="text-gray-600 mb-6">Son 12 saatin satış geçmişi:</p>
+            {loadingRecentSales ? (
+              <div className="flex items-center justify-center py-12">
+                <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+              </div>
+            ) : recentSales.length === 0 ? (
+              <div className="text-center py-12">
+                <p className="text-gray-600">Son 12 saatte satış bulunamadı.</p>
+              </div>
+            ) : (
+              <>
+                <div className="space-y-3 max-h-96 overflow-y-auto mb-6">
+                  {recentSales.map((sale) => (
+                    <div
+                      key={sale.id}
+                      className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
+                        selectedSaleForAdisyon?.id === sale.id
+                          ? 'bg-gradient-to-r from-purple-50 to-pink-50 border-purple-400'
+                          : 'bg-gray-50 border-gray-200 hover:border-purple-300'
+                      }`}
+                      onClick={() => setSelectedSaleForAdisyon(sale)}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center space-x-3 mb-2">
+                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                              sale.payment_method && sale.payment_method.includes('Nakit')
+                                ? 'bg-gradient-to-r from-green-500 to-emerald-500'
+                                : sale.payment_method && sale.payment_method.includes('Kredi Kartı')
+                                ? 'bg-gradient-to-r from-blue-500 to-cyan-500'
+                                : sale.isGrouped
+                                ? 'bg-gradient-to-r from-purple-500 to-pink-500'
+                                : 'bg-gradient-to-r from-gray-500 to-gray-600'
+                            }`}>
+                              {sale.payment_method && sale.payment_method.includes('Nakit') ? (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                                </svg>
+                              ) : sale.payment_method && sale.payment_method.includes('Kredi Kartı') ? (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                                </svg>
+                              ) : sale.isGrouped ? (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                </svg>
+                              ) : (
+                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                                </svg>
+                              )}
+                            </div>
+                            <div className="flex-1">
+                              <p className="font-bold text-gray-800">
+                                {sale.table_name ? `${sale.table_type === 'inside' ? 'İç' : 'Dış'} Masa ${sale.table_name}` : 'Hızlı Satış'}
+                                {sale.isGrouped && (
+                                  <span className="ml-2 text-xs font-normal text-purple-600 bg-purple-100 px-2 py-0.5 rounded">(Kısmi Ödemeler)</span>
+                                )}
+                              </p>
+                              <p className="text-sm text-gray-600">
+                                {sale.isGrouped && sale.last_sale_date && sale.last_sale_time
+                                  ? `${sale.sale_date} ${sale.sale_time} - ${sale.last_sale_date} ${sale.last_sale_time}`
+                                  : `${sale.sale_date} ${sale.sale_time}`}
+                                {sale.staff_name && ` • ${sale.staff_name}`}
+                              </p>
+                            </div>
+                          </div>
+                          <p className="text-sm text-gray-500 mt-2">{sale.items || 'Ürün bulunamadı'}</p>
+                        </div>
+                        <div className="text-right ml-4">
+                          <p className="text-2xl font-bold text-purple-600">₺{sale.total_amount?.toFixed(2) || '0.00'}</p>
+                          <p className="text-xs text-gray-500 mt-1">{sale.payment_method}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex items-center justify-end space-x-4">
+                  <button
+                    onClick={() => {
+                      setShowAdisyonModal(false);
+                      setSelectedSaleForAdisyon(null);
+                      setRecentSales([]);
+                    }}
+                    className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    onClick={async () => {
+                      if (!selectedSaleForAdisyon) {
+                        showToast('Lütfen bir satış seçin', 'warning');
+                        return;
+                      }
+                      if (!window.electronAPI?.printAdisyon) {
+                        showToast('Adisyon yazdırma özelliği kullanılamıyor', 'error');
+                        return;
+                      }
+                      try {
+                        showToast('Adisyon yazdırılıyor...', 'info');
+                        const adisyonItems = (selectedSaleForAdisyon.items_array || []).map(item => ({
+                          id: item.product_id,
+                          name: item.product_name,
+                          quantity: item.quantity,
+                          price: item.price,
+                          isGift: item.isGift || false,
+                          staff_name: item.staff_name || null
+                        }));
+                        const saleDate = selectedSaleForAdisyon.isGrouped && selectedSaleForAdisyon.last_sale_date
+                          ? selectedSaleForAdisyon.last_sale_date
+                          : selectedSaleForAdisyon.sale_date;
+                        const saleTime = selectedSaleForAdisyon.isGrouped && selectedSaleForAdisyon.last_sale_time
+                          ? selectedSaleForAdisyon.last_sale_time
+                          : selectedSaleForAdisyon.sale_time;
+                        const adisyonData = {
+                          items: adisyonItems,
+                          tableName: selectedSaleForAdisyon.table_name || null,
+                          tableType: selectedSaleForAdisyon.table_type || null,
+                          orderNote: selectedSaleForAdisyon.isGrouped
+                            ? `Kısmi Ödemeler (${selectedSaleForAdisyon.original_sales?.length || 0} ödeme)`
+                            : null,
+                          sale_date: saleDate,
+                          sale_time: saleTime,
+                          staff_name: selectedSaleForAdisyon.staff_name || null,
+                          cashierOnly: true
+                        };
+                        const result = await window.electronAPI.printAdisyon(adisyonData);
+                        if (result.success) {
+                          showToast('Adisyon yazdırıldı', 'success');
+                          setShowAdisyonModal(false);
+                          setSelectedSaleForAdisyon(null);
+                          setRecentSales([]);
+                        } else {
+                          showToast(result.error || 'Adisyon yazdırılamadı', 'error');
+                        }
+                      } catch (error) {
+                        console.error('Adisyon yazdırılırken hata:', error);
+                        showToast('Adisyon yazdırılamadı: ' + error.message, 'error');
+                      }
+                    }}
+                    disabled={!selectedSaleForAdisyon}
+                    className={`px-6 py-3 rounded-xl font-bold text-white transition-all ${
+                      selectedSaleForAdisyon
+                        ? 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 shadow-lg hover:shadow-xl'
+                        : 'bg-gray-300 cursor-not-allowed'
+                    }`}
+                  >
+                    Adisyon Yazdır
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Kısmi Ödeme Modal */}
@@ -1859,12 +2381,22 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
               </button>
               <button
                 onClick={confirmMarkAsPaid}
-                className="flex-1 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                disabled={isConfirmingOrder}
+                className="flex-1 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                Onayla
+                {isConfirmingOrder ? (
+                  <>
+                    <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" style={{ animationDuration: '0.8s' }} />
+                    <span>İşleniyor...</span>
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    Onayla
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -2064,6 +2596,26 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       {showCancelConfirmModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-[2000] animate-fade-in px-4">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl transform animate-scale-in relative overflow-hidden border border-gray-100">
+            {/* İptal işlemi overlay - loading veya success */}
+            {(isCancellingOrder || isCancelSuccess) && (
+              <div className="absolute inset-0 z-30 rounded-3xl bg-black/75 backdrop-blur-md flex flex-col items-center justify-center gap-4 animate-fade-in">
+                {isCancelSuccess ? (
+                  <>
+                    <div className="w-20 h-20 rounded-full bg-emerald-500/90 flex items-center justify-center shadow-2xl animate-success-pop">
+                      <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <p className="text-xl font-semibold tracking-tight text-white">Sipariş İptal Edildi</p>
+                  </>
+                ) : (
+                  <>
+                    <Spinner size="lg" className="text-white" />
+                    <p className="text-xl font-semibold tracking-tight text-white">Sipariş İptal Ediliyor</p>
+                  </>
+                )}
+              </div>
+            )}
             {/* Üst gradient çizgi */}
             <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-500 via-pink-500 to-red-500"></div>
             
@@ -2102,11 +2654,16 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
               </button>
               <button
                 onClick={confirmCancelOrder}
-                className="flex-1 py-4 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                disabled={isCancellingOrder}
+                className="flex-1 py-4 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                {isCancellingOrder ? (
+                  <Spinner size="md" className="text-white" />
+                ) : (
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                )}
                 İptal Et
               </button>
             </div>

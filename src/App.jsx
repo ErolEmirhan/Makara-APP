@@ -47,6 +47,10 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+  const [isCompletingSale, setIsCompletingSale] = useState(false);
+  const [isCompletingSplitPayment, setIsCompletingSplitPayment] = useState(false);
+  const [isSubmittingTableOrder, setIsSubmittingTableOrder] = useState(false);
+  const [isSavingExpense, setIsSavingExpense] = useState(false);
   const searchInputRef = useRef(null);
 
   const showToast = (message, type = 'info') => {
@@ -426,6 +430,7 @@ function App() {
       orderNote: orderNote || null
     };
 
+    setIsSubmittingTableOrder(true);
     try {
       const result = await window.electronAPI.createTableOrder(orderData);
       
@@ -460,10 +465,18 @@ function App() {
         };
         
         if (window.electronAPI && window.electronAPI.printAdisyon) {
-          // Adisyon yazdırmayı arka planda yap, hata olsa bile devam et
-          window.electronAPI.printAdisyon(adisyonData).catch(err => {
-            console.error('Adisyon yazdırılırken hata:', err);
-          });
+          setPrintToast({ status: 'printing', message: 'Kategori fişleri yazdırılıyor...' });
+          let printResult = await window.electronAPI.printAdisyon(adisyonData);
+          if (!printResult?.success) {
+            setPrintToast({ status: 'error', message: 'Fiş yazdırılamadı, tekrar deneniyor...' });
+            await new Promise(r => setTimeout(r, 1500));
+            printResult = await window.electronAPI.printAdisyon(adisyonData);
+          }
+          if (printResult?.success) {
+            setPrintToast({ status: 'success', message: 'Fişler yazdırıldı' });
+          } else {
+            setPrintToast({ status: 'error', message: printResult?.error || 'Fiş yazdırılamadı. Satış geçmişinden tekrar yazdırabilirsiniz.' });
+          }
         }
         
         // Kasadan masaya sipariş eklendiğinde kasa yazıcısından fiş yazdırma (sadece adisyon yeterli)
@@ -489,6 +502,8 @@ function App() {
     } catch (error) {
       console.error('Masa siparişi kaydedilirken hata:', error);
       showToast('Masa siparişi kaydedilemedi: ' + error.message, 'error');
+    } finally {
+      setIsSubmittingTableOrder(false);
     }
   };
 
@@ -518,6 +533,8 @@ function App() {
       orderNote: orderNote || null
     };
 
+    setIsCompletingSale(true);
+    try {
     const result = await window.electronAPI.createSale(saleData);
     
     if (result.success) {
@@ -581,6 +598,9 @@ function App() {
       clearCart();
       setSaleSuccessInfo({ totalAmount, paymentMethod });
     }
+    } finally {
+      setIsCompletingSale(false);
+    }
   };
 
   const completeSplitPayment = async (payments) => {
@@ -605,6 +625,8 @@ function App() {
       orderNote: orderNote || null
     };
 
+    setIsCompletingSplitPayment(true);
+    try {
     const result = await window.electronAPI.createSale(saleData);
     
     if (result.success) {
@@ -662,6 +684,9 @@ function App() {
         splitPayment: true
       });
     }
+    } finally {
+      setIsCompletingSplitPayment(false);
+    }
   };
 
   const getTotalAmount = () => {
@@ -691,29 +716,34 @@ function App() {
   };
 
   const handleSaveExpense = async (expenseData) => {
-    // Masrafı normal satış gibi Firebase Sales'e kaydet
     const saleData = {
       items: [{
         id: 'expense-' + Date.now(),
         name: expenseData.title,
         price: expenseData.amount,
         quantity: 1,
-        isExpense: true // Masraf olduğunu belirt
+        isExpense: true
       }],
       totalAmount: expenseData.amount,
       paymentMethod: 'Masraf',
       orderNote: null,
-      isExpense: true // Satış değil, masraf
+      isExpense: true
     };
 
+    setIsSavingExpense(true);
+    try {
     const result = await window.electronAPI.createSale(saleData);
     
     if (result.success) {
+      setShowExpenseModal(false);
       setSaleSuccessInfo({ 
         totalAmount: expenseData.amount, 
         paymentMethod: 'Masraf',
         expenseTitle: expenseData.title
       });
+    }
+    } finally {
+      setIsSavingExpense(false);
     }
   };
 
@@ -871,6 +901,7 @@ function App() {
               onClearCart={clearCart}
               onCheckout={handlePayment}
               onSaveToTable={completeTableOrder}
+              isSavingToTable={isSubmittingTableOrder}
               onRequestAdisyon={requestAdisyon}
               totalAmount={getTotalAmount()}
               selectedTable={selectedTable}
@@ -891,6 +922,7 @@ function App() {
           totalAmount={getTotalAmount()}
           onSelectPayment={completeSale}
           onClose={() => setShowPaymentModal(false)}
+          isSubmitting={isCompletingSale}
         />
       )}
 
@@ -900,6 +932,7 @@ function App() {
           totalAmount={getTotalAmount()}
           onCompleteSplitPayment={completeSplitPayment}
           onClose={() => setShowSplitPaymentModal(false)}
+          isSubmitting={isCompletingSplitPayment}
         />
       )}
 
@@ -907,6 +940,7 @@ function App() {
         <ExpenseModal
           onClose={() => setShowExpenseModal(false)}
           onSave={handleSaveExpense}
+          isSubmitting={isSavingExpense}
         />
       )}
 

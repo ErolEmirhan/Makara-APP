@@ -66,6 +66,16 @@
   background-clip: text;
 }
 
+/* Kurumsal başlık: koyu lacivert–indigo gradient */
+.heading-display {
+  font-family: 'Montserrat', sans-serif;
+  background: linear-gradient(135deg, #1e293b 0%, #334155 40%, #4f46e5 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+}
+
 .animate-fade-in {
   animation: fadeIn 0.3s ease-in;
 }
@@ -78,6 +88,24 @@
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+.animate-success-pop {
+  animation: successPop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes successPop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
   }
 }
 

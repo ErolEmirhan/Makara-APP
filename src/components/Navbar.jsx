@@ -200,7 +200,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
         <div>
           <h1 className="text-lg font-bold text-pink-500">Makara Satış Sistemi</h1>
-          <p className="text-xs text-gray-500 font-medium">v2.6.6</p>
+          <p className="text-xs text-gray-500 font-medium">v2.7.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300">
           <DateTimeDisplay />
@@ -257,21 +257,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
         {userType === 'Admin' && (
           <>
-            <button
-              onClick={() => setCurrentView('sales')}
-              className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
-                currentView === 'sales'
-                  ? 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg transform scale-105'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
-              }`}
-            >
-              <div className="flex items-center space-x-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <span>Satış Detayları</span>
-              </div>
-            </button>
             <button
               onClick={() => setShowSettingsSplash(true)}
               className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800"

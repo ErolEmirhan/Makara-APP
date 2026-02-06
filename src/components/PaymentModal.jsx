@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-const PaymentModal = ({ totalAmount, onSelectPayment, onClose }) => {
+const PaymentModal = ({ totalAmount, onSelectPayment, onClose, isSubmitting = false }) => {
   const [showCampaign, setShowCampaign] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState(null);
 
@@ -54,20 +54,31 @@ const PaymentModal = ({ totalAmount, onSelectPayment, onClose }) => {
 
         <div className="space-y-4 mb-6">
           <button
-            onClick={() => handlePaymentSelect('Nakit')}
-            className="w-full p-6 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
+            onClick={() => !isSubmitting && handlePaymentSelect('Nakit')}
+            disabled={isSubmitting}
+            className="w-full p-6 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95 flex items-center justify-center"
           >
             <div className="flex items-center justify-center space-x-3">
-              <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              <span>Nakit Ödeme</span>
+              {isSubmitting ? (
+                <>
+                  <span className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" style={{ animationDuration: '0.8s' }} />
+                  <span>İşleniyor...</span>
+                </>
+              ) : (
+                <>
+                  <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                  </svg>
+                  <span>Nakit Ödeme</span>
+                </>
+              )}
             </div>
           </button>
 
           <button
-            onClick={() => handlePaymentSelect('Kredi Kartı')}
-            className="w-full p-6 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
+            onClick={() => !isSubmitting && handlePaymentSelect('Kredi Kartı')}
+            disabled={isSubmitting}
+            className="w-full p-6 bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
           >
             <div className="flex items-center justify-center space-x-3">
               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -78,8 +89,9 @@ const PaymentModal = ({ totalAmount, onSelectPayment, onClose }) => {
           </button>
 
           <button
-            onClick={() => setShowCampaign(!showCampaign)}
-            className="w-full p-6 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
+            onClick={() => !isSubmitting && setShowCampaign(!showCampaign)}
+            disabled={isSubmitting}
+            className="w-full p-6 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
           >
             <div className="flex items-center justify-center space-x-3">
               <svg className="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">

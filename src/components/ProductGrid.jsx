@@ -138,4 +138,14 @@ const ProductGrid = ({ products, onAddToCart }) => {
   );
 };
 
-export default ProductGrid;
+// PERFORMANS: React.memo ile gereksiz re-render'ları önle - özel karşılaştırma
+export default React.memo(ProductGrid, (prevProps, nextProps) => {
+  if (prevProps.products.length !== nextProps.products.length) return false;
+  if (prevProps.products.length === 0) return true;
+  // İlk ve son ürünün ID'sini karşılaştır (hızlı kontrol)
+  const prevFirst = prevProps.products[0];
+  const nextFirst = nextProps.products[0];
+  const prevLast = prevProps.products[prevProps.products.length - 1];
+  const nextLast = nextProps.products[nextProps.products.length - 1];
+  return prevFirst?.id === nextFirst?.id && prevLast?.id === nextLast?.id;
+});

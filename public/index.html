@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.23">
+  <link rel="manifest" href="/manifest.json?v=2.4.25">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.23';
+      const APP_VERSION = '2.4.25';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -2010,8 +2010,8 @@
           
           // Tarih input'unu güncelle
           const datePicker = document.getElementById('staffDatePicker');
-          if (datePicker) {
-            datePicker.value = staffSelectedDate.toISOString().split('T')[0];
+          if (datePicker && typeof staffDateToLocalYMD === 'function') {
+            datePicker.value = staffDateToLocalYMD(staffSelectedDate);
           }
         }
         renderStaffDetails();
@@ -3598,10 +3598,10 @@
         `;
       }
 
-      // Dolu masalar için modern gradient kırmızı tasarım
+      // Dolu masalar için modern gradient kırmızı tasarım (tıklanabilir)
       if (isOccupied) {
         return `
-          <div class="table-card table-card-occupied">
+          <div class="table-card table-card-occupied" style="cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
             <div class="table-card-gradient">
               <div class="table-number-occupied">${table.table_number}</div>
               <div class="table-amount-occupied">₺${totalAmount.toFixed(2)}</div>
@@ -3610,9 +3610,9 @@
         `;
       }
 
-      // Boş masalar için mevcut tasarım
+      // Boş masalar için mevcut tasarım (tıklanabilir)
       return `
-        <div class="table-card" style="background: ${bgColor}; border-color: ${borderColor};">
+        <div class="table-card" style="background: ${bgColor}; border-color: ${borderColor}; cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
           <div class="table-card-header">
             <div class="table-number" style="color: var(--text-main);">${table.table_number}</div>
             <div class="table-status" style="background: ${statusColor}20; color: ${statusColor};">
@@ -3622,6 +3622,148 @@
           <div class="table-name" style="color: var(--text-main);">${table.table_name}</div>
         </div>
       `;
+    }
+
+    // Masa detay modal: garson, sipariş saati, ödeme durumu
+    function showTableDetail(tableId) {
+      const table = allStaticTables[tableId];
+      const modal = document.getElementById('tableDetailModal');
+      if (!modal) return;
+      if (!table) {
+        document.getElementById('tableDetailModalBody').innerHTML = '<p style="color:#6b7280;">Masa bilgisi bulunamadı.</p>';
+        modal.style.display = 'flex';
+        return;
+      }
+      const items = Array.isArray(table.items) ? table.items : [];
+      const isOccupied = table.is_occupied === true || table.is_occupied === 'true' || table.is_occupied === 1 || items.length > 0;
+
+      if (!isOccupied) {
+        document.getElementById('tableDetailModalBody').innerHTML = `
+          <div style="text-align: center; padding: 24px; color: #6b7280;">
+            <div style="font-size: 48px; margin-bottom: 12px;">🪑</div>
+            <div style="font-size: 18px; font-weight: 600;">${table.table_name || tableId}</div>
+            <div style="font-size: 15px; margin-top: 8px;">Bu masa şu an boş.</div>
+          </div>
+        `;
+        document.getElementById('tableDetailModalTitle').textContent = (table.table_name || tableId) + ' – Detay';
+        modal.style.display = 'flex';
+        return;
+      }
+
+      const staffNames = [];
+      items.forEach(item => {
+        const name = item.staff_name;
+        if (name && typeof name === 'string' && name.trim() && !staffNames.includes(name.trim())) staffNames.push(name.trim());
+      });
+      const garsonText = staffNames.length > 0 ? staffNames.join(', ') : '—';
+
+      const orderDate = table.order_date || '—';
+      const orderTime = table.order_time || '—';
+      const saatText = orderDate !== '—' || orderTime !== '—' ? `${orderDate} ${orderTime}` : '—';
+
+      let paidCount = 0;
+      let totalQty = 0;
+      items.forEach(item => {
+        if (item.isGift) return;
+        const q = item.quantity || 0;
+        const paid = item.paid_quantity != null ? item.paid_quantity : (item.is_paid ? q : 0);
+        totalQty += q;
+        paidCount += paid;
+      });
+      let odemeText = '—';
+      let odemeClass = 'color: #6b7280;';
+      if (totalQty > 0) {
+        if (paidCount >= totalQty) {
+          odemeText = 'Ödendi';
+          odemeClass = 'color: #059669; font-weight: 600;';
+        } else if (paidCount > 0) {
+          odemeText = `Kısmen ödendi (${paidCount}/${totalQty} adet)`;
+          odemeClass = 'color: #d97706; font-weight: 600;';
+        } else {
+          odemeText = 'Ödeme bekliyor';
+          odemeClass = 'color: #dc2626; font-weight: 600;';
+        }
+      }
+
+      document.getElementById('tableDetailModalTitle').textContent = (table.table_name || tableId) + ' – Sipariş detayı';
+      document.getElementById('tableDetailModalBody').innerHTML = `
+        <div class="table-detail-grid">
+          <div class="table-detail-row">
+            <span class="table-detail-label">👤 Garson</span>
+            <span class="table-detail-value">${garsonText}</span>
+          </div>
+          <div class="table-detail-row">
+            <span class="table-detail-label">🕐 Sipariş tarihi / saati</span>
+            <span class="table-detail-value">${saatText}</span>
+          </div>
+          <div class="table-detail-row">
+            <span class="table-detail-label">💳 Ödeme durumu</span>
+            <span class="table-detail-value" style="${odemeClass}">${odemeText}</span>
+          </div>
+          <div class="table-detail-row">
+            <span class="table-detail-label">📋 Tutar</span>
+            <span class="table-detail-value">₺${parseFloat(table.total_amount || 0).toFixed(2)}</span>
+          </div>
+        </div>
+        ${items.length > 0 ? `
+        <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid #e5e7eb;">
+          <div style="font-size: 14px; font-weight: 700; color: #374151; margin-bottom: 10px;">İçerik (${items.length} kalem)</div>
+          <div style="max-height: 200px; overflow-y: auto;">
+            ${items.slice(0, 15).map(item => {
+              const q = item.quantity || 0;
+              const paid = item.paid_quantity != null ? item.paid_quantity : (item.is_paid ? q : 0);
+              const paySpan = q ? `<span style="color: ${paid >= q ? '#059669' : '#d97706'};">${paid >= q ? 'Ödendi' : paid + '/' + q}</span>` : '';
+              return `<div style="display: flex; justify-content: space-between; padding: 6px 0; font-size: 13px; color: #4b5563;"><span>${item.product_name || '—'} ${item.isGift ? '(İkram)' : ''} x${q}</span>${paySpan}</div>`;
+            }).join('')}
+            ${items.length > 15 ? `<div style="font-size: 12px; color: #9ca3af;">+${items.length - 15} kalem daha</div>` : ''}
+          </div>
+        </div>
+        ` : ''}
+        <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid #e5e7eb;">
+          <button type="button" onclick="cancelTableInDashboard('${tableId}')" style="width: 100%; padding: 14px 20px; background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: white; border: none; border-radius: 12px; font-weight: 700; font-size: 15px; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px;" onmouseover="this.style.opacity='0.9';" onmouseout="this.style.opacity='1';">
+            <span>❌</span>
+            <span>Masayı iptal et (veritabanından sil)</span>
+          </button>
+        </div>
+      `;
+      modal.style.display = 'flex';
+    }
+
+    function hideTableDetail() {
+      const modal = document.getElementById('tableDetailModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    // Masayı veritabanından tamamen sil (Firebase makaramasalar tables)
+    async function cancelTableInDashboard(tableId) {
+      if (!tableId) return;
+      const table = allStaticTables[tableId];
+      const tableName = table ? (table.table_name || tableId) : tableId;
+      if (!confirm(`"${tableName}" masasını tamamen iptal edip veritabanından sileceksiniz. Bu işlem geri alınamaz. Devam etmek istiyor musunuz?`)) return;
+      if (!tablesDb) {
+        showToast('error', 'Hata', 'Masalar veritabanına bağlanılamadı.');
+        return;
+      }
+      try {
+        const tableRef = tablesDb.collection('tables').doc(tableId);
+        await tableRef.delete();
+        if (allStaticTables[tableId]) {
+          allStaticTables[tableId].is_occupied = false;
+          allStaticTables[tableId].items = [];
+          allStaticTables[tableId].total_amount = 0;
+          allStaticTables[tableId].order_id = null;
+          allStaticTables[tableId].order_date = null;
+          allStaticTables[tableId].order_time = null;
+          allStaticTables[tableId].order_note = null;
+          if (previousTableStates[tableId] !== undefined) previousTableStates[tableId] = false;
+        }
+        if (typeof renderAllTables === 'function') renderAllTables(allStaticTables);
+        hideTableDetail();
+        showToast('success', 'Masa iptal edildi', tableName + ' veritabanından silindi.');
+      } catch (err) {
+        console.error('Masa silme hatası:', err);
+        showToast('error', 'Hata', 'Masa silinemedi: ' + (err.message || 'Bilinmeyen hata'));
+      }
     }
 
     // Personel Detayları render et
@@ -4965,23 +5107,26 @@
         yesterday.setDate(yesterday.getDate() - 1);
         staffSelectedDate = yesterday;
         
-        // Tarih input'unu güncelle
         const datePicker = document.getElementById('staffDatePicker');
-        if (datePicker) {
-          datePicker.value = staffSelectedDate.toISOString().split('T')[0];
+        if (datePicker && typeof staffDateToLocalYMD === 'function') {
+          datePicker.value = staffDateToLocalYMD(staffSelectedDate);
         }
       }
       
-      // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
       staffSalesCacheByDate = {};
-      
       renderStaffDetails();
     }
     
-    // Tarih seçici değiştiğinde
+    // Personel tarihi: yerel gün YYYY-MM-DD (timezone kayması olmasın)
+    function staffDateToLocalYMD(d) {
+      const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+    // Tarih seçici değiştiğinde (input değeri yerel gün olarak parse edilir)
     function setStaffSelectedDate(dateString) {
       if (!dateString) return;
-      staffSelectedDate = new Date(dateString);
+      const [y, m, d] = dateString.split('-').map(Number);
+      staffSelectedDate = new Date(y, m - 1, d);
       staffDateFilter = 'day';
       
       // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
@@ -4997,15 +5142,10 @@
       staffSelectedDate = newDate;
       staffDateFilter = 'day';
       
-      // Tarih input'unu güncelle
       const datePicker = document.getElementById('staffDatePicker');
-      if (datePicker) {
-        datePicker.value = staffSelectedDate.toISOString().split('T')[0];
-      }
+      if (datePicker) datePicker.value = staffDateToLocalYMD(staffSelectedDate);
       
-      // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
       staffSalesCacheByDate = {};
-      
       renderStaffDetails();
     }
     
@@ -5014,11 +5154,8 @@
       staffSelectedDate = new Date();
       staffDateFilter = 'day';
       
-      // Tarih input'unu güncelle
       const datePicker = document.getElementById('staffDatePicker');
-      if (datePicker) {
-        datePicker.value = staffSelectedDate.toISOString().split('T')[0];
-      }
+      if (datePicker) datePicker.value = staffDateToLocalYMD(staffSelectedDate);
       
       // Cache'i temizle (yeni tarih için yeni veri yüklenecek)
       staffSalesCacheByDate = {};
@@ -5158,14 +5295,37 @@
       }
     }
     
+    // Tarih string'ini parse et (DD.MM.YYYY / D.M.YYYY / YYYY-MM-DD); cihaz/locale bağımsız karşılaştırma için
+    function parseTRDateStr(str) {
+      if (!str || typeof str !== 'string') return null;
+      const parts = str.trim().split(/[.\-/]/);
+      if (parts.length !== 3) return null;
+      let day, month, year;
+      if (parts[0].length === 4) {
+        year = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+        day = parseInt(parts[2], 10);
+      } else {
+        day = parseInt(parts[0], 10);
+        month = parseInt(parts[1], 10) - 1;
+        year = parseInt(parts[2], 10);
+      }
+      if (isNaN(day) || isNaN(month) || isNaN(year) || year < 2000) return null;
+      const d = new Date(year, month, day);
+      if (d.getFullYear() !== year || d.getMonth() !== month || d.getDate() !== day) return null;
+      return d;
+    }
+    function isSameDay(d1, d2) {
+      if (!d1 || !d2) return false;
+      return d1.getFullYear() === d2.getFullYear() && d1.getMonth() === d2.getMonth() && d1.getDate() === d2.getDate();
+    }
+
     async function loadStaffSales() {
       if (!db) return [];
       
-      const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
       const dateRange = getDateRangeForStaffFilter();
       const cacheKey = `${staffDateFilter}_${dateRange.start || 'all'}_${dateRange.end || 'all'}`;
       
-      // Cache kontrolü
       const now = Date.now();
       if (staffSalesCacheByDate[cacheKey] && 
           staffSalesCacheByDate[cacheKey].timestamp && 
@@ -5176,7 +5336,6 @@
       try {
         const salesRef = db.collection('sales');
         
-        // Tüm satışları yükle (limit yok - bu 3 ürünü içeren satışları bulmak için)
         let query = salesRef;
         try {
           query = salesRef.orderBy('created_at', 'desc');
@@ -5184,17 +5343,17 @@
           try {
             query = salesRef.orderBy('timestamp', 'desc');
           } catch (e2) {
-            query = salesRef; // Limit yok
+            query = salesRef;
           }
         }
         
         const querySnapshot = await query.get();
         const sales = [];
+        const selectedDatesParsed = dateRange.dates && dateRange.dates.length > 0 ? dateRange.dates.map(parseTRDateStr).filter(Boolean) : null;
         
         querySnapshot.forEach((doc) => {
           const data = doc.data();
           
-          // Satış tarihini al
           let saleDate = data.sale_date;
           let saleTime = data.sale_time;
           
@@ -5212,98 +5371,63 @@
             saleTime = createdAt.toLocaleTimeString('tr-TR');
           }
           
-          // Tarih filtresi uygula (eğer belirli tarihler seçildiyse)
-          if (dateRange.dates && !dateRange.dates.includes(saleDate)) {
-            return; // Bu tarih filtresine uymuyor, atla
+          if (selectedDatesParsed && selectedDatesParsed.length > 0) {
+            const saleDay = parseTRDateStr(saleDate) || (createdAt ? new Date(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate()) : null);
+            if (!saleDay || !selectedDatesParsed.some(sd => isSameDay(saleDay, sd))) return;
           }
           
-          // Bu satışta hedef ürünlerden biri var mı kontrol et
-          let hasTargetProduct = false;
           let parsedItemsArray = [];
-          
-          // Önce items_array'i kontrol et
           if (data.items_array && Array.isArray(data.items_array) && data.items_array.length > 0) {
             parsedItemsArray = data.items_array;
-            hasTargetProduct = parsedItemsArray.some(item => {
-              const productName = (item.product_name || '').trim();
-              return targetProducts.includes(productName);
-            });
-          }
-          
-          // Eğer items_array yoksa veya hedef ürün bulunamadıysa, items string'ini parse et
-          if (!hasTargetProduct && data.items) {
-            const itemsStr = typeof data.items === 'string' ? data.items : JSON.stringify(data.items);
-            
-            // items string'inden parse et
-            if (typeof data.items === 'string') {
-              const items = data.items.split(', ').map(itemStr => {
-                const match = itemStr.match(/(.+) x(\d+)/);
-                if (match) {
-                  const productName = match[1].replace(' (İKRAM)', '').trim();
-                  return {
-                    product_name: productName,
-                    quantity: parseInt(match[2]),
-                    isGift: itemStr.includes('(İKRAM)'),
-                    price: 0
-                  };
-                }
+          } else if (data.items && typeof data.items === 'string') {
+            parsedItemsArray = data.items.split(', ').map(itemStr => {
+              const match = itemStr.match(/(.+) x(\d+)/);
+              if (match) {
                 return {
-                  product_name: itemStr.trim(),
-                  quantity: 1,
-                  isGift: false,
+                  product_name: match[1].replace(' (İKRAM)', '').trim(),
+                  quantity: parseInt(match[2]),
+                  isGift: itemStr.includes('(İKRAM)'),
                   price: 0
                 };
-              });
-              parsedItemsArray = items;
-              
-              hasTargetProduct = parsedItemsArray.some(item => {
-                const productName = (item.product_name || '').trim();
-                return targetProducts.includes(productName);
-              });
-            } else if (Array.isArray(data.items)) {
-              parsedItemsArray = data.items;
-              hasTargetProduct = parsedItemsArray.some(item => {
-                const productName = (item.product_name || item.name || '').trim();
-                return targetProducts.includes(productName);
-              });
-            } else {
-              hasTargetProduct = targetProducts.some(product => itemsStr.includes(product));
-            }
+              }
+              return {
+                product_name: itemStr.trim(),
+                quantity: 1,
+                isGift: false,
+                price: 0
+              };
+            });
+          } else if (Array.isArray(data.items)) {
+            parsedItemsArray = data.items;
           }
           
-          // Sadece hedef ürünleri içeren satışları ekle
-          if (hasTargetProduct) {
-            // items_array'i kullan (yukarıda parse edildi)
-            // Eğer price yoksa, total_amount'u item sayısına böl (yaklaşık)
-            if (parsedItemsArray.length > 0 && parsedItemsArray.some(item => !item.price || item.price === 0)) {
-              const totalAmount = parseFloat(data.total_amount || 0);
-              const totalQuantity = parsedItemsArray.reduce((sum, item) => sum + (item.quantity || 1), 0);
-              const avgPrice = totalQuantity > 0 ? totalAmount / totalQuantity : 0;
-              
-              parsedItemsArray = parsedItemsArray.map(item => ({
-                ...item,
-                price: item.price || avgPrice,
-                product_name: (item.product_name || '').trim()
-              }));
-            }
-            
-            sales.push({
-              id: doc.id,
-              sale_id: data.sale_id || doc.id,
-              total_amount: data.total_amount || 0,
-              payment_method: data.payment_method || 'Nakit',
-              sale_date: saleDate || 'Bilinmeyen',
-              sale_time: saleTime || '',
-              staff_name: data.staff_name || null,
-              table_name: data.table_name || null,
-              table_type: data.table_type || null,
-              items: parsedItemsArray,
-              items_array: parsedItemsArray,
-              itemsText: data.items || 'Ürün bulunamadı',
-              isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
-              created_at: createdAt
-            });
+          if (parsedItemsArray.length > 0 && parsedItemsArray.some(item => !item.price || item.price === 0)) {
+            const totalAmount = parseFloat(data.total_amount || 0);
+            const totalQuantity = parsedItemsArray.reduce((sum, item) => sum + (item.quantity || 1), 0);
+            const avgPrice = totalQuantity > 0 ? totalAmount / totalQuantity : 0;
+            parsedItemsArray = parsedItemsArray.map(item => ({
+              ...item,
+              price: item.price || avgPrice,
+              product_name: (item.product_name || '').trim()
+            }));
           }
+          
+          sales.push({
+            id: doc.id,
+            sale_id: data.sale_id || doc.id,
+            total_amount: data.total_amount || 0,
+            payment_method: data.payment_method || 'Nakit',
+            sale_date: saleDate || 'Bilinmeyen',
+            sale_time: saleTime || '',
+            staff_name: data.staff_name || null,
+            table_name: data.table_name || null,
+            table_type: data.table_type || null,
+            items: parsedItemsArray,
+            items_array: parsedItemsArray,
+            itemsText: data.items || 'Ürün bulunamadı',
+            isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
+            created_at: createdAt
+          });
         });
         
         // Cache'e kaydet
@@ -5338,251 +5462,44 @@
       const container = document.getElementById('staffContainer');
       if (!container) return;
 
-      // Loading overlay'i göster
       showStaffLoadingOverlay();
 
       try {
-        // Bu 3 ürünü içeren satışları direkt yükle (tarih filtresi zaten loadStaffSales içinde uygulanıyor)
         const staffSales = await loadStaffSales();
-      
-      // Sadece masraf olmayan satışları kullan
-      let reportSales = staffSales.filter(sale => !sale.isExpense);
-      
-      // Toplam istatistikler
-      const totalRevenue = reportSales.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
-      const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
-      const totalProductSales = {};
-      
-      reportSales.forEach(sale => {
-        if (sale.items_array && Array.isArray(sale.items_array)) {
-          sale.items_array.forEach(item => {
-            if (item.isGift) return;
-            const productName = (item.product_name || '').trim();
-            // Ürün ismini normalize et ve tam eşleşme kontrol et
-            if (targetProducts.includes(productName)) {
-              if (!totalProductSales[productName]) {
-                totalProductSales[productName] = { count: 0, revenue: 0 };
-              }
-              totalProductSales[productName].count += (item.quantity || 0);
-              totalProductSales[productName].revenue += (parseFloat(item.price || 0) * (item.quantity || 0));
-            }
-          });
-        } else if (sale.items && typeof sale.items === 'string') {
-          // Eğer items_array yoksa ama items string'i varsa, parse et
-          const items = sale.items.split(', ').map(itemStr => {
-            const match = itemStr.match(/(.+) x(\d+)/);
-            if (match) {
-              const productName = match[1].replace(' (İKRAM)', '').trim();
-              const quantity = parseInt(match[2]);
-              const isGift = itemStr.includes('(İKRAM)');
-              const totalAmount = parseFloat(sale.total_amount || 0);
-              // Yaklaşık fiyat hesapla
-              const allItems = sale.items.split(', ');
-              const totalQuantity = allItems.reduce((sum, itm) => {
-                const m = itm.match(/x(\d+)/);
-                return sum + (m ? parseInt(m[1]) : 1);
-              }, 0);
-              const avgPrice = totalQuantity > 0 ? totalAmount / totalQuantity : 0;
-              
-              return {
-                product_name: productName,
-                quantity: quantity,
-                isGift: isGift,
-                price: avgPrice
-              };
-            }
-            return null;
-          }).filter(Boolean);
-          
-          items.forEach(item => {
-            if (item.isGift) return;
-            const productName = (item.product_name || '').trim();
-            if (targetProducts.includes(productName)) {
-              if (!totalProductSales[productName]) {
-                totalProductSales[productName] = { count: 0, revenue: 0 };
-              }
-              totalProductSales[productName].count += (item.quantity || 0);
-              totalProductSales[productName].revenue += (parseFloat(item.price || 0) * (item.quantity || 0));
-            }
-          });
-        }
-      });
-      
-      const staffStats = {};
-      
-      reportSales.forEach(sale => {
-        if (sale.items_array && Array.isArray(sale.items_array) && sale.items_array.length > 0) {
-          const staffInThisSale = new Set();
-          
-          sale.items_array.forEach(item => {
-            // Personel ismini al ve virgülle ayrılmış ise ayır
-            let itemStaffName = item.staff_name || sale.staff_name;
-            if (!itemStaffName) return;
-            
-            // Virgülle ayrılmış personel isimlerini ayır ve temizle
-            const staffNames = itemStaffName.split(',').map(name => name.trim()).filter(name => name.length > 0);
-            
-            const productName = (item.product_name || '').trim();
-            const quantity = item.quantity || 0;
-            const price = parseFloat(item.price || 0);
-            const isGift = item.isGift || false;
-            
-            // Sadece hedef ürünleri işle (Limonata, Filtre Kahve, Salep)
-            const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
-            if (!targetProducts.includes(productName)) {
-              return; // Bu ürünü atla
-            }
-            
-            // Her personel için ayrı ayrı işle
-            staffNames.forEach(staffName => {
-              // Bu satışta hedef ürün satan personeli kaydet
-              staffInThisSale.add(staffName);
-              
-              if (!staffStats[staffName]) {
-                staffStats[staffName] = {
-                  name: staffName,
-                  totalRevenue: 0,
-                  totalSales: 0,
-                  products: {},
-                  averageSale: 0,
-                  totalItemsSold: 0,
-                  totalGiftItems: 0
-                };
-              }
-              
-              // Sadece hedef ürünler için revenue hesapla
-              // Birden fazla personel varsa, miktarı eşit böl
-              const quantityPerStaff = staffNames.length > 1 ? quantity / staffNames.length : quantity;
-              const revenuePerStaff = staffNames.length > 1 ? (price * quantity) / staffNames.length : (price * quantity);
-              
-              if (!isGift) {
-                staffStats[staffName].totalRevenue += revenuePerStaff;
-              }
-              
-              if (!staffStats[staffName].products[productName]) {
-                staffStats[staffName].products[productName] = {
-                  count: 0,
-                  revenue: 0
-                };
-              }
-              
-              staffStats[staffName].products[productName].count += quantityPerStaff;
-              if (!isGift) {
-                staffStats[staffName].products[productName].revenue += revenuePerStaff;
-              }
-              
-              // Sadece hedef ürünler için totalItemsSold hesapla
-              staffStats[staffName].totalItemsSold += quantityPerStaff;
-              if (isGift) {
-                staffStats[staffName].totalGiftItems += quantityPerStaff;
-              }
-            });
-          });
-          
-          staffInThisSale.forEach(staffName => {
-            if (staffStats[staffName]) {
-              staffStats[staffName].totalSales += 1;
-            }
-          });
-        } else if (sale.staff_name && sale.items) {
-          // Eğer items_array yoksa ama items string'i varsa ve hedef ürün içeriyorsa
-          const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
-          const itemsStr = typeof sale.items === 'string' ? sale.items : JSON.stringify(sale.items);
-          const hasTargetProduct = targetProducts.some(product => itemsStr.includes(product));
-          
-          if (hasTargetProduct) {
-            // Personel ismini al ve virgülle ayrılmış ise ayır
-            const staffNames = sale.staff_name.split(',').map(name => name.trim()).filter(name => name.length > 0);
-            
-            // items string'inden parse et ve hedef ürünleri hesapla
-            if (typeof sale.items === 'string') {
-              const items = sale.items.split(', ').map(itemStr => {
-                const match = itemStr.match(/(.+) x(\d+)/);
-                if (match) {
-                  const productName = match[1].replace(' (İKRAM)', '').trim();
-                  const quantity = parseInt(match[2]);
-                  const isGift = itemStr.includes('(İKRAM)');
-                  const totalAmount = parseFloat(sale.total_amount || 0);
-                  const allItems = sale.items.split(', ');
-                  const totalQuantity = allItems.reduce((sum, itm) => {
-                    const m = itm.match(/x(\d+)/);
-                    return sum + (m ? parseInt(m[1]) : 1);
-                  }, 0);
-                  const avgPrice = totalQuantity > 0 ? totalAmount / totalQuantity : 0;
-                  
-                  return {
-                    product_name: productName,
-                    quantity: quantity,
-                    isGift: isGift,
-                    price: avgPrice
-                  };
-                }
-                return null;
-              }).filter(Boolean);
-              
-              // Her personel için ayrı ayrı işle
-              staffNames.forEach(staffName => {
-                if (!staffStats[staffName]) {
-                  staffStats[staffName] = {
-                    name: staffName,
-                    totalRevenue: 0,
-                    totalSales: 0,
-                    products: {},
-                    averageSale: 0,
-                    totalItemsSold: 0,
-                    totalGiftItems: 0
-                  };
-                }
-                
-                items.forEach(item => {
-                  const productName = (item.product_name || '').trim();
-                  if (targetProducts.includes(productName)) {
-                    // Birden fazla personel varsa, miktarı eşit böl
-                    const quantityPerStaff = staffNames.length > 1 ? item.quantity / staffNames.length : item.quantity;
-                    const revenuePerStaff = staffNames.length > 1 ? (item.price * item.quantity) / staffNames.length : (item.price * item.quantity);
-                    
-                    if (!staffStats[staffName].products[productName]) {
-                      staffStats[staffName].products[productName] = {
-                        count: 0,
-                        revenue: 0
-                      };
-                    }
-                    staffStats[staffName].products[productName].count += quantityPerStaff;
-                    if (!item.isGift) {
-                      staffStats[staffName].products[productName].revenue += revenuePerStaff;
-                      staffStats[staffName].totalRevenue += revenuePerStaff;
-                    }
-                    staffStats[staffName].totalItemsSold += quantityPerStaff;
-                  }
-                });
-                
-                staffStats[staffName].totalSales += 1;
+        const reportSales = staffSales.filter(sale => !sale.isExpense);
+        const staffStats = {};
+
+        reportSales.forEach(sale => {
+          if (sale.items_array && Array.isArray(sale.items_array) && sale.items_array.length > 0) {
+            sale.items_array.forEach(item => {
+              if (item.isGift) return;
+              const staffName = (item.staff_name || sale.staff_name || '').toString().trim();
+              if (!staffName) return;
+              const names = staffName.split(',').map(n => n.trim()).filter(n => n.length > 0);
+              const quantity = item.quantity || 0;
+              const price = parseFloat(item.price || 0);
+              const revenue = price * quantity;
+              const revenuePerStaff = names.length > 1 ? revenue / names.length : revenue;
+              names.forEach(name => {
+                if (!staffStats[name]) staffStats[name] = { name, totalRevenue: 0 };
+                staffStats[name].totalRevenue += revenuePerStaff;
               });
-            }
+            });
+          } else {
+            const staffName = (sale.staff_name || '').toString().trim();
+            if (!staffName) return;
+            const names = staffName.split(',').map(n => n.trim()).filter(n => n.length > 0);
+            const amount = parseFloat(sale.total_amount || 0);
+            const perStaff = names.length > 1 ? amount / names.length : amount;
+            names.forEach(name => {
+              if (!staffStats[name]) staffStats[name] = { name, totalRevenue: 0 };
+              staffStats[name].totalRevenue += perStaff;
+            });
           }
-        }
-      });
+        });
+
+        const sortedStaff = Object.values(staffStats).sort((a, b) => b.totalRevenue - a.totalRevenue);
       
-      Object.keys(staffStats).forEach(staffName => {
-        const stats = staffStats[staffName];
-        stats.averageSale = stats.totalSales > 0 ? stats.totalRevenue / stats.totalSales : 0;
-      });
-      
-      const sortedStaff = Object.values(staffStats).sort((a, b) => b.totalRevenue - a.totalRevenue);
-      
-      // Zaman dilimi bilgisi
-      const filterLabels = {
-        'all': 'Tüm Zamanlar',
-        'day': staffSelectedDate.toLocaleDateString('tr-TR'),
-        'yesterday': 'Dün',
-        'week': 'Son 1 Hafta',
-        'month': 'Son 1 Ay',
-        'custom': staffCustomDateRange.start && staffCustomDateRange.end 
-          ? `${staffCustomDateRange.start.toLocaleDateString('tr-TR')} - ${staffCustomDateRange.end.toLocaleDateString('tr-TR')}`
-          : 'Özel Tarih Aralığı'
-      };
-      
-      // Seçilen tarih bilgisi (empty state için)
       const selectedDateStr = staffDateFilter === 'day' 
         ? staffSelectedDate.toLocaleDateString('tr-TR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
         : 'Seçilen tarih';
@@ -5592,255 +5509,45 @@
           <div class="staff-header-section">
             <h2 class="staff-title">👥 Personel Detayları</h2>
             <div class="staff-date-navigation-wrapper" style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
-              <!-- Geri Butonu -->
               <button onclick="navigateStaffDate(-1)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#f9fafb'; this.style.borderColor='#d1d5db';" onmouseout="this.style.background='#ffffff'; this.style.borderColor='#e5e7eb';">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" />
-                </svg>
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
               </button>
-              
-              <!-- Tarih Seçici -->
-              <input type="date" id="staffDatePicker" value="${staffSelectedDate.toISOString().split('T')[0]}" onchange="setStaffSelectedDate(this.value)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 500; color: #111827; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05); min-width: 160px; text-align: center;" onmouseover="this.style.borderColor='#d1d5db';" onmouseout="this.style.borderColor='#e5e7eb';">
-              
-              <!-- İleri Butonu -->
+              <input type="date" id="staffDatePicker" value="${staffDateToLocalYMD(staffSelectedDate)}" onchange="setStaffSelectedDate(this.value)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 500; color: #111827; cursor: pointer; min-width: 160px; text-align: center;">
               <button onclick="navigateStaffDate(1)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#f9fafb'; this.style.borderColor='#d1d5db';" onmouseout="this.style.background='#ffffff'; this.style.borderColor='#e5e7eb';">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
-                </svg>
+                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
               </button>
-              
-              <!-- Bugün Butonu -->
-              <button onclick="setStaffDateToToday()" style="background: #3b82f6; color: white; border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 500; cursor: pointer; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#2563eb';" onmouseout="this.style.background='#3b82f6';">
-                Bugün
-              </button>
-            </div>
-            <div class="staff-date-filter-wrapper">
-              <button class="staff-date-filter-trigger" onclick="toggleStaffDateFilterModal(event)">
-                <span>📅</span>
-                <span>${filterLabels[staffDateFilter] || 'Tarih Seç'}</span>
-                <span class="date-filter-arrow">▼</span>
-              </button>
-              <div id="staffDateFilterModal" class="date-filter-modal" onclick="event.stopPropagation();">
-                <div class="date-filter-modal-content" onclick="event.stopPropagation();">
-                  <div class="date-filter-option ${staffDateFilter === 'day' ? 'active' : ''}" onclick="setStaffDateFilter('day');">
-                    <span class="date-filter-icon">📅</span>
-                    <span>Günlük (Seçilen Tarih)</span>
-                  </div>
-                  <div class="date-filter-option ${staffDateFilter === 'yesterday' ? 'active' : ''}" onclick="setStaffDateFilter('yesterday');">
-                    <span class="date-filter-icon">📆</span>
-                    <span>Dün</span>
-                  </div>
-                  <div class="date-filter-option ${staffDateFilter === 'week' ? 'active' : ''}" onclick="setStaffDateFilter('week');">
-                    <span class="date-filter-icon">📆</span>
-                    <span>Son 1 Hafta</span>
-                  </div>
-                  <div class="date-filter-option ${staffDateFilter === 'month' ? 'active' : ''}" onclick="setStaffDateFilter('month');">
-                    <span class="date-filter-icon">📅</span>
-                    <span>Son 1 Ay</span>
-                  </div>
-                  <div class="date-filter-option ${staffDateFilter === 'all' ? 'active' : ''}" onclick="setStaffDateFilter('all');">
-                    <span class="date-filter-icon">📊</span>
-                    <span>Tüm Zamanlar</span>
-                  </div>
-                  <div class="date-filter-divider"></div>
-                  <div class="date-filter-option ${staffDateFilter === 'custom' ? 'active' : ''}" onclick="document.getElementById('staffCustomDateRangeSection').style.display = 'block';">
-                    <span class="date-filter-icon">🗓️</span>
-                    <span>Özel Tarih Aralığı</span>
-                  </div>
-                  <div id="staffCustomDateRangeSection" class="custom-date-range-section" style="display: ${staffDateFilter === 'custom' ? 'block' : 'none'};">
-                    <div class="custom-date-inputs">
-                      <div class="custom-date-input-group">
-                        <label>Başlangıç:</label>
-                        <input type="date" id="staffCustomDateStart" value="${staffCustomDateRange.start ? staffCustomDateRange.start.toISOString().split('T')[0] : ''}" class="custom-date-input">
-                      </div>
-                      <div class="custom-date-input-group">
-                        <label>Bitiş:</label>
-                        <input type="date" id="staffCustomDateEnd" value="${staffCustomDateRange.end ? staffCustomDateRange.end.toISOString().split('T')[0] : ''}" class="custom-date-input">
-                      </div>
-                    </div>
-                    <button class="custom-date-apply-btn" onclick="setStaffCustomDateRange();">Uygula</button>
-                  </div>
-                </div>
-              </div>
+              <button onclick="setStaffDateToToday()" style="background: #3b82f6; color: white; border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 500; cursor: pointer;">Bugün</button>
             </div>
           </div>
           
-          <!-- Toplam İstatistikler - Kurumsal ve Profesyonel -->
-          <div class="staff-summary-cards">
-            ${targetProducts.map(productName => {
-              const sales = totalProductSales[productName] || { count: 0, revenue: 0 };
-              const config = {
-                'Limonata': { 
-                  icon: '🍋', 
-                  gradient: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
-                  borderColor: '#fbbf24',
-                  iconBg: '#fef3c7',
-                  textColor: '#92400e',
-                  accentColor: '#d97706'
-                },
-                'Filtre Kahve': { 
-                  icon: '☕', 
-                  gradient: 'linear-gradient(135deg, #e9d5ff 0%, #ddd6fe 100%)',
-                  borderColor: '#a78bfa',
-                  iconBg: '#e9d5ff',
-                  textColor: '#5b21b6',
-                  accentColor: '#7c3aed'
-                },
-                'Salep': { 
-                  icon: '🥛', 
-                  gradient: 'linear-gradient(135deg, #fce7f3 0%, #fbcfe8 100%)',
-                  borderColor: '#f472b6',
-                  iconBg: '#fce7f3',
-                  textColor: '#9f1239',
-                  accentColor: '#db2777'
-                }
-              }[productName];
-              
-              return `
-                <div class="staff-product-card" style="background: #ffffff; border: 2px solid ${config.borderColor}; border-radius: 16px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); transition: all 0.3s ease; position: relative; overflow: hidden;">
-                  <!-- Gradient Accent -->
-                  <div style="position: absolute; top: 0; left: 0; right: 0; height: 4px; background: ${config.gradient};"></div>
-                  
-                  <div style="display: flex; align-items: flex-start; gap: 16px;">
-                    <!-- Icon Container -->
-                    <div style="width: 64px; height: 64px; border-radius: 12px; background: ${config.gradient}; display: flex; align-items: center; justify-content: center; flex-shrink: 0; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-                      <span style="font-size: 32px;">${config.icon}</span>
-                    </div>
-                    
-                    <!-- Content -->
-                    <div style="flex: 1; min-width: 0;">
-                      <div style="font-size: 11px; font-weight: 700; color: #6b7280; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px;">${productName}</div>
-                      
-                      <div style="display: flex; align-items: baseline; gap: 12px; margin-bottom: 6px;">
-                        <div style="font-size: 28px; font-weight: 700; color: ${config.accentColor}; line-height: 1;">${sales.count}</div>
-                        <div style="font-size: 14px; font-weight: 500; color: #6b7280;">adet</div>
-                      </div>
-                      
-                      <div style="display: flex; align-items: center; gap: 6px; padding-top: 8px; border-top: 1px solid #f3f4f6;">
-                        <svg width="16" height="16" fill="none" stroke="${config.accentColor}" viewBox="0 0 24 24" style="flex-shrink: 0;">
-                          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                        <div style="font-size: 16px; font-weight: 600; color: #059669;">₺${Math.round(sales.revenue).toLocaleString('tr-TR')}</div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-          
-          <!-- Personel Kartları - Her Personel Ayrı -->
-          <div class="staff-cards-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; margin-top: 24px;">
-            ${sortedStaff.map((staff, index) => {
-              // Belirli ürünlerin satışlarını hesapla
-              const targetProducts = ['Limonata', 'Filtre Kahve', 'Salep'];
-              const productSales = {};
-              
-              targetProducts.forEach(productName => {
-                const productData = staff.products[productName];
-                if (productData) {
-                  productSales[productName] = {
-                    count: typeof productData === 'object' ? productData.count : productData,
-                    revenue: typeof productData === 'object' ? productData.revenue : 0
-                  };
-                } else {
-                  productSales[productName] = { count: 0, revenue: 0 };
-                }
-              });
-              
-              const limonata = productSales['Limonata'] || { count: 0, revenue: 0 };
-              const filtreKahve = productSales['Filtre Kahve'] || { count: 0, revenue: 0 };
-              const salep = productSales['Salep'] || { count: 0, revenue: 0 };
-              
-              // Toplam satış sayısı (sadece bu 3 ürün için)
-              const totalCount = limonata.count + filtreKahve.count + salep.count;
-              const totalRevenue = limonata.revenue + filtreKahve.revenue + salep.revenue;
-              
-              // Rank badge
-              const rankBadge = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
-              
-              return `
-                <div class="staff-individual-card" style="background: #ffffff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; transition: all 0.2s; box-shadow: 0 1px 3px rgba(0,0,0,0.05);" onmouseover="this.style.boxShadow='0 4px 12px rgba(0,0,0,0.1)'; this.style.transform='translateY(-2px)';" onmouseout="this.style.boxShadow='0 1px 3px rgba(0,0,0,0.05)'; this.style.transform='translateY(0)';">
-                  <!-- Personel Başlık -->
-                  <div style="background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); padding: 16px; border-bottom: 1px solid #e5e7eb;">
-                    <div style="display: flex; align-items: center; justify-content: space-between;">
-                      <div style="display: flex; align-items: center; gap: 10px;">
-                        ${rankBadge ? `<span style="font-size: 24px;">${rankBadge}</span>` : ''}
-                        <div>
-                          <div style="font-weight: 600; font-size: 16px; color: #111827; line-height: 1.3;">${staff.name}</div>
-                          <div style="font-size: 12px; color: #6b7280; margin-top: 2px;">${staff.totalSales} satış</div>
-                        </div>
-                      </div>
-                      <div style="text-align: right;">
-                        <div style="font-size: 11px; color: #6b7280; margin-bottom: 2px;">Toplam</div>
-                        <div style="font-weight: 700; font-size: 18px; color: #059669;">${totalCount}</div>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <!-- Satış Tablosu -->
-                  <div style="padding: 16px;">
-                    <table style="width: 100%; border-collapse: collapse;">
-                      <thead>
-                        <tr style="border-bottom: 1px solid #f3f4f6;">
-                          <th style="padding: 8px 0; text-align: left; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;">Ürün</th>
-                          <th style="padding: 8px 0; text-align: right; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;">Adet</th>
-                          <th style="padding: 8px 0; text-align: right; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.5px;">Tutar</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr style="border-bottom: 1px solid #f9fafb;">
-                          <td style="padding: 12px 0; font-size: 14px; color: #111827; font-weight: 500;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                              <span style="font-size: 18px;">🍋</span>
-                              <span>Limonata</span>
-                            </div>
-                          </td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 600; color: #92400e;">${limonata.count}</td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 14px; font-weight: 500; color: #059669;">₺${Math.round(limonata.revenue).toLocaleString('tr-TR')}</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #f9fafb;">
-                          <td style="padding: 12px 0; font-size: 14px; color: #111827; font-weight: 500;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                              <span style="font-size: 18px;">☕</span>
-                              <span>Filtre Kahve</span>
-                            </div>
-                          </td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 600; color: #5b21b6;">${filtreKahve.count}</td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 14px; font-weight: 500; color: #059669;">₺${Math.round(filtreKahve.revenue).toLocaleString('tr-TR')}</td>
-                        </tr>
-                        <tr>
-                          <td style="padding: 12px 0; font-size: 14px; color: #111827; font-weight: 500;">
-                            <div style="display: flex; align-items: center; gap: 8px;">
-                              <span style="font-size: 18px;">🥛</span>
-                              <span>Salep</span>
-                            </div>
-                          </td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 600; color: #9f1239;">${salep.count}</td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 14px; font-weight: 500; color: #059669;">₺${Math.round(salep.revenue).toLocaleString('tr-TR')}</td>
-                        </tr>
-                        <tr style="border-top: 2px solid #e5e7eb; background: #f9fafb;">
-                          <td style="padding: 12px 0; font-size: 14px; font-weight: 600; color: #111827;">Toplam</td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 700; color: #111827;">${totalCount}</td>
-                          <td style="padding: 12px 0; text-align: right; font-size: 15px; font-weight: 700; color: #059669;">₺${Math.round(totalRevenue).toLocaleString('tr-TR')}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              `;
-            }).join('')}
+          <div class="staff-ciro-list" style="background: #fff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-top: 20px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <thead>
+                <tr style="background: #f9fafb; border-bottom: 2px solid #e5e7eb;">
+                  <th style="padding: 14px 16px; text-align: left; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase;">#</th>
+                  <th style="padding: 14px 16px; text-align: left; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase;">Garson</th>
+                  <th style="padding: 14px 16px; text-align: right; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase;">Ciro (₺)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${sortedStaff.map((staff, i) => `
+                  <tr style="border-bottom: 1px solid #f3f4f6;">
+                    <td style="padding: 14px 16px; font-size: 14px; color: #6b7280;">${i + 1}</td>
+                    <td style="padding: 14px 16px; font-weight: 600; font-size: 15px; color: #111827;">${staff.name}</td>
+                    <td style="padding: 14px 16px; text-align: right; font-weight: 700; font-size: 15px; color: #059669;">₺${Math.round(staff.totalRevenue).toLocaleString('tr-TR')}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
           </div>
           
           ${sortedStaff.length === 0 ? `
             <div class="empty-state" style="padding: 60px 20px; margin-top: 40px;">
               <div class="empty-icon" style="font-size: 64px; margin-bottom: 16px;">📊</div>
               <h3 style="font-size: 18px; font-weight: 600; color: #374151; margin-bottom: 8px;">
-                ${staffDateFilter === 'day' ? selectedDateStr + ' tarihinde' : 'Seçilen zaman diliminde'} bu ürünlerden hiç satış yapılmamış
+                ${staffDateFilter === 'day' ? selectedDateStr + ' tarihinde' : 'Seçilen zaman diliminde'} ciro verisi yok
               </h3>
-              <p style="font-size: 14px; color: #6b7280; margin-top: 8px;">
-                Limonata, Filtre Kahve ve Salep için satış verisi bulunmuyor
-              </p>
+              <p style="font-size: 14px; color: #6b7280;">Bu tarih için personel satış kaydı bulunmuyor.</p>
             </div>
           ` : ''}
         </div>
@@ -8401,6 +8108,11 @@
       opacity: 0.95;
       margin-top: auto;
     }
+
+    .table-detail-grid { display: flex; flex-direction: column; gap: 14px; }
+    .table-detail-row { display: flex; flex-direction: column; gap: 4px; }
+    .table-detail-label { font-size: 13px; font-weight: 600; color: #6b7280; }
+    .table-detail-value { font-size: 15px; font-weight: 600; color: #111827; }
 
     .table-items-list {
       display: flex;
@@ -12347,6 +12059,21 @@
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
           </svg>
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Masa Detay Modal (garson, saat, ödeme durumu) -->
+  <div id="tableDetailModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideTableDetail()">
+    <div style="background: white; border-radius: 24px; width: 100%; max-width: 440px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;" onclick="event.stopPropagation();">
+      <div style="background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%); color: white; padding: 20px 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 id="tableDetailModalTitle" style="margin: 0; font-size: 20px; font-weight: 800;">Masa detayı</h2>
+          <button type="button" onclick="hideTableDetail()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 22px; font-weight: bold;">×</button>
+        </div>
+      </div>
+      <div id="tableDetailModalBody" style="padding: 24px; max-height: 70vh; overflow-y: auto;">
+        <!-- showTableDetail() ile doldurulur -->
       </div>
     </div>
   </div>

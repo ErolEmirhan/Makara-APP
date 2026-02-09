@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
 import { initializeApp, getApp } from 'firebase/app';
 import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
 import TablePartialPaymentModal from './TablePartialPaymentModal';
 import TableTransferModal from './TableTransferModal';
+import TableMergeModal from './TableMergeModal';
 import OnlineOrderModal from './OnlineOrderModal';
 import OnlineProductManagementModal from './OnlineProductManagementModal';
 import Toast from './Toast';
@@ -18,6 +19,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [showModal, setShowModal] = useState(false);
   const [showPartialPaymentModal, setShowPartialPaymentModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
+  const [showMergeModal, setShowMergeModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
   
@@ -81,7 +83,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }, 3000);
   };
 
-  const parseDateTime = (dateStr, timeStr) => {
+  const parseDateTime = useCallback((dateStr, timeStr) => {
     if (!dateStr || !timeStr) return null;
     try {
       const [day, month, year] = dateStr.split('.');
@@ -90,9 +92,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     } catch (e) {
       return null;
     }
-  };
+  }, []);
 
-  const groupPartialPayments = (sales) => {
+  const groupPartialPayments = useCallback((sales) => {
     const grouped = {};
     const standalone = [];
     const sortedSales = [...sales].sort((a, b) => {
@@ -233,21 +235,26 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       };
     });
     const allSales = [...groupedSales, ...standalone].sort((a, b) => {
-      const dateA = `${a.sale_date} ${a.sale_time}`;
-      const dateB = `${b.sale_date} ${b.sale_time}`;
-      return dateB.localeCompare(dateA);
+      // Gruplanmış satışlar için kapanış tarihini (last_sale_date), diğerleri için normal tarihi kullan
+      const dateA = a.isGrouped && a.last_sale_date && a.last_sale_time
+        ? `${a.last_sale_date} ${a.last_sale_time}`
+        : `${a.sale_date} ${a.sale_time}`;
+      const dateB = b.isGrouped && b.last_sale_date && b.last_sale_time
+        ? `${b.last_sale_date} ${b.last_sale_time}`
+        : `${b.sale_date} ${b.sale_time}`;
+      return dateB.localeCompare(dateA); // En yakın zaman (yeni) önce
     });
     return allSales;
-  };
+  }, [parseDateTime]);
 
-  const insideTables = Array.from({ length: 20 }, (_, i) => ({
+  const insideTables = useMemo(() => Array.from({ length: 20 }, (_, i) => ({
     id: `inside-${i + 1}`,
     number: i + 1,
     type: 'inside',
     name: `İçeri ${i + 1}`
-  }));
+  })), []);
 
-  const outsideTables = Array.from({ length: 24 }, (_, i) => {
+  const outsideTables = useMemo(() => Array.from({ length: 24 }, (_, i) => {
     const tableNumber = i + 61; // 61-84
     return {
       id: `outside-${tableNumber}`,
@@ -255,15 +262,15 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       type: 'outside',
       name: `Dışarı ${tableNumber}`
     };
-  });
+  }), []);
 
   // Paket masaları (hem içeri hem dışarı için)
-  const packageTables = Array.from({ length: 5 }, (_, i) => ({
+  const packageTables = useMemo(() => Array.from({ length: 5 }, (_, i) => ({
     id: `package-${selectedType}-${i + 1}`,
     number: i + 1,
     type: selectedType,
     name: `Paket ${i + 1}`
-  }));
+  })), [selectedType]);
 
   // Masa siparişlerini yükle
   useEffect(() => {
@@ -381,6 +388,15 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
   }, [refreshTrigger]);
 
+  // Backend masa güncellemesi (sonlandırma, aktar, birleştir, kısmi ödeme) – listeyi anında güncelle
+  useEffect(() => {
+    if (!window.electronAPI?.onTableOrderUpdated) return;
+    const unsubscribe = window.electronAPI.onTableOrderUpdated(() => {
+      loadTableOrders();
+    });
+    return () => { unsubscribe?.(); };
+  }, []);
+
   const loadTableOrders = async () => {
     if (window.electronAPI && window.electronAPI.getTableOrders) {
       try {
@@ -404,29 +420,30 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       // Hem pending hem de courier siparişlerini göster (pending için)
       const q = query(ordersRef, where('status', '==', 'pending'));
       
-      // Real-time listener
+      // Real-time listener - PERFORMANS optimize
       const unsubscribe = onSnapshot(q, (snapshot) => {
         const orders = [];
         const newOrderIds = new Set();
         const previousOrderIds = new Set(onlineOrders.map(o => o.id));
         
-        snapshot.forEach((doc) => {
+        // PERFORMANS: forEach yerine for-of (biraz daha hızlı)
+        for (const doc of snapshot.docs) {
           const data = doc.data();
           const orderId = doc.id;
           
-          // İptal edilmiş siparişleri (is_decline: true) filtrele
-          if (data.is_decline === true) {
-            return; // Bu siparişi atla
-          }
+          // İptal edilmiş siparişleri filtrele
+          if (data.is_decline === true) continue;
           
           newOrderIds.add(orderId);
           
-          // Tarih formatlaması - createdAt timestamp'ini kullan
+          // PERFORMANS: Tarih formatlaması cache'lenebilir ama karmaşık, basitleştir
           let formattedDate = '';
           let formattedTime = '';
+          let sortTimestamp = 0;
           
           if (data.createdAt) {
             const date = data.createdAt.toDate ? data.createdAt.toDate() : new Date(data.createdAt.seconds * 1000);
+            sortTimestamp = date.getTime();
             formattedDate = date.toLocaleDateString('tr-TR', { 
               day: '2-digit', 
               month: '2-digit', 
@@ -437,7 +454,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
               minute: '2-digit'
             });
           } else if (data.timestamp) {
-            // Fallback: timestamp number ise
+            sortTimestamp = data.timestamp;
             const date = new Date(data.timestamp);
             formattedDate = date.toLocaleDateString('tr-TR', { 
               day: '2-digit', 
@@ -450,18 +467,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             });
           }
           
-          // Sıralama için timestamp hesapla
-          let sortTimestamp = 0;
-          if (data.createdAt) {
-            sortTimestamp = data.createdAt.toDate ? data.createdAt.toDate().getTime() : (data.createdAt.seconds * 1000);
-          } else if (data.timestamp) {
-            sortTimestamp = data.timestamp;
-          }
-          
           orders.push({
             id: orderId,
             ...data,
-            // Alan adlarını normalize et
             total_amount: data.total || data.total_amount || 0,
             customer_name: data.name || data.customer_name || '',
             customer_phone: data.phone || data.customer_phone || '',
@@ -470,7 +478,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             formattedTime,
             _sortTimestamp: sortTimestamp
           });
-        });
+        }
         
         // Client-side'da createdAt'e göre sırala (en yeni en üstte)
         orders.sort((a, b) => (b._sortTimestamp || 0) - (a._sortTimestamp || 0));
@@ -528,7 +536,12 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           }
         }
         
-        setOnlineOrders(orders);
+        // PERFORMANS: Sadece değişiklik varsa state güncelle
+        setOnlineOrders(prev => {
+          if (prev.length !== orders.length) return orders;
+          const hasChange = orders.some((o, i) => !prev[i] || prev[i].id !== o.id || prev[i].status !== o.status || prev[i].isPreparing !== o.isPreparing);
+          return hasChange ? orders : prev;
+        });
       }, (error) => {
         console.error('Online siparişler dinlenirken hata:', error);
         // Permission hatası için daha açıklayıcı mesaj
@@ -1429,6 +1442,31 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
   };
 
+  // Masa birleştir (dolu masayı dolu masaya aktar)
+  const handleMergeTable = async (sourceTableId, targetTableId) => {
+    if (!window.electronAPI?.mergeTableOrder) {
+      showToast('Masa birleştirme şu anda kullanılamıyor', 'error');
+      return;
+    }
+    try {
+      const result = await window.electronAPI.mergeTableOrder(sourceTableId, targetTableId);
+      if (result.success) {
+        setShowMergeModal(false);
+        setShowModal(false);
+        setSelectedOrder(null);
+        setOrderItems([]);
+        await loadTableOrders();
+        setShowSuccessToast(true);
+        setTimeout(() => setShowSuccessToast(false), 2000);
+      } else {
+        showToast(result.error || 'Masa birleştirilemedi', 'error');
+      }
+    } catch (error) {
+      console.error('Masa birleştirme hatası:', error);
+      showToast('Masa birleştirilemedi: ' + error.message, 'error');
+    }
+  };
+
   // Ürün bazlı ödeme tamamlandı (siparişleri yenile)
   const handleCompletePartialPayment = async (payments) => {
     if (!selectedOrder || !window.electronAPI) {
@@ -1497,6 +1535,15 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
             </svg>
             <span>Masa Aktar</span>
+          </button>
+          <button
+            onClick={() => setShowMergeModal(true)}
+            className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            <span>Masa Birleştir</span>
           </button>
         </div>
       </div>
@@ -2117,6 +2164,14 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             setShowTransferModal(false);
           }}
           onTransfer={handleTransferTable}
+        />
+      )}
+
+      {/* Masa Birleştir Modal */}
+      {showMergeModal && (
+        <TableMergeModal
+          onClose={() => setShowMergeModal(false)}
+          onMerge={handleMergeTable}
         />
       )}
 

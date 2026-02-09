@@ -1761,12 +1761,12 @@ ipcMain.handle('create-table-order', async (event, orderData) => {
 });
 
 ipcMain.handle('get-table-orders', (event, tableId) => {
+  // Sadece bekleyen (açık) siparişleri döndür – tamamlanan/iptal edilen masalar dolu görünmez
+  const pendingOnly = (list) => (list || []).filter(o => o.status === 'pending');
   if (tableId) {
-    // Belirli bir masa için siparişler
-    return db.tableOrders.filter(o => o.table_id === tableId);
+    return pendingOnly(db.tableOrders.filter(o => o.table_id === tableId));
   }
-  // Tüm masa siparişleri
-  return db.tableOrders;
+  return pendingOnly(db.tableOrders);
 });
 
 ipcMain.handle('get-table-order-items', (event, orderId) => {
@@ -2317,6 +2317,89 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
   };
 });
 
+// Masa birleştir: dolu masayı başka bir dolu masaya aktar (kaynak masanın ürünleri hedef masaya eklenir, kaynak kapanır)
+ipcMain.handle('merge-table-order', async (event, sourceTableId, targetTableId) => {
+  const sourceOrder = db.tableOrders.find(
+    o => o.table_id === sourceTableId && o.status === 'pending'
+  );
+  if (!sourceOrder) {
+    return { success: false, error: 'Kaynak masada aktif sipariş bulunamadı' };
+  }
+
+  const targetOrder = db.tableOrders.find(
+    o => o.table_id === targetTableId && o.status === 'pending'
+  );
+  if (!targetOrder) {
+    return { success: false, error: 'Hedef masada aktif sipariş bulunamadı. Lütfen dolu bir masa seçin.' };
+  }
+
+  if (sourceTableId === targetTableId) {
+    return { success: false, error: 'Aynı masayı seçemezsiniz' };
+  }
+
+  const sourceItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrder.id);
+  if (sourceItems.length === 0) {
+    return { success: false, error: 'Kaynak masada ürün bulunamadı' };
+  }
+
+  const nextItemId = db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 : 1;
+  let addedAmount = 0;
+  const newItems = [];
+  sourceItems.forEach((item, idx) => {
+    const newItem = {
+      id: nextItemId + idx,
+      order_id: targetOrder.id,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      price: item.price,
+      isGift: item.isGift || false,
+      staff_id: item.staff_id || null,
+      staff_name: item.staff_name || null,
+      paid_quantity: item.paid_quantity || 0,
+      is_paid: item.is_paid || false,
+      payment_method: item.payment_method || null,
+      paid_date: item.paid_date || null,
+      paid_time: item.paid_time || null,
+      category_id: item.category_id || null
+    };
+    newItems.push(newItem);
+    db.tableOrderItems.push(newItem);
+    if (!newItem.isGift) addedAmount += item.price * item.quantity;
+  });
+
+  targetOrder.total_amount = (targetOrder.total_amount || 0) + addedAmount;
+
+  const sourceOrderId = sourceOrder.id;
+  db.tableOrderItems = db.tableOrderItems.filter(oi => oi.order_id !== sourceOrderId);
+  db.tableOrders = db.tableOrders.filter(o => o.id !== sourceOrderId);
+
+  saveDatabase();
+
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', {
+      orderId: targetOrder.id,
+      tableId: targetTableId,
+      sourceTableId: sourceTableId,
+      merged: true
+    });
+  }
+  if (io) {
+    io.emit('table-update', { tableId: sourceTableId, hasOrder: false });
+    io.emit('table-update', { tableId: targetTableId, hasOrder: true });
+  }
+  syncSingleTableToFirebase(sourceTableId).catch(() => {});
+  syncSingleTableToFirebase(targetTableId).catch(() => {});
+
+  return {
+    success: true,
+    targetOrderId: targetOrder.id,
+    sourceTableId: sourceTableId,
+    targetTableId: targetTableId,
+    itemsMerged: newItems.length
+  };
+});
+
 // Tüm masayı iptal et - tek grup iptal kaydı Firebase'e yazılır, sonra sipariş silinir
 ipcMain.handle('cancel-entire-table-order', async (event, orderId, cancelReason = '') => {
   const order = db.tableOrders.find(o => o.id === orderId);
@@ -2733,31 +2816,36 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
-  // Ödenecek miktarı belirle
-  const quantityToPay = paidQuantity !== null ? paidQuantity : item.quantity;
-  
+  // Ödenecek miktarı belirle (kısmi ödeme: sadece gönderilen miktar; sayı zorunlu)
+  const requestedQty = paidQuantity != null ? Number(paidQuantity) : NaN;
+  const quantityToPay = Number.isFinite(requestedQty) && requestedQty > 0
+    ? Math.min(Math.floor(requestedQty), item.quantity)
+    : item.quantity;
+
   // Miktar kontrolü
   if (quantityToPay <= 0 || quantityToPay > item.quantity) {
     return { success: false, error: 'Geçersiz miktar' };
   }
 
   // Ödenmiş miktarı kontrol et
-  const currentPaidQuantity = item.paid_quantity || 0;
+  const currentPaidQuantity = Number(item.paid_quantity || 0);
   const remainingQuantity = item.quantity - currentPaidQuantity;
-  
-  if (quantityToPay > remainingQuantity) {
-    return { success: false, error: `Sadece ${remainingQuantity} adet için ödeme alınabilir` };
+
+  // Kısmi ödemede asla kalan miktarı aşma
+  const actualQuantityToPay = Math.min(quantityToPay, Math.max(0, remainingQuantity));
+  if (actualQuantityToPay <= 0) {
+    return { success: false, error: `Bu kalem için ödenecek miktar kalmadı` };
   }
 
   // Yeni ödenen miktar
-  const newPaidQuantity = currentPaidQuantity + quantityToPay;
+  const newPaidQuantity = currentPaidQuantity + actualQuantityToPay;
 
-  // Ürün tutarını hesapla (ikram değilse)
-  const itemAmount = item.isGift ? 0 : (item.price * quantityToPay);
+  // Ürün tutarını hesapla (ikram değilse) - para birimi 2 basamak
+  const itemAmount = item.isGift ? 0 : Math.round(item.price * actualQuantityToPay * 100) / 100;
 
   // Ödenen miktarı güncelle
   item.paid_quantity = newPaidQuantity;
-  
+
   // Eğer tüm miktar ödendiyse, ürünü tamamen ödendi olarak işaretle
   if (newPaidQuantity >= item.quantity) {
     item.is_paid = true;
@@ -2820,7 +2908,7 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
     sale_id: saleId,
     product_id: item.product_id,
     product_name: item.product_name,
-    quantity: quantityToPay, // Ödenen miktar
+    quantity: actualQuantityToPay, // Ödenen miktar
     price: item.price,
     isGift: item.isGift || false,
     staff_id: item.staff_id || null,
@@ -2849,7 +2937,7 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
         items_array: [{
           product_id: item.product_id,
           product_name: item.product_name,
-          quantity: quantityToPay, // Ödenen miktar
+          quantity: actualQuantityToPay, // Ödenen miktar
           price: item.price,
           isGift: item.isGift || false,
           staff_id: item.staff_id || null,
@@ -8352,52 +8440,80 @@ function generateMobileHTML(serverURL) {
       if (e.key === 'Enter') verifyStaffPin();
     });
     
+    // PERFORMANS: Debounce ve throttle helper'lar
+    const debounceTimers = {};
+    function debounce(key, fn, delay = 250) {
+      if (debounceTimers[key]) clearTimeout(debounceTimers[key]);
+      debounceTimers[key] = setTimeout(fn, delay);
+    }
+    
+    const throttleTimers = {};
+    const throttleLastRun = {};
+    function throttle(key, fn, delay = 100) {
+      const now = Date.now();
+      const lastRun = throttleLastRun[key] || 0;
+      if (now - lastRun >= delay) {
+        throttleLastRun[key] = now;
+        fn();
+      } else {
+        if (throttleTimers[key]) clearTimeout(throttleTimers[key]);
+        throttleTimers[key] = setTimeout(() => {
+          throttleLastRun[key] = Date.now();
+          fn();
+        }, delay - (now - lastRun));
+      }
+    }
+
     // WebSocket bağlantısı
     function initWebSocket() {
       if (socket) socket.disconnect();
       try {
         socket = io(SOCKET_URL);
-        socket.on('connect', () => console.log('WebSocket bağlandı'));
+        socket.on('connect', () => {});  // PERFORMANS: Log kaldırıldı
         socket.on('table-update', async (data) => {
-          console.log('📡 Masa güncellemesi alındı:', data);
-          // Önce anında UI'ı güncelle (optimistic update)
-          if (tables && tables.length > 0) {
-            const tableIndex = tables.findIndex(t => t.id === data.tableId);
-            if (tableIndex !== -1) {
-              tables[tableIndex].hasOrder = data.hasOrder;
-              renderTables(); // Anında render et
+          // PERFORMANS: Log kaldırıldı - sadece hata durumunda log
+          // Debounce ile performans artır
+          debounce('table-update-' + data.tableId, () => {
+            // Önce anında UI'ı güncelle (optimistic update)
+            if (tables && tables.length > 0) {
+              const tableIndex = tables.findIndex(t => t.id === data.tableId);
+              if (tableIndex !== -1) {
+                tables[tableIndex].hasOrder = data.hasOrder;
+                renderTables(); // Anında render et
+              }
             }
-          }
-          
-          // Arka planda API'den güncel veriyi yükle
-          fetch(API_URL + '/tables')
-            .then(tablesRes => {
-              if (tablesRes.ok) {
-                return tablesRes.json();
-              }
-              return null;
-            })
-            .then(updatedTables => {
-              if (updatedTables) {
-                tables = updatedTables;
-                renderTables();
-              }
-            })
-            .catch(error => {
-              console.error('Masa güncelleme hatası:', error);
-            });
-          
-          // Eğer seçili masa varsa siparişleri arka planda yenile
-          if (selectedTable && selectedTable.id === data.tableId) {
-            loadExistingOrders(selectedTable.id).catch(err => console.error('Sipariş yenileme hatası:', err));
-          }
+            
+            // Arka planda API'den güncel veriyi yükle
+            fetch(API_URL + '/tables')
+              .then(tablesRes => {
+                if (tablesRes.ok) {
+                  return tablesRes.json();
+                }
+                return null;
+              })
+              .then(updatedTables => {
+                if (updatedTables) {
+                  tables = updatedTables;
+                  renderTables();
+                }
+              })
+              .catch(error => {
+                console.error('Masa güncelleme hatası:', error);
+              });
+            
+            // Eğer seçili masa varsa siparişleri arka planda yenile
+            if (selectedTable && selectedTable.id === data.tableId) {
+              loadExistingOrders(selectedTable.id).catch(err => console.error('Sipariş yenileme hatası:', err));
+            }
+          }, 200);
         });
         socket.on('new-order', async (data) => {
-          console.log('📦 Yeni sipariş alındı:', data);
-          // Eğer seçili masa varsa siparişleri yenile
-          if (selectedTable && selectedTable.id === data.tableId) {
-            await loadExistingOrders(selectedTable.id);
-          }
+          // PERFORMANS: Log kaldırıldı
+          debounce('new-order-' + data.tableId, () => {
+            if (selectedTable && selectedTable.id === data.tableId) {
+              loadExistingOrders(selectedTable.id);
+            }
+          }, 200);
         });
         socket.on('staff-deleted', (data) => {
           console.log('⚠️ Personel silindi:', data);
@@ -8420,36 +8536,36 @@ function generateMobileHTML(serverURL) {
           showBroadcastMessage(data.message, data.date, data.time);
         });
         socket.on('product-stock-update', async (data) => {
-          console.log('📦 Stok güncellemesi alındı:', data);
-          // Ürün listesini güncelle
-          const productIndex = products.findIndex(p => p.id === data.productId);
-          if (productIndex !== -1) {
-            products[productIndex] = {
-              ...products[productIndex],
-              stock: data.stock,
-              trackStock: data.trackStock
-            };
-            // Eğer sipariş ekranındaysak ürünleri yeniden render et
-            if (document.getElementById('orderSection') && document.getElementById('orderSection').style.display !== 'none') {
-              renderProducts();
-            }
-          } else {
-            // Ürün bulunamadıysa API'den yeniden yükle
-            try {
-              const prodsRes = await fetch(API_URL + '/products');
-              if (prodsRes.ok) {
-                products = await prodsRes.json();
-                // Eğer sipariş ekranındaysak ürünleri yeniden render et
-                if (document.getElementById('orderSection') && document.getElementById('orderSection').style.display !== 'none') {
-                  renderProducts();
-                }
+          // PERFORMANS: Log kaldırıldı
+          debounce('stock-update-' + data.productId, () => {
+            const productIndex = products.findIndex(p => p.id === data.productId);
+            if (productIndex !== -1) {
+              products[productIndex] = {
+                ...products[productIndex],
+                stock: data.stock,
+                trackStock: data.trackStock
+              };
+              // Eğer sipariş ekranındaysak ürünleri yeniden render et
+              if (document.getElementById('orderSection') && document.getElementById('orderSection').style.display !== 'none') {
+                renderProducts();
               }
-            } catch (error) {
-              console.error('Ürün güncelleme hatası:', error);
+            } else {
+              // Ürün bulunamadıysa API'den yeniden yükle
+              fetch(API_URL + '/products')
+                .then(res => res.ok ? res.json() : null)
+                .then(prods => {
+                  if (prods) {
+                    products = prods;
+                    if (document.getElementById('orderSection') && document.getElementById('orderSection').style.display !== 'none') {
+                      renderProducts();
+                    }
+                  }
+                })
+                .catch(error => console.error('Ürün güncelleme hatası:', error));
             }
-          }
+          }, 300);
         });
-        socket.on('disconnect', () => console.log('WebSocket bağlantısı kesildi'));
+        socket.on('disconnect', () => {}); // PERFORMANS: Log kaldırıldı
       } catch (error) {
         console.error('WebSocket bağlantı hatası:', error);
       }
@@ -8602,7 +8718,10 @@ function generateMobileHTML(serverURL) {
         }).join('');
       }
       
-      grid.innerHTML = html;
+      // PERFORMANS: requestAnimationFrame ile smooth DOM update
+      requestAnimationFrame(() => {
+        if (grid) grid.innerHTML = html;
+      });
     }
     
     async function selectTable(id, name, type) {
@@ -9046,17 +9165,32 @@ function generateMobileHTML(serverURL) {
       }).join('');
     }
     
+    // PERFORMANS: Kategori bazlı ürün cache'i - aynı kategoriye tekrar tıklanınca API çağrısı yapma
+    const categoryProductsCache = {};
+    
     async function selectCategory(categoryId) {
+      // PERFORMANS: Aynı kategori tekrar seçilirse hiçbir şey yapma
+      if (selectedCategoryId === categoryId && categoryProductsCache[categoryId]) {
+        return;
+      }
+      
       selectedCategoryId = categoryId;
       renderCategories();
+      
+      // Cache'de varsa oradan yükle (API çağrısı yapma)
+      if (categoryProductsCache[categoryId]) {
+        products = categoryProductsCache[categoryId];
+        renderProducts();
+        return;
+      }
       
       // Yan Ürünler kategorisi seçildiyse yan ürünleri yükle
       if (categoryId === YAN_URUNLER_CATEGORY_ID) {
         try {
           const response = await fetch(API_URL + '/products?category_id=' + YAN_URUNLER_CATEGORY_ID);
           yanUrunler = await response.json();
-          // Yan ürünleri products listesine ekle (renderProducts için)
           products = yanUrunler;
+          categoryProductsCache[categoryId] = products; // Cache'e ekle
         } catch (error) {
           console.error('Yan ürünler yüklenirken hata:', error);
           products = [];
@@ -9066,6 +9200,7 @@ function generateMobileHTML(serverURL) {
         try {
           const response = await fetch(API_URL + '/products?category_id=' + categoryId);
           products = await response.json();
+          categoryProductsCache[categoryId] = products; // Cache'e ekle
         } catch (error) {
           console.error('Ürünler yüklenirken hata:', error);
           products = [];
@@ -9190,11 +9325,19 @@ function generateMobileHTML(serverURL) {
       }
     }
     
+    // PERFORMANS: Render throttling
+    let renderProductsScheduled = false;
     async function renderProducts() {
-      let filtered;
+      if (renderProductsScheduled) return;
+      renderProductsScheduled = true;
       
-      // Arama sorgusu varsa tüm kategorilerden ara, yoksa sadece seçili kategoriden göster
-      if (searchQuery) {
+      requestAnimationFrame(async () => {
+        renderProductsScheduled = false;
+        
+        let filtered;
+        
+        // Arama sorgusu varsa tüm kategorilerden ara, yoksa sadece seçili kategoriden göster
+        if (searchQuery) {
         // Arama yapıldığında tüm kategorilerden ara
         // Yan ürünler kategorisi seçiliyse yan ürünlerden ara, değilse normal ürünlerden ara
         if (selectedCategoryId === YAN_URUNLER_CATEGORY_ID) {
@@ -9236,12 +9379,12 @@ function generateMobileHTML(serverURL) {
         return;
       }
       
-      // Önce ürünleri hemen göster (resimler olmadan)
+      // PERFORMANS: Önce ürünleri hemen göster (resimler lazy load)
       grid.innerHTML = filtered.map(prod => {
         const cardId = 'product-card-' + prod.id;
-        // Cache'de varsa hemen göster, yoksa arka planda yüklenecek
+        // Cache'de varsa hemen göster, yoksa placeholder
         const cachedImageUrl = prod.image && imageCache[prod.image] ? imageCache[prod.image] : null;
-        const backgroundStyle = cachedImageUrl ? 'background-image: url(' + cachedImageUrl + ');' : '';
+        const backgroundStyle = cachedImageUrl ? 'background-image: url(' + cachedImageUrl + ');' : 'background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);';
         const trackStock = prod.trackStock === true;
         const stock = trackStock && prod.stock !== undefined ? (prod.stock || 0) : null;
         const isOutOfStock = trackStock && stock !== null && stock === 0;
@@ -9275,20 +9418,21 @@ function generateMobileHTML(serverURL) {
         '</div>';
       }).join('');
       
-      // Resimleri arka planda paralel olarak yükle ve kartları güncelle
-      // İlk 6 ürünü öncelikli yükle (görünen alan)
+      // PERFORMANS: Resimleri akıllı yükleme - sadece yoksa yükle, hızlı batch'ler
       const productsToLoad = filtered.filter(prod => prod.image && !imageCache[prod.image]);
-      const priorityProducts = productsToLoad.slice(0, 6);
-      const otherProducts = productsToLoad.slice(6);
+      const priorityProducts = productsToLoad.slice(0, 8); // İlk 8 ürün öncelikli
+      const otherProducts = productsToLoad.slice(8);
       
-      // Öncelikli ürünleri önce yükle (3'erli gruplar halinde)
       const loadProductImage = async (prod) => {
         try {
           const blobUrl = await cacheImage(prod.image);
           if (blobUrl) {
             const card = document.getElementById('product-card-' + prod.id);
             if (card) {
-              card.style.backgroundImage = 'url(' + blobUrl + ')';
+              // requestAnimationFrame ile smooth güncelleme
+              requestAnimationFrame(() => {
+                if (card) card.style.backgroundImage = 'url(' + blobUrl + ')';
+              });
             }
           }
         } catch (error) {
@@ -9296,19 +9440,20 @@ function generateMobileHTML(serverURL) {
         }
       };
       
-      // Öncelikli ürünleri 3'erli gruplar halinde paralel yükle
-      for (let i = 0; i < priorityProducts.length; i += 3) {
-        const batch = priorityProducts.slice(i, i + 3);
-        Promise.all(batch.map(loadProductImage)).catch(() => {}); // Hataları sessizce yok say
+      // Öncelikli ürünleri 4'erli batch'lerde hemen yükle
+      for (let i = 0; i < priorityProducts.length; i += 4) {
+        const batch = priorityProducts.slice(i, i + 4);
+        Promise.all(batch.map(loadProductImage)).catch(() => {});
       }
       
-      // Diğer ürünleri arka planda yükle (5'erli gruplar halinde)
-      for (let i = 0; i < otherProducts.length; i += 5) {
-        const batch = otherProducts.slice(i, i + 5);
+      // Diğer ürünleri lazy load - daha büyük batch'ler (8'erli)
+      for (let i = 0; i < otherProducts.length; i += 8) {
+        const batch = otherProducts.slice(i, i + 8);
         setTimeout(() => {
-          Promise.all(batch.map(loadProductImage)).catch(() => {}); // Hataları sessizce yok say
-        }, 50 * (Math.floor(i / 5) + 1)); // Her grup için artan gecikme
+          Promise.all(batch.map(loadProductImage)).catch(() => {});
+        }, 100 * (Math.floor(i / 8) + 1));
       }
+      });
     }
     
     // Türk Kahvesi Modal Fonksiyonları
@@ -9443,8 +9588,15 @@ function generateMobileHTML(serverURL) {
       // Sepeti otomatik açma - kullanıcı manuel olarak açacak
     }
     
+    // PERFORMANS: updateCart'ı throttle et (zaten throttle çağrılıyor ama fonksiyon da optimize)
+    let updateCartScheduled = false;
     function updateCart() {
-      const itemsDiv = document.getElementById('cartItems');
+      if (updateCartScheduled) return;
+      updateCartScheduled = true;
+      
+      requestAnimationFrame(() => {
+        updateCartScheduled = false;
+        const itemsDiv = document.getElementById('cartItems');
       // İkram edilen ürünleri toplamdan çıkar
       const total = cart.reduce((sum, item) => {
         if (item.isGift) return sum;
@@ -9475,6 +9627,7 @@ function generateMobileHTML(serverURL) {
       if (cartItemCountEl) {
         cartItemCountEl.textContent = totalItems + ' ürün';
       }
+      });
     }
     
     function changeQuantity(productId, delta) {
@@ -9489,7 +9642,8 @@ function generateMobileHTML(serverURL) {
         if (item.quantity <= 0) {
           removeFromCart(productId);
         } else {
-          updateCart();
+          // PERFORMANS: Throttle ile sepet güncellemesini optimize et
+          throttle('updateCart', updateCart, 50);
         }
       }
     }
@@ -9501,7 +9655,8 @@ function generateMobileHTML(serverURL) {
         const productIdStr = String(productId);
         return itemId !== productIdStr;
       });
-      updateCart();
+      // PERFORMANS: Throttle ile sepet güncellemesini optimize et
+      throttle('updateCart', updateCart, 50);
     }
     
     function toggleCart() {
@@ -10256,42 +10411,17 @@ function startAPIServer() {
         }
       }
       
-      // Her ürün için stok bilgisini ekle (local database'den veya Firebase'den)
-      const productsWithStock = await Promise.all(products.map(async (product) => {
-        // Local database'de ürünü bul
+      // PERFORMANS: Stok bilgisini sadece local'den al (Firebase çağrısı yok - daha hızlı)
+      const productsWithStock = products.map((product) => {
         const localProduct = db.products.find(p => p.id === product.id);
-        
-        // Stok bilgisini al
-        let stock = null;
-        let trackStock = false;
-        
-        if (localProduct) {
-          trackStock = localProduct.trackStock === true;
-          if (trackStock) {
-            stock = localProduct.stock !== undefined ? (localProduct.stock || 0) : null;
-            // Eğer local'de stok yoksa Firebase'den çek
-            if (stock === null) {
-              stock = await getProductStockFromFirebase(product.id);
-              if (stock === null) {
-                stock = 0;
-              }
-            }
-          }
-        } else {
-          // Local'de yoksa Firebase'den stok bilgisini çek
-          const firebaseStock = await getProductStockFromFirebase(product.id);
-          if (firebaseStock !== null) {
-            trackStock = true;
-            stock = firebaseStock;
-          }
-        }
-        
+        const trackStock = localProduct?.trackStock === true;
+        const stock = trackStock ? (localProduct?.stock !== undefined ? localProduct.stock : 0) : undefined;
         return {
           ...product,
-          trackStock: trackStock,
-          stock: trackStock ? (stock !== null ? stock : 0) : undefined
+          trackStock,
+          stock
         };
-      }));
+      });
       
       res.json(productsWithStock);
     } catch (error) {
@@ -10315,10 +10445,10 @@ function startAPIServer() {
     }
   });
 
-  // Backend resim cache (memory cache - Firebase Storage kullanımını azaltmak için)
+  // PERFORMANS: Backend resim cache - lokal görseller için hızlı cache
   const imageCache = new Map();
-  const CACHE_MAX_AGE = 30 * 24 * 60 * 60 * 1000; // 30 gün (önceden 24 saat)
-  const CACHE_MAX_SIZE = 1000; // Maksimum 1000 resim cache'de tut (önceden 100)
+  const CACHE_MAX_AGE = 90 * 24 * 60 * 60 * 1000; // 90 gün - lokal görseller değişmez
+  const CACHE_MAX_SIZE = 2000; // Maksimum 2000 resim (8GB RAM için yeterli)
   
   // Resim proxy endpoint - CORS sorununu çözmek için + Backend cache
   // Image proxy endpoint - Firebase Storage ve R2 görselleri için CORS sorununu çözer

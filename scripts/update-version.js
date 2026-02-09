@@ -47,6 +47,13 @@ function updateVersionFiles(newVersion) {
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   console.log('✅ public/manifest.json güncellendi');
 
+  // 3. package.json
+  const pkgPath = path.join(__dirname, '../package.json');
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+  pkg.version = newVersion;
+  fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf8');
+  console.log('✅ package.json güncellendi');
+
   console.log(`\n✨ Version başarıyla ${newVersion} olarak güncellendi!\n`);
 }
 

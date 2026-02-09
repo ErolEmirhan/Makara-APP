@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   cancelEntireTableOrder: (orderId, cancelReason) => ipcRenderer.invoke('cancel-entire-table-order', orderId, cancelReason),
   completeTableOrder: (orderId, paymentMethod) => ipcRenderer.invoke('complete-table-order', orderId, paymentMethod),
   transferTableOrder: (sourceTableId, targetTableId) => ipcRenderer.invoke('transfer-table-order', sourceTableId, targetTableId),
+  mergeTableOrder: (sourceTableId, targetTableId) => ipcRenderer.invoke('merge-table-order', sourceTableId, targetTableId),
   // Settings API
   changePassword: (currentPin, newPin) => ipcRenderer.invoke('change-password', currentPin, newPin),
   getAdminPin: () => ipcRenderer.invoke('get-admin-pin'),
@@ -82,6 +83,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => {
       ipcRenderer.removeAllListeners('new-order-created');
     };
+  },
+  // Masa siparişi güncellendi (sonlandırma, aktar, birleştir, kısmi ödeme vb.)
+  onTableOrderUpdated: (callback) => {
+    ipcRenderer.on('table-order-updated', (event, data) => callback(data));
+    return () => ipcRenderer.removeAllListeners('table-order-updated');
   },
   // Table Sync API
   startTableSync: () => ipcRenderer.invoke('start-table-sync'),

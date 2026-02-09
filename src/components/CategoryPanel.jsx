@@ -56,5 +56,9 @@ const CategoryPanel = ({ categories, selectedCategory, onSelectCategory }) => {
   );
 };
 
-export default CategoryPanel;
+// PERFORMANS: React.memo ile gereksiz re-render'ları önle
+export default React.memo(CategoryPanel, (prevProps, nextProps) => {
+  return prevProps.selectedCategory?.id === nextProps.selectedCategory?.id && 
+         prevProps.categories.length === nextProps.categories.length;
+});
 

@@ -1,11 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Toast from './Toast';
+
+const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
 const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComplete }) => {
   const [itemsWithPayment, setItemsWithPayment] = useState([]);
   const [processingItemId, setProcessingItemId] = useState(null);
   const [selectedQuantities, setSelectedQuantities] = useState({}); // { itemId: quantity } - Başlangıçta tümü 0
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+  // Ödeme sonrası parent refetch edene kadar ödenen kalemlerin doğru bölümde görünmesi için
+  const lastPaymentUpdatesRef = useRef({});
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -39,8 +43,9 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
         return;
       }
 
-      // Gruplama anahtarı: product_name + price
-      const groupKey = `${item.product_name}_${item.price}`;
+      // Gruplama anahtarı: product_name + fiyat (2 basamak, float hatası önlenir)
+      const priceKey = Number(Number(item.price).toFixed(2));
+      const groupKey = `${item.product_name}_${priceKey}`;
       
       if (groupedItems[groupKey]) {
         // Mevcut gruba ekle
@@ -78,7 +83,8 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     const groupedItemsArray = Object.values(groupedItems);
     
     setItemsWithPayment(groupedItemsArray);
-    
+    lastPaymentUpdatesRef.current = {}; // Yeni items geldiğinde yerel ödeme önbelleğini temizle
+
     // Tüm ödenmemiş ürünler için başlangıçta 0 miktar seç
     const initialQuantities = {};
     groupedItemsArray.forEach(item => {
@@ -123,12 +129,11 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
       const modal = document.createElement('div');
       modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
       
-      // Kalan tutarı hesapla
-      const remainingTotal = remainingItems.reduce((sum, item) => {
+      const remainingTotal = roundMoney(remainingItems.reduce((sum, item) => {
         const paidQty = item.groupedPaidQuantity || 0;
         const remainingQty = item.groupedQuantity - paidQty;
         return sum + (item.price * remainingQty);
-      }, 0);
+      }, 0));
       
       modal.innerHTML = `
         <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
@@ -186,6 +191,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
 
     try {
       const paymentResults = [];
+      const paymentUpdates = {};
 
       // Her kalan ürün için ödeme al
       for (const item of remainingItems) {
@@ -194,41 +200,21 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
         
         if (remainingQty <= 0) continue;
 
-        // Gruplanmış ürünler için, orijinal item'lar arasında ödemeyi dağıt
+        // Sadece gerçek tableOrderItem id'leri; kalan miktarı aşmadan ödeme al
         const originalIds = item.originalIds || [item.id];
+        const realOriginalIds = originalIds.filter(id => typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id)));
         let remainingSelectedQty = remainingQty;
-        
-        // Her orijinal item için ödeme al
-        for (const originalId of originalIds) {
-          if (remainingSelectedQty <= 0) break;
-          
-          // Orijinal item'ı bul (items prop'undan)
-          const originalItem = items.find(i => i.id === originalId);
-          if (!originalItem) {
-            // Eğer bulunamazsa, bu bir grup item'ı olabilir, direkt ödeme al
-            try {
-              const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, remainingSelectedQty);
-              if (result.success) {
-                paymentResults.push({ itemId: originalId, paymentMethod, quantity: remainingSelectedQty });
-                remainingSelectedQty = 0;
-              }
-            } catch (error) {
-              console.error(`Ürün (ID: ${originalId}) için ödeme hatası:`, error);
-            }
-            continue;
-          }
-          
-          const originalPaidQty = originalItem.paid_quantity || 0;
-          const originalRemainingQty = originalItem.quantity - originalPaidQty;
-          
-          // Bu item için ödenecek miktarı belirle
-          const qtyToPayForThisItem = Math.min(remainingSelectedQty, originalRemainingQty);
-          
-          if (qtyToPayForThisItem <= 0) continue;
 
+        for (const originalId of realOriginalIds) {
+          if (remainingSelectedQty <= 0) break;
+          const originalItem = items.find(i => String(i.id) === String(originalId));
+          if (!originalItem) continue;
+          const originalPaidQty = Number(originalItem.paid_quantity || 0);
+          const originalRemainingQty = originalItem.quantity - originalPaidQty;
+          const qtyToPayForThisItem = Math.min(remainingSelectedQty, originalRemainingQty);
+          if (qtyToPayForThisItem <= 0) continue;
           try {
-            const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, qtyToPayForThisItem);
-            
+            const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, Number(qtyToPayForThisItem));
             if (result.success) {
               paymentResults.push({ itemId: originalId, paymentMethod, quantity: qtyToPayForThisItem });
               remainingSelectedQty -= qtyToPayForThisItem;
@@ -239,21 +225,23 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
             console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme hatası:`, error);
           }
         }
-        
-        // Grup item'ı güncelle
-        const newPaidQuantity = paidQty + remainingQty;
+
+        const newPaidQuantity = paidQty + (remainingQty - remainingSelectedQty);
         const isFullyPaid = newPaidQuantity >= item.groupedQuantity;
-        
-        setItemsWithPayment(prev => prev.map(i => 
-          i.id === item.id 
-            ? { 
-                ...i, 
-                isPaid: isFullyPaid,
-                groupedPaidQuantity: newPaidQuantity,
-                paymentMethod: i.groupedPaidQuantity > 0 ? `${i.paymentMethod || ''}, ${paymentMethod}` : paymentMethod
-              }
-            : i
-        ));
+        paymentUpdates[item.id] = {
+          groupedPaidQuantity: newPaidQuantity,
+          isPaid: isFullyPaid,
+          paymentMethod: item.groupedPaidQuantity > 0 ? `${item.paymentMethod || ''}, ${paymentMethod}` : paymentMethod
+        };
+      }
+
+      if (Object.keys(paymentUpdates).length > 0) {
+        lastPaymentUpdatesRef.current = { ...paymentUpdates };
+        setItemsWithPayment(prev => prev.map(i => {
+          const u = paymentUpdates[i.id];
+          if (!u) return i;
+          return { ...i, groupedPaidQuantity: u.groupedPaidQuantity, isPaid: u.isPaid, paymentMethod: u.paymentMethod };
+        }));
       }
 
       // onComplete callback'ini çağır
@@ -353,6 +341,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
 
     try {
       const paymentResults = [];
+      const paymentUpdates = {}; // itemId -> { groupedPaidQuantity, isPaid, paymentMethod }
 
       // Her seçili ürün için ödeme al
       for (const item of selectedItems) {
@@ -371,40 +360,30 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
         const originalIds = item.originalIds || [item.id];
         let remainingSelectedQty = selectedQty;
         
-        // Her orijinal item için ödeme al
-        for (const originalId of originalIds) {
-          if (remainingSelectedQty <= 0) break;
-          
-          // Orijinal item'ı bul (items prop'undan)
-          const originalItem = items.find(i => i.id === originalId);
-          if (!originalItem) {
-            // Eğer bulunamazsa, bu bir grup item'ı olabilir, direkt ödeme al
-            try {
-              const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, remainingSelectedQty);
-              if (result.success) {
-                paymentResults.push({ itemId: originalId, paymentMethod, quantity: remainingSelectedQty });
-                remainingSelectedQty = 0;
-              }
-            } catch (error) {
-              console.error(`Ürün (ID: ${originalId}) için ödeme hatası:`, error);
-            }
-            continue;
-          }
-          
-          const originalPaidQty = originalItem.paid_quantity || 0;
+        // Sadece gerçek (sayısal) tableOrderItem id'leri üzerinden ödeme al; toplam selectedQty'yi aşma
+        const realOriginalIds = originalIds.filter(id => typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id)));
+        let totalPaidForGroup = 0;
+        const maxToPayForGroup = selectedQty;
+
+        for (const originalId of realOriginalIds) {
+          if (totalPaidForGroup >= maxToPayForGroup) break;
+
+          const originalItem = items.find(i => String(i.id) === String(originalId));
+          if (!originalItem) continue;
+
+          const originalPaidQty = Number(originalItem.paid_quantity || 0);
           const originalRemainingQty = originalItem.quantity - originalPaidQty;
-          
-          // Bu item için ödenecek miktarı belirle
-          const qtyToPayForThisItem = Math.min(remainingSelectedQty, originalRemainingQty);
-          
+          const remainingToPayInGroup = maxToPayForGroup - totalPaidForGroup;
+          const qtyToPayForThisItem = Math.min(remainingToPayInGroup, originalRemainingQty, Math.max(0, Math.floor(remainingSelectedQty)));
+
           if (qtyToPayForThisItem <= 0) continue;
 
           try {
-            const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, qtyToPayForThisItem);
-            
+            const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, Number(qtyToPayForThisItem));
             if (result.success) {
               paymentResults.push({ itemId: originalId, paymentMethod, quantity: qtyToPayForThisItem });
               remainingSelectedQty -= qtyToPayForThisItem;
+              totalPaidForGroup += qtyToPayForThisItem;
             } else {
               console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme alınamadı:`, result.error);
             }
@@ -413,25 +392,29 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
           }
         }
         
-        // Grup item'ı güncelle
-        const newPaidQuantity = paidQty + selectedQty;
+        const actuallyPaidForGroup = totalPaidForGroup;
+        const newPaidQuantity = paidQty + actuallyPaidForGroup;
         const isFullyPaid = newPaidQuantity >= item.groupedQuantity;
-        
-        setItemsWithPayment(prev => prev.map(i => 
-          i.id === item.id 
-            ? { 
-                ...i, 
-                isPaid: isFullyPaid,
-                groupedPaidQuantity: newPaidQuantity,
-                paymentMethod: i.groupedPaidQuantity > 0 ? `${i.paymentMethod || ''}, ${paymentMethod}` : paymentMethod
-              }
-            : i
-        ));
-        
-        // Seçilen miktarı sıfırla
-        setSelectedQuantities(prev => ({
-          ...prev,
-          [item.id]: 0
+        paymentUpdates[item.id] = {
+          groupedPaidQuantity: newPaidQuantity,
+          isPaid: isFullyPaid,
+          paymentMethod: item.groupedPaidQuantity > 0 ? `${item.paymentMethod || ''}, ${paymentMethod}` : paymentMethod
+        };
+        setSelectedQuantities(prev => ({ ...prev, [item.id]: 0 }));
+      }
+
+      // Tüm ödeme güncellemelerini tek seferde uygula + ref'e yaz (render'da ödenen kalemlere geçsin)
+      if (Object.keys(paymentUpdates).length > 0) {
+        lastPaymentUpdatesRef.current = { ...paymentUpdates };
+        setItemsWithPayment(prev => prev.map(i => {
+          const u = paymentUpdates[i.id];
+          if (!u) return i;
+          return {
+            ...i,
+            groupedPaidQuantity: u.groupedPaidQuantity,
+            isPaid: u.isPaid,
+            paymentMethod: u.paymentMethod
+          };
         }));
       }
 
@@ -480,38 +463,43 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     .map(item => ({
       ...item,
       selectedQty: selectedQuantities[item.id] || 0,
-      total: (item.price * (selectedQuantities[item.id] || 0))
+      total: roundMoney(item.price * (selectedQuantities[item.id] || 0))
     }));
 
-  const selectedItemsTotal = selectedItemsInfo.reduce((sum, item) => sum + item.total, 0);
+  const selectedItemsTotal = roundMoney(selectedItemsInfo.reduce((sum, item) => sum + item.total, 0));
   const selectedItemsText = selectedItemsInfo.map(item => `${item.product_name} (${item.selectedQty})`).join(', ');
 
-  // Ödenmemiş ürünler (tamamı ödenmemiş olanlar)
-  const unpaidItems = itemsWithPayment.filter(item => {
+  // Ref'teki güncel ödeme bilgisini state ile birleştir (ödenen kalemler hemen doğru bölümde görünsün)
+  const effectiveItems = itemsWithPayment.map(item => {
+    const u = lastPaymentUpdatesRef.current[item.id];
+    if (!u) return item;
+    return { ...item, groupedPaidQuantity: u.groupedPaidQuantity, isPaid: u.isPaid, paymentMethod: u.paymentMethod != null ? u.paymentMethod : item.paymentMethod };
+  });
+
+  const awaitingItems = effectiveItems.filter(item => {
     if (item.isGift) return false;
     const paidQty = item.groupedPaidQuantity || 0;
     return paidQty < item.groupedQuantity;
   });
-  // Ödenmiş ürünler (tamamı veya kısmen)
-  const paidItems = itemsWithPayment.filter(item => {
+  const completedItems = effectiveItems.filter(item => {
     if (item.isGift) return false;
-    return (item.groupedPaidQuantity || 0) > 0;
+    return (item.groupedPaidQuantity || 0) >= item.groupedQuantity;
   });
-  // Orijinal toplam tutar (items'ları toplayarak - değişmemeli)
-  const originalTotalAmount = itemsWithPayment.reduce((sum, item) => {
+  const giftItems = effectiveItems.filter(item => item.isGift);
+
+  // Orijinal toplam tutar (para birimi 2 basamak)
+  const originalTotalAmount = roundMoney(effectiveItems.reduce((sum, item) => {
     if (item.isGift) return sum;
     return sum + (item.price * item.groupedQuantity);
-  }, 0);
-  
-  // Toplam ödenen tutar (ödenen miktarlar üzerinden)
-  const paidAmount = itemsWithPayment.reduce((sum, item) => {
+  }, 0));
+
+  const paidAmount = roundMoney(effectiveItems.reduce((sum, item) => {
     if (item.isGift) return sum;
     const paidQty = item.groupedPaidQuantity || 0;
     return sum + (item.price * paidQty);
-  }, 0);
-  
-  // Kalan tutar (orijinal toplam - ödenen)
-  const remainingAmount = originalTotalAmount - paidAmount;
+  }, 0));
+
+  const remainingAmount = roundMoney(originalTotalAmount - paidAmount);
 
   return (
     <>
@@ -551,129 +539,146 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
               </p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 mb-1 font-medium">Ödenmemiş Ürün</p>
-              <p className="text-xl font-bold text-gray-900">{unpaidItems.length} Adet</p>
+              <p className="text-xs text-gray-500 mb-1 font-medium">Ödenmemiş Kalem</p>
+              <p className="text-xl font-bold text-gray-900">{awaitingItems.length} Adet</p>
             </div>
           </div>
         </div>
 
-        {/* Ürün Listesi - Scroll Edilebilir, Kurumsal */}
-        <div className="flex-1 overflow-y-auto px-8 py-6">
-          <div className="space-y-3">
-            {itemsWithPayment.map((item) => {
-              const itemTotal = item.price * item.groupedQuantity;
-              const paidQty = item.groupedPaidQuantity || 0;
-              const remainingQty = item.groupedQuantity - paidQty;
-              const paidTotal = item.price * paidQty;
-              const isFullyPaid = item.isPaid || paidQty >= item.groupedQuantity;
-              const selectedQty = selectedQuantities[item.id] || 0;
-              
-              return (
-                <div
-                  key={item.id}
-                  className={`rounded-lg p-4 border transition-all ${
-                    isFullyPaid
-                      ? 'bg-green-50 border-green-200'
-                      : paidQty > 0
-                      ? 'bg-blue-50 border-blue-200'
-                      : item.isGift
-                      ? 'bg-yellow-50 border-yellow-200'
-                      : selectedQty > 0
-                      ? 'bg-blue-50 border-blue-300'
-                      : 'bg-white border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  <div className="flex items-center justify-between gap-6">
-                    {/* Sol Taraf - Ürün Bilgisi */}
-                    <div className="flex items-center space-x-4 flex-1">
-                      <div className={`w-12 h-12 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                        isFullyPaid
-                          ? 'bg-green-500'
-                          : paidQty > 0
-                          ? 'bg-blue-500'
-                          : item.isGift
-                          ? 'bg-yellow-400'
-                          : 'bg-gray-400'
-                      }`}>
-                        {isFullyPaid ? (
-                          <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                          </svg>
-                        ) : paidQty > 0 ? (
-                          <span className="text-white text-xs font-bold">{paidQty}/{item.groupedQuantity}</span>
-                        ) : item.isGift ? (
-                          <span className="text-white text-lg">🎁</span>
-                        ) : (
-                          <span className="text-white text-lg">📦</span>
-                        )}
-                      </div>
-                      
-                      <div className="flex-1">
-                        <div className="flex items-center justify-between mb-1">
-                          <p className={`font-semibold text-base ${
-                            isFullyPaid ? 'text-green-700 line-through' : item.isGift ? 'text-yellow-700' : 'text-gray-800'
-                          }`}>
-                            {item.product_name}
-                            {item.isGift && <span className="ml-2 text-xs font-normal">(İKRAM)</span>}
-                          </p>
-                          <div className="text-right">
-                            {isFullyPaid ? (
-                              <p className="text-base font-bold text-green-600 line-through">₺{itemTotal.toFixed(2)}</p>
-                            ) : paidQty > 0 ? (
-                              <div>
-                                <p className="text-xs text-gray-400 line-through">₺{itemTotal.toFixed(2)}</p>
-                                <p className="text-base font-bold text-blue-600">₺{paidTotal.toFixed(2)}</p>
-                              </div>
-                            ) : (
-                              <p className="text-base font-bold text-gray-800">₺{itemTotal.toFixed(2)}</p>
-                            )}
+        {/* Bölümlü tablo: Ödeme bekleyen / Ödenen */}
+        <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
+          {/* Ödeme bekleyen kalemler */}
+          <section>
+            <h3 className="text-sm font-bold text-orange-700 uppercase tracking-wide mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-orange-500" />
+              Ödeme bekleyen ({awaitingItems.length} kalem)
+            </h3>
+            <div className="rounded-xl border border-orange-200 overflow-hidden bg-white">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="bg-orange-50 text-gray-600 border-b border-orange-100">
+                    <th className="py-3 px-4 font-semibold">Ürün</th>
+                    <th className="py-3 px-4 font-semibold text-center w-24">Kalan adet</th>
+                    <th className="py-3 px-4 font-semibold text-right w-24">Birim</th>
+                    <th className="py-3 px-4 font-semibold text-right w-24">Tutar</th>
+                    <th className="py-3 px-4 font-semibold text-right w-24">Ödenen</th>
+                    <th className="py-3 px-4 font-semibold text-right w-24">Kalan</th>
+                    <th className="py-3 px-4 font-semibold text-center w-36">Ödenecek</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {awaitingItems.map((item) => {
+                    const paidQty = item.groupedPaidQuantity || 0;
+                    const remainingQty = item.groupedQuantity - paidQty;
+                    const itemTotal = roundMoney(item.price * item.groupedQuantity);
+                    const paidTotal = roundMoney(item.price * paidQty);
+                    const remainingTotal = roundMoney(item.price * remainingQty);
+                    const selectedQty = selectedQuantities[item.id] || 0;
+                    return (
+                      <tr key={item.id} className="border-b border-gray-100 hover:bg-orange-50/50">
+                        <td className="py-3 px-4 font-medium text-gray-800">{item.product_name}</td>
+                        <td className="py-3 px-4 text-center text-gray-600 font-medium">{remainingQty}</td>
+                        <td className="py-3 px-4 text-right text-gray-600">₺{Number(item.price).toFixed(2)}</td>
+                        <td className="py-3 px-4 text-right font-medium">₺{itemTotal.toFixed(2)}</td>
+                        <td className="py-3 px-4 text-right text-blue-600">₺{paidTotal.toFixed(2)}</td>
+                        <td className="py-3 px-4 text-right font-semibold text-orange-600">₺{remainingTotal.toFixed(2)}</td>
+                        <td className="py-3 px-4">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => updateQuantity(item.id, selectedQty - 1)}
+                              disabled={selectedQty <= 0}
+                              className="w-8 h-8 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-semibold"
+                            >−</button>
+                            <input
+                              type="number"
+                              min={0}
+                              max={remainingQty}
+                              value={selectedQty}
+                              onChange={(e) => updateQuantity(item.id, Math.max(0, Math.min(remainingQty, parseInt(e.target.value) || 0)))}
+                              className="w-14 py-1 text-center border border-gray-300 rounded text-gray-800 font-semibold"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateQuantity(item.id, selectedQty + 1)}
+                              disabled={selectedQty >= remainingQty}
+                              className="w-8 h-8 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-semibold"
+                            >+</button>
                           </div>
-                        </div>
-                        <p className="text-sm text-gray-600 mb-3">
-                          {item.groupedQuantity} adet × ₺{item.price.toFixed(2)}
-                          {paidQty > 0 && !isFullyPaid && (
-                            <span className="ml-2 text-blue-600">({paidQty} ödendi, {remainingQty} kalan)</span>
-                          )}
-                        </p>
-                        
-                        {/* Miktar Seçici - Basit ve Kurumsal */}
-                        {!isFullyPaid && !item.isGift && remainingQty > 0 && (
-                          <div className="flex items-center space-x-3">
-                            <span className="text-sm font-medium text-gray-700">Miktar:</span>
-                            <div className="flex items-center space-x-2">
-                              <button
-                                onClick={() => updateQuantity(item.id, selectedQty - 1)}
-                                disabled={selectedQty <= 0}
-                                className="w-9 h-9 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed text-gray-700 font-semibold transition-all flex items-center justify-center"
-                              >
-                                −
-                              </button>
-                              <input
-                                type="number"
-                                min="0"
-                                max={remainingQty}
-                                value={selectedQty}
-                                onChange={(e) => updateQuantity(item.id, parseInt(e.target.value) || 0)}
-                                className="w-16 px-2 py-1.5 text-center border border-gray-300 rounded text-base font-semibold text-gray-800 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                              />
-                              <button
-                                onClick={() => updateQuantity(item.id, selectedQty + 1)}
-                                disabled={selectedQty >= remainingQty}
-                                className="w-9 h-9 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed text-gray-700 font-semibold transition-all flex items-center justify-center"
-                              >
-                                +
-                              </button>
-                            </div>
-                            <span className="text-sm text-gray-500">/ {remainingQty} adet</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {awaitingItems.length === 0 && (
+                <p className="py-6 text-center text-gray-500">Ödeme bekleyen kalem yok.</p>
+              )}
+            </div>
+          </section>
+
+          {/* Ödenen kalemler */}
+          <section>
+            <h3 className="text-sm font-bold text-green-700 uppercase tracking-wide mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-green-500" />
+              Ödenen kalemler ({completedItems.length})
+            </h3>
+            <div className="rounded-xl border border-green-200 overflow-hidden bg-green-50/30">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="bg-green-50 text-gray-600 border-b border-green-100">
+                    <th className="py-3 px-4 font-semibold">Ürün</th>
+                    <th className="py-3 px-4 font-semibold text-center w-20">Adet</th>
+                    <th className="py-3 px-4 font-semibold text-right w-28">Tutar</th>
+                    <th className="py-3 px-4 font-semibold">Ödeme</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {completedItems.map((item) => {
+                    const itemTotal = roundMoney(item.price * item.groupedQuantity);
+                    return (
+                      <tr key={item.id} className="border-b border-green-100/50">
+                        <td className="py-3 px-4 font-medium text-green-800">{item.product_name}</td>
+                        <td className="py-3 px-4 text-center text-green-700">{item.groupedQuantity}</td>
+                        <td className="py-3 px-4 text-right font-medium text-green-700">₺{itemTotal.toFixed(2)}</td>
+                        <td className="py-3 px-4 text-green-600 text-sm">{item.paymentMethod || '—'}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {completedItems.length === 0 && (
+                <p className="py-6 text-center text-gray-500">Henüz ödenen kalem yok.</p>
+              )}
+            </div>
+          </section>
+
+          {giftItems.length > 0 && (
+            <section>
+              <h3 className="text-sm font-bold text-amber-700 uppercase tracking-wide mb-3 flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-amber-500" />
+                İkramlar
+              </h3>
+              <div className="rounded-xl border border-amber-200 overflow-hidden bg-amber-50/30">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="bg-amber-50 text-gray-600 border-b border-amber-100">
+                      <th className="py-3 px-4 font-semibold">Ürün</th>
+                      <th className="py-3 px-4 font-semibold text-center w-20">Adet</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {giftItems.map((item) => (
+                      <tr key={item.id} className="border-b border-amber-100/50">
+                        <td className="py-3 px-4 font-medium text-amber-800">{item.product_name}</td>
+                        <td className="py-3 px-4 text-center text-amber-700">{item.groupedQuantity}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
         </div>
 
         {/* Sabit Footer Bar - Kurumsal */}
@@ -691,7 +696,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
             </div>
             <div className="flex items-center space-x-6">
               <div className="text-right">
-                <p className="text-sm text-gray-300 mb-1">Toplam:</p>
+                <p className="text-sm text-gray-300 mb-1">Seçilen tutar:</p>
                 <p className="text-2xl font-bold text-white">₺{selectedItemsTotal.toFixed(2)}</p>
               </div>
               <div className="flex items-center space-x-3">
@@ -736,7 +741,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
                       <span>İşleniyor...</span>
                     </span>
                   ) : (
-                    'Ödeme Al'
+                    `Seçilen Ödemeyi Al (₺${selectedItemsTotal.toFixed(2)})`
                   )}
                 </button>
               </div>

@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Toast from './Toast';
 
-const SettingsModal = ({ onClose, onProductsUpdated }) => {
+const SettingsModal = ({ onClose, onProductsUpdated, variant = 'modal' }) => {
+  const isPage = variant === 'page';
   const [activeTab, setActiveTab] = useState('password'); // 'password', 'products', 'printers', or 'stock'
   const [printerSubTab, setPrinterSubTab] = useState('usb'); // 'usb' or 'network'
   
@@ -789,11 +790,10 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
     }
   };
 
-  return createPortal(
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[999] animate-fade-in px-4">
-      <div className="bg-white rounded-2xl p-8 w-full max-w-6xl max-h-[90vh] shadow-xl transform animate-scale-in relative overflow-hidden flex flex-col border border-gray-200">
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
-      
+  const content = (
+    <>
+      {!isPage && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400" />}
+      {!isPage && (
         <button
           onClick={onClose}
           className="absolute top-4 right-4 w-8 h-8 rounded-lg bg-gray-50 hover:bg-gray-100 flex items-center justify-center transition-all duration-200"
@@ -802,6 +802,22 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
+      )}
+      {isPage && (
+        <div className="flex items-center gap-4 pb-4 border-b border-gray-200 mb-6">
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 flex items-center gap-2 transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            </svg>
+            <span className="font-medium">Geri</span>
+          </button>
+          <h1 className="text-xl font-bold text-gray-900">Ayarlar</h1>
+        </div>
+      )}
 
         <div className="text-center mb-6 pt-2">
           <div className="w-14 h-14 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
@@ -1780,7 +1796,6 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
             </div>
           )}
         </div>
-      </div>
 
       {/* Category Assignment Modal */}
       {showCategoryAssignModal && selectedPrinter && (
@@ -2281,6 +2296,24 @@ const SettingsModal = ({ onClose, onProductsUpdated }) => {
           onClose={() => setToast({ message: '', type: 'info', show: false })}
         />
       )}
+    </>
+  );
+
+  if (isPage) {
+    return (
+      <div className="h-full flex flex-col bg-white overflow-hidden">
+        <div className="p-6 flex-1 overflow-y-auto scrollbar-custom">
+          {content}
+        </div>
+      </div>
+    );
+  }
+
+  return createPortal(
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[999] animate-fade-in px-4">
+      <div className="bg-white rounded-2xl p-8 w-full max-w-6xl max-h-[90vh] shadow-xl transform animate-scale-in relative overflow-hidden flex flex-col border border-gray-200">
+        {content}
+      </div>
     </div>,
     document.body
   );

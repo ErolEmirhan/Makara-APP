@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { initializeApp, getApp } from 'firebase/app';
 import { getFirestore, collection, query, where, onSnapshot, doc, setDoc } from 'firebase/firestore';
 import orderSound from './sound/order.mp3';
@@ -19,6 +19,7 @@ import UpdateModal from './components/UpdateModal';
 import ExpenseModal from './components/ExpenseModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
+import SettingsModal from './components/SettingsModal';
 function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [currentView, setCurrentView] = useState('pos'); // 'pos', 'sales', or 'tables'
@@ -186,48 +187,40 @@ function App() {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    if (selectedCategory) {
-      loadProducts(selectedCategory.id);
-    }
-  }, [selectedCategory]);
-
-  const loadCategories = async () => {
+  // PERFORMANS: useCallback ile fonksiyonları memoize et
+  const loadCategories = useCallback(async () => {
     const cats = await window.electronAPI.getCategories();
-    // Yan Ürünler kategorisini ekle
     const yanUrunlerCategory = {
       id: YAN_URUNLER_CATEGORY_ID,
       name: 'Yan Ürünler',
-      order_index: 9999 // En sona ekle
+      order_index: 9999
     };
     setCategories([...cats, yanUrunlerCategory]);
     
-    // Yan ürünleri yükle
     if (window.electronAPI && window.electronAPI.getYanUrunler) {
       const yanUrunlerList = await window.electronAPI.getYanUrunler();
       setYanUrunler(yanUrunlerList);
     }
     
-    // Tüm ürünleri yükle (arama için)
+    // Tüm ürünleri sadece ilk yüklemede çek (arama için)
     const allProds = await window.electronAPI.getProducts(null);
     setAllProducts(allProds);
     if (cats.length > 0) {
       setSelectedCategory(cats[0]);
     }
-  };
+  }, []);
 
-  const loadProducts = async (categoryId) => {
+  const loadProducts = useCallback(async (categoryId) => {
     // Yan Ürünler kategorisi seçildiyse
     if (categoryId === YAN_URUNLER_CATEGORY_ID) {
       if (window.electronAPI && window.electronAPI.getYanUrunler) {
         const yanUrunlerList = await window.electronAPI.getYanUrunler();
-        // Yan ürünleri normal ürün formatına çevir
         const formattedYanUrunler = yanUrunlerList.map(urun => ({
-          id: `yan_urun_${urun.id}`, // Özel ID formatı
+          id: `yan_urun_${urun.id}`,
           name: urun.name,
           price: urun.price,
           category_id: YAN_URUNLER_CATEGORY_ID,
-          isYanUrun: true // Yan ürün olduğunu belirt
+          isYanUrun: true
         }));
         setProducts(formattedYanUrunler);
       }
@@ -236,10 +229,14 @@ function App() {
     
     const prods = await window.electronAPI.getProducts(categoryId);
     setProducts(prods);
-    // Tüm ürünleri de güncelle (arama için)
-    const allProds = await window.electronAPI.getProducts(null);
-    setAllProducts(allProds);
-  };
+  }, []);
+
+  // useEffect - loadProducts tanımından sonra olmalı
+  useEffect(() => {
+    if (selectedCategory) {
+      loadProducts(selectedCategory.id);
+    }
+  }, [selectedCategory, loadProducts]);
 
   // Arama sorgusuna göre ürünleri filtrele
   const filteredProducts = useMemo(() => {
@@ -308,7 +305,8 @@ function App() {
     }
   };
 
-  const addToCart = (product) => {
+  // PERFORMANS: useCallback ile memoize et
+  const addToCart = useCallback((product) => {
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === product.id);
       if (existingItem) {
@@ -320,9 +318,13 @@ function App() {
       }
       return [...prevCart, { ...product, quantity: 1 }];
     });
-  };
+  }, []);
 
-  const updateCartItemQuantity = (productId, newQuantity) => {
+  const removeFromCart = useCallback((productId) => {
+    setCart(prevCart => prevCart.filter(item => item.id !== productId));
+  }, []);
+
+  const updateCartItemQuantity = useCallback((productId, newQuantity) => {
     if (newQuantity <= 0) {
       removeFromCart(productId);
       return;
@@ -332,25 +334,21 @@ function App() {
         item.id === productId ? { ...item, quantity: newQuantity } : item
       )
     );
-  };
+  }, [removeFromCart]);
 
-  const removeFromCart = (productId) => {
-    setCart(prevCart => prevCart.filter(item => item.id !== productId));
-  };
-
-  const toggleGift = (productId) => {
+  const toggleGift = useCallback((productId) => {
     setCart(prevCart =>
       prevCart.map(item =>
         item.id === productId ? { ...item, isGift: !item.isGift } : item
       )
     );
-  };
+  }, []);
 
-  const clearCart = () => {
+  const clearCart = useCallback(() => {
     setCart([]);
     setOrderNote('');
-    setSelectedTable(null); // Sepet temizlendiğinde masa seçimini de temizle
-  };
+    setSelectedTable(null);
+  }, []);
 
   const handleTableSelect = (table) => {
     setSelectedTable(table);
@@ -773,9 +771,18 @@ function App() {
         onRoleSplash={triggerRoleSplash}
         onProductsUpdated={refreshProducts}
         onExit={handleExit}
+        onOpenSettings={() => setCurrentView('settings')}
       />
       
-      {currentView === 'tables' ? (
+      {currentView === 'settings' ? (
+        <div className="h-[calc(100vh-80px)] overflow-hidden bg-white">
+          <SettingsModal
+            variant="page"
+            onClose={() => setCurrentView('pos')}
+            onProductsUpdated={refreshProducts}
+          />
+        </div>
+      ) : currentView === 'tables' ? (
         <div className="p-6">
           <TablePanel 
             onSelectTable={handleTableSelect}

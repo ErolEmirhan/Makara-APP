@@ -1,15 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import PinModal from './PinModal';
-import SettingsModal from './SettingsModal';
 import SettingsSplash from './SettingsSplash';
 import DateTimeDisplay from './DateTimeDisplay';
 import Toast from './Toast';
 
-const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit }) => {
+const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit, onOpenSettings }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [showSettingsSplash, setShowSettingsSplash] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
   const [showMobileModal, setShowMobileModal] = useState(false);
@@ -200,7 +198,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
         <div>
           <h1 className="text-lg font-bold text-pink-500">Makara Satış Sistemi</h1>
-          <p className="text-xs text-gray-500 font-medium">v2.7.0</p>
+          <p className="text-xs text-gray-500 font-medium">v2.9.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300">
           <DateTimeDisplay />
@@ -443,21 +441,13 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         />
       )}
 
-      {/* Settings Splash */}
+      {/* Settings Splash - sonrasında ayarlar sayfasına gider */}
       {showSettingsSplash && (
         <SettingsSplash
           onComplete={() => {
             setShowSettingsSplash(false);
-            setShowSettingsModal(true);
+            onOpenSettings?.();
           }}
-        />
-      )}
-
-      {/* Settings Modal */}
-      {showSettingsModal && (
-        <SettingsModal
-          onClose={() => setShowSettingsModal(false)}
-          onProductsUpdated={onProductsUpdated}
         />
       )}
 

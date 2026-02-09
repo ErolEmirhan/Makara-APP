@@ -1,6 +1,6 @@
 {
   "name": "makara-pos",
-  "version": "2.7.0",
+  "version": "2.9.0",
   "description": "MAKARA - Modern POS Uygulaması",
   "main": "electron/main.js",
   "scripts": {
@@ -47,12 +47,12 @@
     "vite": "^5.0.11",
     "wait-on": "^7.2.0"
   },
-    "build": {
-      "appId": "com.makara.pos",
-      "productName": "MAKARA POS",
-      "directories": {
-        "output": "../Makara-APP-Builds"
-      },
+  "build": {
+    "appId": "com.makara.pos",
+    "productName": "MAKARA POS",
+    "directories": {
+      "output": "../Makara-APP-Builds"
+    },
     "files": [
       "dist/**/*",
       "electron/**/*",

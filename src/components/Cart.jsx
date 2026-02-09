@@ -348,5 +348,6 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
   );
 };
 
-export default Cart;
+// PERFORMANS: React.memo ile gereksiz re-render'ları önle
+export default React.memo(Cart);
 

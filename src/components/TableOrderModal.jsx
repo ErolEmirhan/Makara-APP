@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Toast from './Toast';
 
-const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable }) => {
+const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems }) => {
   const [sessionDuration, setSessionDuration] = useState('');
   const [selectedItemDetail, setSelectedItemDetail] = useState(null);
   const [cancellingItemId, setCancellingItemId] = useState(null);
@@ -17,6 +17,11 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   const [cancellingEntireTable, setCancellingEntireTable] = useState(false);
   const [cancelEntireTableReason, setCancelEntireTableReason] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+  const [showTransferItemsModal, setShowTransferItemsModal] = useState(false);
+  const [transferStep, setTransferStep] = useState(1);
+  const [transferQuantities, setTransferQuantities] = useState({});
+  const [selectedTargetTableId, setSelectedTargetTableId] = useState(null);
+  const [transferring, setTransferring] = useState(false);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -261,6 +266,71 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     }
   };
 
+  const insideTables = useMemo(() => Array.from({ length: 20 }, (_, i) => ({ id: `inside-${i + 1}`, name: `İçeri ${i + 1}` })), []);
+  const outsideTables = useMemo(() => Array.from({ length: 24 }, (_, i) => ({ id: `outside-${61 + i}`, name: `Dışarı ${61 + i}` })), []);
+  const packageTables = useMemo(() => [
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `package-inside-${i + 1}`, name: `Paket ${i + 1}` })),
+    ...Array.from({ length: 5 }, (_, i) => ({ id: `package-outside-${i + 1}`, name: `Paket ${i + 1}` }))
+  ], []);
+  const allTablesForTransfer = useMemo(() => {
+    const all = [...insideTables, ...outsideTables, ...packageTables];
+    return all.filter(t => t.id !== order?.table_id);
+  }, [insideTables, outsideTables, packageTables, order?.table_id]);
+
+  const getTransferKey = (item) => `${item.product_id}_${!!item.isGift}`;
+  const getTransferableQty = (item) => Math.max(0, (item.quantity || 0) - (item.paid_quantity || 0));
+  const selectedTransferTotal = useMemo(() => {
+    return groupedItems.reduce((sum, item) => {
+      const qty = transferQuantities[getTransferKey(item)] || 0;
+      return sum + (Number(qty) || 0);
+    }, 0);
+  }, [groupedItems, transferQuantities]);
+  const setTransferQty = (item, delta) => {
+    const key = getTransferKey(item);
+    const max = getTransferableQty(item);
+    const current = Math.max(0, Math.min(max, (transferQuantities[key] || 0) + delta));
+    setTransferQuantities(prev => ({ ...prev, [key]: current }));
+  };
+
+  const handleTransferItemsConfirm = async () => {
+    if (!selectedTargetTableId || !window.electronAPI?.transferOrderItems || selectedTransferTotal <= 0) return;
+    const itemsToTransfer = groupedItems
+      .map(item => {
+        const qty = transferQuantities[getTransferKey(item)] || 0;
+        if ((qty || 0) <= 0) return null;
+        return {
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: qty,
+          price: item.price,
+          isGift: !!item.isGift,
+          staff_name: item.originalItems?.[0]?.staff_name || null
+        };
+      })
+      .filter(Boolean);
+    if (itemsToTransfer.length === 0) return;
+    setTransferring(true);
+    try {
+      const result = await window.electronAPI.transferOrderItems(order.id, selectedTargetTableId, itemsToTransfer);
+      if (result?.success) {
+        showToast(`Seçilen ürünler aktarıldı, kategori bazlı fiş yazdırılıyor`, 'success');
+        setShowTransferItemsModal(false);
+        setTransferStep(1);
+        setTransferQuantities({});
+        setSelectedTargetTableId(null);
+        if (onTransferItems) onTransferItems();
+        onClose();
+      } else {
+        showToast(result?.error || 'Aktarım yapılamadı', 'error');
+      }
+    } catch (err) {
+      console.error('Ürün aktarım hatası:', err);
+      showToast('Aktarım sırasında hata oluştu', 'error');
+    } finally {
+      setTransferring(false);
+    }
+  };
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
       <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-7xl w-full mx-6 shadow-[0_20px_60px_-12px_rgba(0,0,0,0.25)] max-h-[95vh] overflow-y-auto">
@@ -335,6 +405,18 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                   {groupedItems.length}
                 </span>
               </div>
+              {order.status === 'pending' && groupedItems.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => { setTransferStep(1); setTransferQuantities({}); setSelectedTargetTableId(null); setShowTransferItemsModal(true); }}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-gradient-to-r from-indigo-600 to-blue-600 text-white hover:from-indigo-700 hover:to-blue-700 shadow-sm transition-all"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+                  </svg>
+                  Ürün aktar
+                </button>
+              )}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[450px] overflow-y-auto pr-2">
               {groupedItems.map((item) => {
@@ -1005,6 +1087,115 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                 )}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ürün aktar - 1: Ürün/adet seç, 2: Hedef masa seç */}
+      {showTransferItemsModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]" onClick={(e) => e.target === e.currentTarget && !transferring && (setTransferStep(1), setShowTransferItemsModal(false))}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4">
+              <h3 className="text-lg font-bold text-white">Ürünleri aktar</h3>
+              <p className="text-sm text-white/90 mt-0.5">
+                {transferStep === 1 ? 'Aktarılacak ürünleri ve adetleri seçin (yalnızca ödenmemiş adetler).' : 'Hedef masayı seçin, ardından aktar ve yazdır.'}
+              </p>
+            </div>
+            {transferStep === 1 ? (
+              <>
+                <div className="p-4 overflow-y-auto flex-1">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Aktarılacak adet (ödenmemiş)</p>
+                  <div className="space-y-3">
+                    {groupedItems.filter(item => getTransferableQty(item) > 0).map((item) => {
+                      const key = getTransferKey(item);
+                      const maxQty = getTransferableQty(item);
+                      const current = Math.min(maxQty, transferQuantities[key] || 0);
+                      return (
+                        <div key={key} className="flex items-center justify-between gap-4 p-3 bg-gray-50 rounded-xl border border-gray-200">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-gray-900 truncate">{item.product_name}</p>
+                            <p className="text-xs text-gray-500">En fazla {maxQty} adet</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setTransferQty(item, -1)}
+                              disabled={current <= 0}
+                              className="w-9 h-9 rounded-lg border border-gray-300 bg-white font-bold text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >−</button>
+                            <span className="w-10 text-center font-bold text-gray-900">{current}</span>
+                            <button
+                              type="button"
+                              onClick={() => setTransferQty(item, 1)}
+                              disabled={current >= maxQty}
+                              className="w-9 h-9 rounded-lg border border-gray-300 bg-white font-bold text-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                            >+</button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {groupedItems.filter(item => getTransferableQty(item) > 0).length === 0 && (
+                    <p className="text-gray-500 text-sm py-4">Aktarılabilir (ödenmemiş) ürün yok.</p>
+                  )}
+                </div>
+                <div className="px-6 py-4 bg-gray-50 border-t flex justify-between items-center">
+                  <span className="text-sm font-semibold text-gray-600">Seçilen: {selectedTransferTotal} adet</span>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => !transferring && setShowTransferItemsModal(false)} className="px-4 py-2 rounded-xl font-semibold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50">İptal</button>
+                    <button
+                      type="button"
+                      onClick={() => setTransferStep(2)}
+                      disabled={selectedTransferTotal <= 0}
+                      className="px-6 py-2 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      Hedef masa seç
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="p-4 overflow-y-auto flex-1">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Hedef masa (mevcut masa hariç)</p>
+                  <div className="grid grid-cols-4 gap-2">
+                    {allTablesForTransfer.map((table) => (
+                      <button
+                        key={table.id}
+                        type="button"
+                        onClick={() => setSelectedTargetTableId(selectedTargetTableId === table.id ? null : table.id)}
+                        className={`py-3 px-2 rounded-xl text-sm font-bold transition-all ${
+                          selectedTargetTableId === table.id ? 'bg-indigo-600 text-white ring-2 ring-indigo-300' : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        {table.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="px-6 py-4 bg-gray-50 border-t flex justify-between items-center">
+                  <button type="button" onClick={() => setTransferStep(1)} className="text-sm font-semibold text-indigo-600 hover:text-indigo-700">← Ürün seçimine dön</button>
+                  <div className="flex gap-2">
+                    <button type="button" onClick={() => !transferring && setShowTransferItemsModal(false)} className="px-4 py-2 rounded-xl font-semibold text-gray-700 bg-white border border-gray-300 hover:bg-gray-50">İptal</button>
+                    <button
+                      type="button"
+                      onClick={handleTransferItemsConfirm}
+                      disabled={!selectedTargetTableId || transferring}
+                      className="px-6 py-2 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {transferring ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                          Aktarılıyor...
+                        </>
+                      ) : (
+                        <>Aktar ve yazdır</>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

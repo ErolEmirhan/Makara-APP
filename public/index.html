@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.25">
+  <link rel="manifest" href="/manifest.json?v=2.4.32">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.25';
+      const APP_VERSION = '2.4.32';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -167,6 +167,7 @@
     let lastReportSales = null; // moveCategoryDate ile sadece içerik yenilenirken kullanılır
     let saleToDeleteId = null; // Silme onayı için seçilen satış id
     let saleToDeleteLabel = ''; // Silme onayı modalında gösterilecek etiket
+    let salesShowDiscountedOnly = false; // Satış geçmişinde sadece indirimli satışları göster
 
     try {
       // Ana Firebase zaten başlatılmış mı kontrol et
@@ -299,6 +300,8 @@
       loadSales();
       loadCancels(); // Cache'den yüklemeyi dene
       renderCurrentView(); // Listener'ları başlat
+      // 00:00'dan sonra ilk girişte açık masaları sil (masalar yüklendikten sonra çalışsın diye gecikmeli)
+      setTimeout(runMidnightClearIfNeeded, 5000);
     }
 
     function verifyPin() {
@@ -514,7 +517,8 @@
             items_array: itemsArray, // Gerçek Firebase verileri
             itemsText: data.items || 'Ürün bulunamadı',
             isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
-            created_at: createdAt // Sıralama için timestamp
+            created_at: createdAt, // Sıralama için timestamp
+            online_order_id: data.online_order_id || null
           });
         });
 
@@ -776,7 +780,8 @@
             items_array: itemsArray, // Gerçek Firebase verileri
             itemsText: data.items || 'Ürün bulunamadı',
             isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
-            created_at: createdAt // Sıralama için timestamp
+            created_at: createdAt, // Sıralama için timestamp
+            online_order_id: data.online_order_id || null
           });
         });
 
@@ -916,6 +921,23 @@
       return sales; // 'all' için tüm satışlar
     }
 
+    // Satışta indirim var mı ve indirim bilgileri (admin'de gösterim için)
+    function getSaleDiscountInfo(sale) {
+      if (!sale || sale.isExpense || sale.payment_method === 'Masraf') return null;
+      const di = sale.discountInfo;
+      const pct = sale.discount_percent != null ? parseFloat(sale.discount_percent) : (di && di.discountPercent != null ? parseFloat(di.discountPercent) : 0);
+      const subtotal = sale.subtotal != null ? parseFloat(sale.subtotal) : null;
+      const total = parseFloat(sale.total_amount || 0);
+      const hasDiscount = (di && di.applied === true) || pct > 0 || (subtotal != null && subtotal > total && total >= 0);
+      if (!hasDiscount) return null;
+      const oldPrice = subtotal != null ? subtotal : (pct > 0 && total >= 0 ? total / (1 - pct / 100) : null);
+      return { percent: pct, oldPrice: oldPrice != null ? oldPrice : total, total: total };
+    }
+
+    function isSaleDiscounted(sale) {
+      return getSaleDiscountInfo(sale) != null;
+    }
+
     // Satışları render et (lazy loading ile)
     function renderSales(sales, resetCount = false) {
       const container = document.getElementById('salesContainer');
@@ -927,7 +949,10 @@
       }
 
       // Tarih filtresine göre filtrele
-      const filteredSales = filterSalesByDateForHistory(sales);
+      let filteredSales = filterSalesByDateForHistory(sales);
+      if (salesShowDiscountedOnly) {
+        filteredSales = filteredSales.filter(isSaleDiscounted);
+      }
 
       // Header ve tarih filtresi butonu
       const filterLabels = {
@@ -941,8 +966,13 @@
       };
 
       let html = `
-        <div id="salesHeader" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; padding: 0 4px;">
-          <h2 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0;">Satış Geçmişi</h2>
+        <div id="salesHeader" class="sales-header-row">
+          <div class="sales-header-left">
+            <h2 style="font-size: 18px; font-weight: 700; color: #1f2937; margin: 0;">Satış Geçmişi</h2>
+            <button type="button" class="sales-discounted-toggle ${salesShowDiscountedOnly ? 'active' : ''}" onclick="salesShowDiscountedOnly=!salesShowDiscountedOnly; renderSales(allSales, true);" title="Sadece indirim uygulanmış satışları göster">
+              🏷️ İndirimli Satışlar
+            </button>
+          </div>
           <div class="date-filter-wrapper">
             <button class="date-filter-trigger" onclick="toggleSalesDateFilterModal(event)">
               <span>📅</span>
@@ -995,8 +1025,8 @@
         html += `
           <div class="empty-state">
             <div class="empty-icon">📊</div>
-            <h3>Seçilen Tarih Aralığında Satış Yok</h3>
-            <p>Farklı bir tarih aralığı seçmeyi deneyin</p>
+            <h3>${salesShowDiscountedOnly ? 'İndirimli Satış Bulunamadı' : 'Seçilen Tarih Aralığında Satış Yok'}</h3>
+            <p>${salesShowDiscountedOnly ? 'Bu aralıkta indirim uygulanmış satış yok veya farklı tarih seçin.' : 'Farklı bir tarih aralığı seçmeyi deneyin'}</p>
           </div>
         `;
         container.innerHTML = html;
@@ -1166,7 +1196,14 @@
                     </div>
                   `).join('')
                   : `<div class="sale-item"><span class="item-name">${sale.itemsText || 'Ürün bulunamadı'}</span></div>`;
-                
+                const discountInfo = getSaleDiscountInfo(sale);
+                const discountBlock = discountInfo ? `
+                    <div class="sale-discount-row">
+                      <span class="sale-discount-badge">#${Math.round(discountInfo.percent)}% indirim</span>
+                      <span class="sale-old-price">₺${discountInfo.oldPrice.toFixed(2)}</span>
+                      <span class="sale-final-price">₺${discountInfo.total.toFixed(2)}</span>
+                    </div>
+                  ` : '';
                 return `
                 <div class="sale-card">
                   <div class="sale-header">
@@ -1185,6 +1222,7 @@
                       </div>
                     </div>
                     <div class="sale-total">
+                      ${discountBlock}
                       <p class="total-label">TOPLAM</p>
                       <p class="total-amount">₺${parseFloat(sale.total_amount || 0).toFixed(2)}</p>
                     </div>
@@ -1196,6 +1234,10 @@
                     </div>
                   </div>
                   <div class="sale-card-footer">
+                    ${sale.payment_method && sale.payment_method.includes('Online Satış') 
+                      ? `<button type="button" class="sale-revert-online-btn" onclick="event.stopPropagation(); revertOnlineSale('${sale.id}');" title="Siparişi tekrar onay sepetine gönder">Onayı Geri Al</button>`
+                      : ''
+                    }
                     <button type="button" class="sale-delete-btn" onclick="openDeleteSaleConfirm('${sale.id}', 'Satış #${(sale.sale_id || sale.id)} - ₺${parseFloat(sale.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Kalıcı olarak sil">Sil</button>
                   </div>
                 </div>
@@ -1279,6 +1321,51 @@
         if (btn) { btn.disabled = false; btn.textContent = 'Sil'; }
       }
     }
+
+    // Online satışın onayını geri al: satışı sil, siparişi tekrar onay sepetine (pending) al
+    window.revertOnlineSale = async function(saleId) {
+      const sale = allSales.find(s => s.id === saleId);
+      if (!sale || !sale.payment_method || !sale.payment_method.includes('Online Satış')) {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Sadece online satışlar geri alınabilir.');
+        return;
+      }
+      if (!confirm('Bu satışı iptal edip siparişi tekrar onay sepetine göndermek istediğinize emin misiniz? Ciro bu tutar kadar azalacak.')) return;
+      let orderId = sale.online_order_id;
+      if (!orderId && onlineDb) {
+        const snap = await onlineDb.collection('orders').where('sale_id', '==', saleId).limit(1).get();
+        if (!snap.empty) orderId = snap.docs[0].id;
+      }
+      if (!orderId) {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Online sipariş bulunamadı. Sadece satış silinebilir.');
+        if (!db) return;
+        await db.collection('sales').doc(saleId).delete();
+        allSales = allSales.filter(s => s.id !== saleId);
+        if (typeof updateStats === 'function') updateStats(allSales);
+        renderSales(allSales, true);
+        if (typeof showToast === 'function') showToast('success', 'Başarılı', 'Satış silindi.');
+        return;
+      }
+      try {
+        if (db) await db.collection('sales').doc(saleId).delete();
+        if (onlineDb) {
+          const orderRef = onlineDb.collection('orders').doc(orderId);
+          await orderRef.update({
+            status: 'pending',
+            confirmedAt: firebase.firestore.FieldValue.delete(),
+            isConfirmed: firebase.firestore.FieldValue.delete(),
+            sale_id: firebase.firestore.FieldValue.delete()
+          });
+        }
+        allSales = allSales.filter(s => s.id !== saleId);
+        if (typeof updateStats === 'function') updateStats(allSales);
+        renderSales(allSales, true);
+        if (activeTab === 'onlineOrders') renderOnlineOrdersForPage();
+        if (typeof showToast === 'function') showToast('success', 'Başarılı', 'Onay geri alındı. Sipariş tekrar onay sepetinde.');
+      } catch (err) {
+        console.error('Onay geri alma hatası:', err);
+        if (typeof showToast === 'function') showToast('error', 'Hata', err.message || 'İşlem başarısız.');
+      }
+    };
 
     // Satış geçmişi için scroll listener
     function setupSalesScrollListener() {
@@ -1722,6 +1809,7 @@
       let totalRevenue = 0;
       let cashRevenue = 0;
       let cardRevenue = 0;
+      let onlineRevenue = 0;
       
       Object.values(allStaticTables).forEach(table => {
         // Sadece dolu masaları say
@@ -1750,10 +1838,12 @@
             const amount = parseFloat(table.total_amount || 0);
             totalRevenue += amount;
             
-            // Ödeme yöntemini kontrol et (eğer masa verisinde varsa)
-            // Masa verisinde payment_method yoksa varsayılan olarak Nakit sayılır
+            // Online satış nakit/karta dahil edilmez, sadece online'da gösterilir
             const paymentMethod = table.payment_method || 'Nakit';
-            if (paymentMethod === 'Kart') {
+            const isOnline = paymentMethod && (paymentMethod.startsWith('Online Satış') || paymentMethod === 'Online Satış');
+            if (isOnline) {
+              onlineRevenue += amount;
+            } else if (paymentMethod === 'Kart' || paymentMethod === 'Kredi Kartı') {
               cardRevenue += amount;
             } else {
               cashRevenue += amount;
@@ -1762,7 +1852,7 @@
         }
       });
       
-      return { total: totalRevenue, cash: cashRevenue, card: cardRevenue };
+      return { total: totalRevenue, cash: cashRevenue, card: cardRevenue, online: onlineRevenue };
     }
     
     function updateStats(sales) {
@@ -1800,23 +1890,11 @@
       }
       
       // Nakit ve kart tutarlarını hesapla (tamamlanmış satışlardan)
-      // Online Satış (Nakit) -> Nakit'e ekle
-      // Online Satış (Kart) -> Kart'a ekle
-      // Online Satış -> Kart'a ekle (varsayılan)
-      const cashSales = todaySales.filter(s => 
-        s.payment_method === 'Nakit' || 
-        s.payment_method === 'Online Satış (Nakit)'
-      );
+      // Online satışlar (Nakit/Kart) Nakit ve Kart'a DAHİL EDİLMEZ, sadece Online'da gösterilir
+      const cashSales = todaySales.filter(s => s.payment_method === 'Nakit');
       const cardSales = todaySales.filter(s => 
-        s.payment_method === 'Kart' || 
-        s.payment_method === 'Kredi Kartı' ||
-        s.payment_method === 'Online Satış (Kart)' ||
-        s.payment_method === 'Online Satış' ||
-        (s.payment_method !== 'Nakit' && 
-         s.payment_method !== 'Online Satış (Nakit)' && 
-         s.payment_method !== 'Masraf')
+        s.payment_method === 'Kart' || s.payment_method === 'Kredi Kartı'
       );
-      // Online satışları ayrı hesapla (tüm online satışlar)
       const onlineSales = todaySales.filter(s => 
         s.payment_method && (
           s.payment_method.startsWith('Online Satış') ||
@@ -1825,26 +1903,21 @@
       );
       const cashTotal = cashSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       const cardTotal = cardSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
-      const onlineTotal = onlineSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
+      let onlineTotal = onlineSales.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
       
       // Aktif masalardaki toplam tutarı hesapla
-      // NOT: Aktif masa total_amount'ları zaten iptal sonrası net tutarlar
-      // (İptal edildiğinde order.total_amount'tan düşülüyor - main.js)
       const activeTablesRevenue = calculateActiveTablesRevenue();
+      onlineTotal += activeTablesRevenue.online || 0;
       
-      // ✅ DOĞRU FORMÜL: Günlük ciro = Tamamlanmış satışlar + Aktif masalar
-      // İptaller ZATEN dahil değil çünkü:
-      // 1. completedRevenue: Ödeme alınmış satışlar (iptal edilenler satış olmadı)
-      // 2. activeTablesRevenue: İptal sonrası kalan net tutarlar (iptal edilenler düşülmüş)
-      const todayRevenue = Math.max(0, completedRevenue + activeTablesRevenue.total);
+      // Nakit / Kart / Online kartlarda gösterilen tutarlar (aktif masalar dahil, online ayrı)
+      const totalCash = Math.max(0, Math.round((cashTotal + activeTablesRevenue.cash) / 5) * 5);
+      const totalCard = Math.max(0, Math.round((cardTotal + activeTablesRevenue.card) / 5) * 5);
+      
+      // Günlük ciro = Nakit + Kart + Online toplamı (üç kutuyla bire bir aynı)
+      const todayRevenue = Math.max(0, totalCash + totalCard + Math.round(onlineTotal));
       
       // Günlük ciro 50.000 TL'yi geçtiyse push notification gönder
       checkRevenueNotification(todayRevenue);
-      
-      // ✅ Nakit ve kart tutarlarını hesapla (aktif masalar dahil, iptaller ÇIKARILMAZ)
-      // İptaller zaten total_amount'lara dahil değil, tekrar çıkartmaya gerek yok
-      const totalCash = Math.max(0, Math.round((cashTotal + activeTablesRevenue.cash) / 5) * 5);
-      const totalCard = Math.max(0, Math.round((cardTotal + activeTablesRevenue.card) / 5) * 5);
       
       // Günlük masrafları hesapla - iş günü içindeki masraflar (gece 3'ten gece 3'e)
       const todayExpenses = sales.filter(s => {
@@ -1979,6 +2052,7 @@
       const salesContainer = document.getElementById('salesContainer');
       const reportsContainer = document.getElementById('reportsContainer');
       const staffContainer = document.getElementById('staffContainer');
+      const tablesTabWrapper = document.getElementById('tablesTabWrapper');
       const tablesContainer = document.getElementById('tablesContainer');
       const cancelsContainer = document.getElementById('cancelsContainer');
       const onlineOrdersContainer = document.getElementById('onlineOrdersContainer');
@@ -1986,7 +2060,7 @@
       if (salesContainer) salesContainer.style.display = activeTab === 'sales' ? 'block' : 'none';
       if (reportsContainer) reportsContainer.style.display = activeTab === 'reports' ? 'block' : 'none';
       if (staffContainer) staffContainer.style.display = activeTab === 'staff' ? 'block' : 'none';
-      if (tablesContainer) tablesContainer.style.display = activeTab === 'tables' ? 'block' : 'none';
+      if (tablesTabWrapper) tablesTabWrapper.style.display = activeTab === 'tables' ? 'block' : 'none';
       if (cancelsContainer) cancelsContainer.style.display = activeTab === 'cancels' ? 'block' : 'none';
       if (onlineOrdersContainer) onlineOrdersContainer.style.display = activeTab === 'onlineOrders' ? 'block' : 'none';
       
@@ -2326,7 +2400,8 @@
             items_array: itemsArray,
             itemsText: data.items || 'Ürün bulunamadı',
             isExpense: data.isExpense === true || data.isExpense === 'true' || data.payment_method === 'Masraf',
-            created_at: createdAt
+            created_at: createdAt,
+            online_order_id: data.online_order_id || null
           });
         });
         
@@ -3766,6 +3841,549 @@
       }
     }
 
+    // Dolu masayı veritabanından sil (onay istemeden - gece otomatik temizlik için)
+    function resetTableInDb(tableId) {
+      if (!allStaticTables[tableId]) return;
+      allStaticTables[tableId].is_occupied = false;
+      allStaticTables[tableId].items = [];
+      allStaticTables[tableId].total_amount = 0;
+      allStaticTables[tableId].order_id = null;
+      allStaticTables[tableId].order_date = null;
+      allStaticTables[tableId].order_time = null;
+      allStaticTables[tableId].order_note = null;
+      if (previousTableStates[tableId] !== undefined) previousTableStates[tableId] = false;
+    }
+
+    // Her gece 00:00'da açık kalan tüm masaları veritabanından kalıcı sil (otomatik)
+    async function clearAllOpenTablesAtMidnight() {
+      if (!tablesDb) return;
+      const occupiedIds = Object.keys(allStaticTables).filter(id => {
+        const t = allStaticTables[id];
+        const occupied = t.is_occupied === true || t.is_occupied === 'true' || t.is_occupied === 1 ||
+          (t.status && (t.status === 'occupied' || t.status === 'dolu')) ||
+          (t.items && Array.isArray(t.items) && t.items.length > 0);
+        return occupied && (t.total_amount > 0 || (t.items && t.items.length > 0));
+      });
+      if (occupiedIds.length === 0) return;
+      try {
+        for (const tableId of occupiedIds) {
+          const tableRef = tablesDb.collection('tables').doc(tableId);
+          await tableRef.delete();
+          resetTableInDb(tableId);
+        }
+        if (typeof renderAllTables === 'function') renderAllTables(allStaticTables);
+        if (typeof showToast === 'function') showToast('success', 'Gece temizliği', occupiedIds.length + ' açık masa veritabanından silindi.');
+        console.log('🕐 Gece 00:00 temizliği: ' + occupiedIds.length + ' masa silindi.');
+      } catch (err) {
+        console.error('Gece masa temizliği hatası:', err);
+        if (typeof showToast === 'function') showToast('error', 'Gece temizliği', 'Masalar silinirken hata: ' + (err.message || 'Bilinmeyen'));
+      }
+    }
+
+    // 00:00'dan sonra ilk girişte açık masaları temizle (günde bir kez)
+    function runMidnightClearIfNeeded() {
+      var key = 'lastMidnightTablesClear';
+      var now = new Date();
+      var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+      if (localStorage.getItem(key) === today) return;
+      localStorage.setItem(key, today);
+      clearAllOpenTablesAtMidnight();
+    }
+
+    var gorselEkleCurrentProductId = null;
+    var gorselEkleAllProducts = [];
+    var gorselEkleCategoryList = [];
+    var gorselEkleCropImageDataUrl = null;
+    var gorselEkleCropProductId = null;
+    var gorselEkleCropDisplay = null;
+    var gorselEkleCropRect = null;
+    var gorselEkleCropShape = 'square';
+    var gorselEkleCropOverlay = null;
+    var gorselEkleCropMouse = { mode: null, startX: 0, startY: 0, startCx: 0, startCy: 0 };
+
+    function openGorselEkleModal() {
+      var modal = document.getElementById('gorselEkleModal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      document.getElementById('gorselEkleToolbar').style.display = 'none';
+      document.getElementById('gorselEkleLoading').style.display = 'block';
+      document.getElementById('gorselEkleGrid').style.display = 'none';
+      document.getElementById('gorselEkleGrid').innerHTML = '';
+      var catSelect = document.getElementById('gorselEkleCategorySelect');
+      if (catSelect) { catSelect.innerHTML = '<option value="">Tüm kategoriler</option>'; }
+      var searchInput = document.getElementById('gorselEkleSearchInput');
+      if (searchInput) searchInput.value = '';
+      loadProductsForGorselEkle();
+    }
+
+    function hideGorselEkleModal() {
+      var modal = document.getElementById('gorselEkleModal');
+      if (modal) modal.style.display = 'none';
+      gorselEkleCurrentProductId = null;
+      var fileInput = document.getElementById('gorselEkleFileInput');
+      if (fileInput) fileInput.value = '';
+    }
+
+    function renderGorselEkleGrid() {
+      var catSelect = document.getElementById('gorselEkleCategorySelect');
+      var searchInput = document.getElementById('gorselEkleSearchInput');
+      var gridEl = document.getElementById('gorselEkleGrid');
+      if (!gridEl || !gorselEkleAllProducts.length) return;
+      var catVal = catSelect ? (catSelect.value || '') : '';
+      var q = (searchInput ? searchInput.value : '').trim().toLowerCase();
+      var list = gorselEkleAllProducts.filter(function(p) {
+        if (catVal && String(p.category_id) !== String(catVal)) return false;
+        if (q && (p.name || '').toLowerCase().indexOf(q) < 0) return false;
+        return true;
+      });
+      list.sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+      var imgHtml = function(p) {
+        var imgSrc = (p.image && (p.image.indexOf('data:') === 0 || p.image.indexOf('http') === 0)) ? p.image : '';
+        if (imgSrc) return '<img src="' + imgSrc.replace(/"/g, '&quot;') + '" alt="" onerror="this.style.display=\'none\'">';
+        return '';
+      };
+      gridEl.innerHTML = list.map(function(p) {
+        return '<div class="gorsel-ekle-product-card">' +
+          '<div class="gorsel-ekle-product-img-wrap">' + imgHtml(p) + '</div>' +
+          '<div class="gorsel-ekle-product-body">' +
+          '<div class="gorsel-ekle-product-name">' + (p.name || '').replace(/</g, '&lt;') + '</div>' +
+          '<button type="button" class="gorsel-ekle-product-btn" data-product-id="' + (p.id || '').replace(/"/g, '&quot;') + '" onclick="triggerGorselEkleFile(this.getAttribute(\'data-product-id\'))">' +
+          '<svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14"/></svg> Görsel ekle' +
+          '</button></div></div>';
+      }).join('');
+    }
+
+    async function loadProductsForGorselEkle() {
+      var loadingEl = document.getElementById('gorselEkleLoading');
+      var gridEl = document.getElementById('gorselEkleGrid');
+      var toolbarEl = document.getElementById('gorselEkleToolbar');
+      var catSelect = document.getElementById('gorselEkleCategorySelect');
+      if (!db || typeof db.collection !== 'function') {
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (gridEl) { gridEl.style.display = 'block'; gridEl.innerHTML = '<p style="text-align:center;color:#64748b;padding:24px;">Firebase bağlantısı yok. Ürünler yüklenemiyor.</p>'; }
+        return;
+      }
+      try {
+        var catSnap = await db.collection('categories').get();
+        var categoryIdToName = {};
+        var categoryList = [{ id: '', name: 'Tüm kategoriler' }];
+        catSnap.forEach(function(doc) {
+          var d = doc.data();
+          var id = d.id !== undefined ? d.id : (doc.id && !isNaN(parseInt(doc.id)) ? parseInt(doc.id) : doc.id);
+          var name = d.name || 'İsimsiz';
+          categoryIdToName[String(id)] = name;
+          categoryList.push({ id: String(id), name: name });
+        });
+        categoryList.sort(function(a, b) { if (!a.id) return -1; if (!b.id) return 1; return (a.name || '').localeCompare(b.name || ''); });
+        gorselEkleCategoryList = categoryList;
+
+        var snap = await db.collection('products').get();
+        var products = [];
+        snap.forEach(function(doc) {
+          var d = doc.data();
+          var cid = d.category_id != null ? d.category_id : '';
+          products.push({
+            id: doc.id,
+            name: d.name || 'İsimsiz',
+            image: d.image || null,
+            category_id: cid,
+            category_name: categoryIdToName[String(cid)] || 'Diğer'
+          });
+        });
+        gorselEkleAllProducts = products;
+
+        if (catSelect) {
+          catSelect.innerHTML = categoryList.map(function(c) {
+            return '<option value="' + (c.id || '').replace(/"/g, '&quot;') + '">' + (c.name || '').replace(/</g, '&lt;') + '</option>';
+          }).join('');
+        }
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (toolbarEl) toolbarEl.style.display = 'flex';
+        if (!gridEl) return;
+        gridEl.style.display = 'grid';
+        renderGorselEkleGrid();
+      } catch (err) {
+        console.error('Ürünler yüklenemedi:', err);
+        if (loadingEl) loadingEl.style.display = 'none';
+        if (gridEl) { gridEl.style.display = 'block'; gridEl.innerHTML = '<p style="text-align:center;color:#ef4444;padding:24px;">Yükleme hatası: ' + (err.message || 'Bilinmeyen') + '</p>'; }
+      }
+    }
+
+    function triggerGorselEkleFile(productId) {
+      gorselEkleCurrentProductId = productId;
+      var fileInput = document.getElementById('gorselEkleFileInput');
+      if (fileInput) fileInput.click();
+    }
+
+    function onGorselEkleFileSelected(ev) {
+      var file = ev.target && ev.target.files && ev.target.files[0];
+      if (!file || !gorselEkleCurrentProductId) return;
+      var productId = gorselEkleCurrentProductId;
+      gorselEkleCurrentProductId = null;
+      ev.target.value = '';
+      var reader = new FileReader();
+      reader.onload = function() {
+        showGorselEkleCropModal(reader.result, productId);
+      };
+      reader.onerror = function() {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Dosya okunamadı.');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function showGorselEkleCropModal(dataUrl, productId) {
+      gorselEkleCropImageDataUrl = dataUrl;
+      gorselEkleCropProductId = productId;
+      gorselEkleCropDisplay = null;
+      gorselEkleCropRect = null;
+      gorselEkleCropShape = 'square';
+      gorselEkleCropOverlay = null;
+      var modal = document.getElementById('gorselEkleCropModal');
+      var img = document.getElementById('gorselEkleCropImg');
+      if (modal) modal.style.display = 'flex';
+      if (!img) return;
+      img.onload = function() {
+        var wrap = document.getElementById('gorselEkleCropWrap');
+        var canvas = document.getElementById('gorselEkleCropCanvas');
+        if (!wrap || !canvas) return;
+        var nW = img.naturalWidth || img.width;
+        var nH = img.naturalHeight || img.height;
+        var maxW = (wrap.parentElement && wrap.parentElement.clientWidth) || 460;
+        var maxH = 320;
+        var scale = Math.min(maxW / nW, maxH / nH, 1);
+        var w = Math.round(nW * scale);
+        var h = Math.round(nH * scale);
+        wrap.style.width = w + 'px';
+        wrap.style.height = h + 'px';
+        img.style.width = w + 'px';
+        img.style.height = h + 'px';
+        canvas.width = w;
+        canvas.height = h;
+        canvas.style.width = w + 'px';
+        canvas.style.height = h + 'px';
+        var size = Math.min(w, h) * 0.45;
+        gorselEkleCropOverlay = { cx: w / 2, cy: h / 2, size: size };
+        gorselEkleCropDisplay = { w: w, h: h };
+        syncGorselEkleCropRect();
+        drawGorselEkleCropOverlay();
+        attachGorselEkleCropMouse();
+        updateGorselEkleCropHint();
+      };
+      img.src = dataUrl;
+    }
+
+    function syncGorselEkleCropRect() {
+      var img = document.getElementById('gorselEkleCropImg');
+      if (!img || !gorselEkleCropOverlay) return;
+      var dW = img.offsetWidth;
+      var dH = img.offsetHeight;
+      var nW = img.naturalWidth || img.width;
+      var nH = img.naturalHeight || img.height;
+      if (!dW || !dH) return;
+      var o = gorselEkleCropOverlay;
+      var half = o.size;
+      gorselEkleCropRect = {
+        x: ((o.cx - half) / dW) * nW,
+        y: ((o.cy - half) / dH) * nH,
+        w: ((2 * half) / dW) * nW,
+        h: ((2 * half) / dH) * nH
+      };
+    }
+
+    var gorselEkleCropHandleRadius = 14;
+
+    function drawGorselEkleCropOverlay() {
+      var canvas = document.getElementById('gorselEkleCropCanvas');
+      if (!canvas || !gorselEkleCropOverlay) return;
+      var ctx = canvas.getContext('2d');
+      var w = canvas.width;
+      var h = canvas.height;
+      var o = gorselEkleCropOverlay;
+      var s = o.size;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, w, h);
+      ctx.globalCompositeOperation = 'destination-out';
+      if (gorselEkleCropShape === 'circle') {
+        ctx.beginPath();
+        ctx.arc(o.cx, o.cy, s, 0, 2 * Math.PI);
+        ctx.fill();
+      } else {
+        ctx.fillRect(o.cx - s, o.cy - s, 2 * s, 2 * s);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([8, 6]);
+      if (gorselEkleCropShape === 'circle') {
+        ctx.beginPath();
+        ctx.arc(o.cx, o.cy, s, 0, 2 * Math.PI);
+        ctx.stroke();
+      } else {
+        ctx.strokeRect(o.cx - s, o.cy - s, 2 * s, 2 * s);
+      }
+      ctx.setLineDash([]);
+      var handleX = o.cx + s;
+      var handleY = o.cy;
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.strokeStyle = '#4f46e5';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(handleX, handleY, 10, 0, 2 * Math.PI);
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    function updateGorselEkleCropHint() {
+      var hint = document.getElementById('gorselEkleCropHint');
+      if (!hint) return;
+      hint.textContent = gorselEkleCropShape === 'circle' ? 'Daireyi sürükleyerek konumlandırın, sağdaki noktadan büyütüp küçültebilirsiniz' : 'Kareyi sürükleyerek konumlandırın, sağdaki noktadan büyütüp küçültebilirsiniz';
+    }
+
+    function setGorselEkleCropShape(shape) {
+      gorselEkleCropShape = shape;
+      drawGorselEkleCropOverlay();
+      updateGorselEkleCropHint();
+    }
+
+    function attachGorselEkleCropMouse() {
+      var canvas = document.getElementById('gorselEkleCropCanvas');
+      if (!canvas) return;
+      function getXY(e) {
+        var r = canvas.getBoundingClientRect();
+        if (!r.width || !r.height) return null;
+        var scaleX = canvas.width / r.width;
+        var scaleY = canvas.height / r.height;
+        var clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
+        var clientY = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
+        return { x: (clientX - r.left) * scaleX, y: (clientY - r.top) * scaleY };
+      }
+      function insideShape(x, y) {
+        if (!gorselEkleCropOverlay) return false;
+        var o = gorselEkleCropOverlay;
+        if (gorselEkleCropShape === 'circle') {
+          var dx = x - o.cx, dy = y - o.cy;
+          return (dx * dx + dy * dy) <= (o.size * o.size);
+        }
+        return Math.abs(x - o.cx) <= o.size && Math.abs(y - o.cy) <= o.size;
+      }
+      function insideResizeHandle(x, y) {
+        if (!gorselEkleCropOverlay) return false;
+        var o = gorselEkleCropOverlay;
+        var hx = o.cx + o.size;
+        var hy = o.cy;
+        var dx = x - hx, dy = y - hy;
+        return (dx * dx + dy * dy) <= (gorselEkleCropHandleRadius * gorselEkleCropHandleRadius);
+      }
+      function onDown(e) {
+        if (e.button !== 0 && e.type === 'mousedown') return;
+        e.preventDefault();
+        var p = getXY(e);
+        if (!p) return;
+        if (insideResizeHandle(p.x, p.y)) {
+          gorselEkleCropMouse.mode = 'resize';
+          document.addEventListener('mousemove', onMoveDoc);
+          document.addEventListener('mouseup', onUpDoc);
+          document.addEventListener('touchmove', onMoveDoc, { passive: false });
+          document.addEventListener('touchend', onUpDoc);
+          return;
+        }
+        if (insideShape(p.x, p.y)) {
+          gorselEkleCropMouse.mode = 'drag';
+          gorselEkleCropMouse.startX = p.x;
+          gorselEkleCropMouse.startY = p.y;
+          gorselEkleCropMouse.startCx = gorselEkleCropOverlay.cx;
+          gorselEkleCropMouse.startCy = gorselEkleCropOverlay.cy;
+          document.addEventListener('mousemove', onMoveDoc);
+          document.addEventListener('mouseup', onUpDoc);
+          document.addEventListener('touchmove', onMoveDoc, { passive: false });
+          document.addEventListener('touchend', onUpDoc);
+        }
+      }
+      function onMove(e) {
+        if (gorselEkleCropMouse.mode === 'drag') { doMove(e); return; }
+        if (gorselEkleCropMouse.mode === 'resize') { doResize(e); return; }
+        var p = getXY(e);
+        if (p) {
+          if (insideResizeHandle(p.x, p.y)) canvas.style.cursor = 'ew-resize';
+          else if (insideShape(p.x, p.y)) canvas.style.cursor = 'move';
+          else canvas.style.cursor = 'crosshair';
+        }
+      }
+      function onMoveDoc(e) {
+        if (gorselEkleCropMouse.mode === 'drag') { e.preventDefault(); doMove(e); }
+        else if (gorselEkleCropMouse.mode === 'resize') { e.preventDefault(); doResize(e); }
+      }
+      function doMove(e) {
+        var p = getXY(e);
+        if (!p) return;
+        var dx = p.x - gorselEkleCropMouse.startX;
+        var dy = p.y - gorselEkleCropMouse.startY;
+        var w = canvas.width, h = canvas.height;
+        var s = gorselEkleCropOverlay.size;
+        gorselEkleCropOverlay.cx = Math.max(s, Math.min(w - s, gorselEkleCropMouse.startCx + dx));
+        gorselEkleCropOverlay.cy = Math.max(s, Math.min(h - s, gorselEkleCropMouse.startCy + dy));
+        drawGorselEkleCropOverlay();
+      }
+      function doResize(e) {
+        var p = getXY(e);
+        if (!p) return;
+        var w = canvas.width, h = canvas.height;
+        var o = gorselEkleCropOverlay;
+        var minSize = 25;
+        var maxSize = Math.min(o.cx, w - o.cx, o.cy, h - o.cy);
+        if (maxSize < minSize) maxSize = minSize;
+        var newSize = p.x - o.cx;
+        newSize = Math.max(minSize, Math.min(maxSize, newSize));
+        o.size = newSize;
+        drawGorselEkleCropOverlay();
+      }
+      function onUp() {
+        endDrag();
+      }
+      function onUpDoc() {
+        endDrag();
+        document.removeEventListener('mousemove', onMoveDoc);
+        document.removeEventListener('mouseup', onUpDoc);
+        document.removeEventListener('touchmove', onMoveDoc);
+        document.removeEventListener('touchend', onUpDoc);
+      }
+      function endDrag() {
+        if (gorselEkleCropMouse.mode) {
+          gorselEkleCropMouse.mode = null;
+          syncGorselEkleCropRect();
+        }
+      }
+      canvas.addEventListener('mousedown', onDown, { passive: false });
+      canvas.addEventListener('mousemove', onMove);
+      canvas.addEventListener('mouseup', onUp);
+      canvas.addEventListener('mouseleave', onUp);
+      canvas.addEventListener('touchstart', onDown, { passive: false });
+      canvas.addEventListener('touchmove', onMove, { passive: false });
+      canvas.addEventListener('touchend', onUp);
+      canvas.addEventListener('touchcancel', onUp);
+      canvas._gorselEkleCropListeners = { onDown: onDown, onMove: onMove, onUp: onUp, onMoveDoc: onMoveDoc, onUpDoc: onUpDoc };
+    }
+
+    function detachGorselEkleCropMouse() {
+      var canvas = document.getElementById('gorselEkleCropCanvas');
+      if (!canvas || !canvas._gorselEkleCropListeners) return;
+      var L = canvas._gorselEkleCropListeners;
+      document.removeEventListener('mousemove', L.onMoveDoc);
+      document.removeEventListener('mouseup', L.onUpDoc);
+      document.removeEventListener('touchmove', L.onMoveDoc);
+      document.removeEventListener('touchend', L.onUpDoc);
+      canvas.removeEventListener('mousedown', L.onDown);
+      canvas.removeEventListener('mousemove', L.onMove);
+      canvas.removeEventListener('mouseup', L.onUp);
+      canvas.removeEventListener('mouseleave', L.onUp);
+      canvas.removeEventListener('touchstart', L.onDown);
+      canvas.removeEventListener('touchmove', L.onMove);
+      canvas.removeEventListener('touchend', L.onUp);
+      canvas.removeEventListener('touchcancel', L.onUp);
+      canvas._gorselEkleCropListeners = null;
+    }
+
+    function hideGorselEkleCropModal() {
+      detachGorselEkleCropMouse();
+      var modal = document.getElementById('gorselEkleCropModal');
+      if (modal) modal.style.display = 'none';
+      gorselEkleCropImageDataUrl = null;
+      gorselEkleCropProductId = null;
+      gorselEkleCropDisplay = null;
+      gorselEkleCropRect = null;
+      gorselEkleCropShape = 'square';
+      gorselEkleCropOverlay = null;
+      var img = document.getElementById('gorselEkleCropImg');
+      if (img) img.src = '';
+    }
+
+    function applyGorselEkleCropWithCurrentShape() {
+      if (!gorselEkleCropOverlay) return;
+      syncGorselEkleCropRect();
+      applyGorselEkleCrop(gorselEkleCropShape === 'circle');
+    }
+
+    function applyGorselEkleCrop(isCircle) {
+      if (!gorselEkleCropImageDataUrl || !gorselEkleCropProductId) return;
+      syncGorselEkleCropRect();
+      if (!gorselEkleCropRect || gorselEkleCropRect.w <= 0 || gorselEkleCropRect.h <= 0) {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Kare veya daire seçin, konumlandırıp Kaydet\'e basın.');
+        return;
+      }
+      var productId = gorselEkleCropProductId;
+      var rect = gorselEkleCropRect;
+      var btn = document.querySelector('.gorsel-ekle-product-btn[data-product-id="' + productId + '"]');
+      if (btn) btn.classList.add('saving');
+      var btnSquare = document.getElementById('gorselEkleCropBtnSquare');
+      var btnCircle = document.getElementById('gorselEkleCropBtnCircle');
+      var btnSave = document.getElementById('gorselEkleCropBtnSave');
+      if (btnSquare) btnSquare.disabled = true;
+      if (btnCircle) btnCircle.disabled = true;
+      if (btnSave) btnSave.disabled = true;
+      var img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = function() {
+        var size = 400;
+        var canvas = document.createElement('canvas');
+        canvas.width = size;
+        canvas.height = size;
+        var ctx = canvas.getContext('2d');
+        ctx.drawImage(img, rect.x, rect.y, rect.w, rect.h, 0, 0, size, size);
+        var dataUrl;
+        if (isCircle) {
+          var c2 = document.createElement('canvas');
+          c2.width = size;
+          c2.height = size;
+          var ctx2 = c2.getContext('2d');
+          ctx2.drawImage(canvas, 0, 0);
+          ctx2.globalCompositeOperation = 'destination-in';
+          ctx2.beginPath();
+          ctx2.arc(size / 2, size / 2, size / 2, 0, 2 * Math.PI);
+          ctx2.fill();
+          dataUrl = c2.toDataURL('image/png');
+        } else {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+        }
+        hideGorselEkleCropModal();
+        if (!db || typeof db.collection !== 'function') {
+          if (btn) btn.classList.remove('saving');
+          if (btnSquare) btnSquare.disabled = false;
+          if (btnCircle) btnCircle.disabled = false;
+          if (btnSave) btnSave.disabled = false;
+          if (typeof showToast === 'function') showToast('error', 'Hata', 'Firebase bağlantısı yok.');
+          return;
+        }
+        db.collection('products').doc(productId).update({ image: dataUrl }).then(function() {
+          var prod = gorselEkleAllProducts && gorselEkleAllProducts.find(function(p) { return String(p.id) === String(productId); });
+          if (prod) prod.image = dataUrl;
+          if (typeof showToast === 'function') showToast('success', 'Görsel kaydedildi', (isCircle ? 'Daire' : 'Kare') + ' formatında kaydedildi.');
+          var card = btn ? btn.closest('.gorsel-ekle-product-card') : null;
+          if (card) {
+            var wrap = card.querySelector('.gorsel-ekle-product-img-wrap');
+            if (wrap) wrap.innerHTML = '<img src="' + dataUrl.replace(/"/g, '&quot;') + '" alt="">';
+          }
+        }).catch(function(err) {
+          console.error('Görsel kaydetme hatası:', err);
+          if (typeof showToast === 'function') showToast('error', 'Hata', 'Kaydedilemedi: ' + (err.message || 'Bilinmeyen'));
+        }).then(function() {
+          if (btn) btn.classList.remove('saving');
+          if (btnSquare) btnSquare.disabled = false;
+          if (btnCircle) btnCircle.disabled = false;
+          if (btnSave) btnSave.disabled = false;
+        });
+      };
+      img.onerror = function() {
+        if (btn) btn.classList.remove('saving');
+        if (btnSquare) btnSquare.disabled = false;
+        if (btnCircle) btnCircle.disabled = false;
+        if (btnSave) btnSave.disabled = false;
+        hideGorselEkleCropModal();
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Görsel yüklenemedi.');
+      };
+      img.src = gorselEkleCropImageDataUrl;
+    }
+
     // Personel Detayları render et
     // İptaller listesini render et
     function renderCancels(resetCount = false) {
@@ -4493,7 +5111,103 @@
         modal.style.display = 'none';
       }
     }
-    
+
+    // Online siparişi onayla: siparişi paid yap + ana Firebase sales'e ekle (satış geçmişi)
+    window.confirmOnlineOrder = async function(orderId) {
+      const order = onlineOrders.find(o => o.id === orderId);
+      if (!order) {
+        console.warn('Sipariş bulunamadı:', orderId);
+        return;
+      }
+      if (!onlineDb || !db) {
+        alert('Firebase bağlantısı yok. Sayfayı yenileyin.');
+        return;
+      }
+      if (!confirm('Bu online siparişi onaylamak istediğinizden emin misiniz? Satış geçmişine eklenecek.')) {
+        return;
+      }
+      const btn = document.querySelector(`[data-onayla="${orderId}"]`);
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'İşleniyor...';
+      }
+      try {
+        const now = new Date();
+        const saleDate = now.toLocaleDateString('tr-TR');
+        const saleTime = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const items = order.items || [];
+        const totalAmount = parseFloat(order.total_amount || order.total || 0);
+        const paymentMethod = (order.paymentMethod || order.payment_method || '').toLowerCase();
+        const paymentLabel = paymentMethod === 'card' ? 'Online Satış (Kart)' : paymentMethod === 'cash' ? 'Online Satış (Nakit)' : 'Online Satış';
+        const itemsText = items.map(item => {
+          const name = item.name || item.product_name || 'Bilinmeyen Ürün';
+          const qty = item.quantity || 1;
+          return `${name} x${qty}`;
+        }).join(', ');
+        const itemsArray = items.map(item => ({
+          product_id: item.id || item.product_id || `item-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          product_name: item.name || item.product_name || 'Bilinmeyen Ürün',
+          quantity: item.quantity || 1,
+          price: parseFloat(item.price || 0),
+          isGift: false
+        }));
+        const salePayload = {
+          sale_id: Date.now(),
+          total_amount: totalAmount,
+          payment_method: paymentLabel,
+          sale_date: saleDate,
+          sale_time: saleTime,
+          staff_name: null,
+          items: itemsText,
+          items_array: itemsArray,
+          created_at: firebase.firestore.FieldValue.serverTimestamp(),
+          online_order_id: orderId
+        };
+        const saleRef = await db.collection('sales').add(salePayload);
+        const saleId = saleRef.id;
+        const orderRef = onlineDb.collection('orders').doc(orderId);
+        await orderRef.update({
+          status: 'paid',
+          confirmedAt: firebase.firestore.FieldValue.serverTimestamp(),
+          isConfirmed: true,
+          sale_id: saleId
+        });
+        // Yerelde allSales'a ekle: günlük ciro limitli sorgudan dolayı düşmesin (liste yenilenince eski satış düşebiliyordu)
+        const newSaleForList = {
+          id: saleId,
+          sale_id: salePayload.sale_id,
+          total_amount: totalAmount,
+          payment_method: paymentLabel,
+          sale_date: saleDate,
+          sale_time: saleTime,
+          staff_name: null,
+          table_name: null,
+          table_type: null,
+          items: itemsText,
+          items_array: itemsArray,
+          itemsText: itemsText,
+          isExpense: false,
+          created_at: now,
+          online_order_id: orderId
+        };
+        allSales = [newSaleForList, ...allSales];
+        if (typeof updateStats === 'function') updateStats(allSales);
+        console.log('✅ Online sipariş onaylandı ve satış geçmişine eklendi:', orderId, saleId);
+        if (typeof showToast === 'function') showToast('success', 'Başarılı', 'Sipariş onaylandı, satış geçmişine eklendi.');
+        else alert('Sipariş onaylandı. Satış geçmişine eklendi.');
+        if (activeTab === 'onlineOrders') renderOnlineOrdersForPage();
+        else renderOnlineOrders();
+      } catch (err) {
+        console.error('Online sipariş onaylama hatası:', err);
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Onaylama hatası: ' + (err.message || err));
+        else alert('Onaylama hatası: ' + (err.message || err));
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Onayla';
+        }
+      }
+    };
+
     // Online Siparişleri Render Et
     function renderOnlineOrders() {
       const container = document.getElementById('onlineOrdersList');
@@ -4602,17 +5316,12 @@
                   ₺${totalAmount}
                 </div>
               </div>
-              <div style="text-align: right; margin-left: 24px; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
-                <div style="font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px;">
-                  ${orderDate}
-                </div>
-                <div style="font-size: 18px; font-weight: 700; color: #1f2937; white-space: nowrap;">
-                  ${orderTime}
-                </div>
-                <div style="margin-top: 8px; transition: transform 0.3s ease;" id="arrow-${orderId}">
-                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #6b7280;">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                  </svg>
+              <div style="text-align: right; margin-left: 24px; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+                <div style="font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase;">${orderDate}</div>
+                <div style="font-size: 18px; font-weight: 700; color: #1f2937; white-space: nowrap;">${orderTime}</div>
+                <button type="button" data-onayla="${orderId}" onclick="event.stopPropagation(); confirmOnlineOrder('${orderId}');" style="margin-top: 4px; padding: 8px 14px; background: #10b981; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;" onmouseover="this.style.background='#059669'" onmouseout="this.style.background='#10b981'">Onayla</button>
+                <div style="margin-top: 2px; transition: transform 0.3s ease;" id="arrow-${orderId}">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #6b7280;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
                 </div>
               </div>
             </div>
@@ -4906,17 +5615,12 @@
                   ₺${totalAmount}
                 </div>
               </div>
-              <div style="text-align: right; margin-left: 24px; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
-                <div style="font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.5px;">
-                  ${orderDate}
-                </div>
-                <div style="font-size: 18px; font-weight: 700; color: #1f2937; white-space: nowrap;">
-                  ${orderTime}
-                </div>
-                <div style="margin-top: 8px; transition: transform 0.3s ease;" id="arrow-page-${orderId}">
-                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #6b7280;">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
-                  </svg>
+              <div style="text-align: right; margin-left: 24px; flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+                <div style="font-size: 12px; font-weight: 600; color: #9ca3af; text-transform: uppercase;">${orderDate}</div>
+                <div style="font-size: 18px; font-weight: 700; color: #1f2937; white-space: nowrap;">${orderTime}</div>
+                <button type="button" data-onayla="${orderId}" onclick="event.stopPropagation(); confirmOnlineOrder('${orderId}');" style="margin-top: 4px; padding: 8px 14px; background: #10b981; color: white; border: none; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap;" onmouseover="this.style.background='#059669'" onmouseout="this.style.background='#10b981'">Onayla</button>
+                <div style="margin-top: 2px; transition: transform 0.3s ease;" id="arrow-page-${orderId}">
+                  <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #6b7280;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
                 </div>
               </div>
             </div>
@@ -5166,14 +5870,22 @@
     function setStaffCustomDateRange() {
       const startInput = document.getElementById('staffCustomDateStart');
       const endInput = document.getElementById('staffCustomDateEnd');
-      
-      if (startInput && endInput && startInput.value && endInput.value) {
-        staffCustomDateRange.start = new Date(startInput.value);
-        staffCustomDateRange.end = new Date(endInput.value);
-        staffCustomDateRange.end.setHours(23, 59, 59, 999);
-        staffDateFilter = 'custom';
-        renderStaffDetails();
+      if (!startInput || !endInput || !startInput.value || !endInput.value) {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Başlangıç ve bitiş tarihini seçin.');
+        return;
       }
+      const start = new Date(startInput.value);
+      const end = new Date(endInput.value);
+      if (start > end) {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Başlangıç tarihi bitişten sonra olamaz.');
+        return;
+      }
+      staffCustomDateRange.start = start;
+      staffCustomDateRange.end = end;
+      staffCustomDateRange.end.setHours(23, 59, 59, 999);
+      staffDateFilter = 'custom';
+      staffSalesCacheByDate = {};
+      renderStaffDetails();
     }
 
     function filterStaffSalesByDate(sales) {
@@ -5443,18 +6155,52 @@
       }
     }
     
-    // Personel Detayları Loading Overlay Fonksiyonları
+    // Personel Detayları Loading Overlay - Dairesel 0→100% animasyon
+    const STAFF_RING_CIRCUMFERENCE = 2 * Math.PI * 54;
+    let staffLoadingProgress = 0;
+    let staffLoadingAnimationId = null;
+
+    function setStaffLoadingProgress(value) {
+      staffLoadingProgress = Math.min(100, Math.max(0, value));
+      const ring = document.getElementById('staffRingProgress');
+      const percentEl = document.getElementById('staffLoadingPercent');
+      if (ring) {
+        const offset = STAFF_RING_CIRCUMFERENCE * (1 - staffLoadingProgress / 100);
+        ring.style.strokeDashoffset = offset;
+      }
+      if (percentEl) percentEl.textContent = Math.round(staffLoadingProgress);
+    }
+
     function showStaffLoadingOverlay() {
       const overlay = document.getElementById('staffLoadingOverlay');
-      if (overlay) {
-        overlay.classList.add('show');
+      if (!overlay) return;
+      setStaffLoadingProgress(0);
+      overlay.classList.add('show');
+      const startTime = performance.now();
+      const duration = 2200;
+      const targetProgress = 95;
+      function tick(now) {
+        const elapsed = now - startTime;
+        const t = Math.min(1, elapsed / duration);
+        const eased = 1 - Math.pow(1 - t, 2.5);
+        setStaffLoadingProgress(eased * targetProgress);
+        if (t < 1) staffLoadingAnimationId = requestAnimationFrame(tick);
       }
+      if (staffLoadingAnimationId) cancelAnimationFrame(staffLoadingAnimationId);
+      staffLoadingAnimationId = requestAnimationFrame(tick);
     }
 
     function hideStaffLoadingOverlay() {
+      if (staffLoadingAnimationId) {
+        cancelAnimationFrame(staffLoadingAnimationId);
+        staffLoadingAnimationId = null;
+      }
+      setStaffLoadingProgress(100);
       const overlay = document.getElementById('staffLoadingOverlay');
       if (overlay) {
-        overlay.classList.remove('show');
+        setTimeout(function() {
+          overlay.classList.remove('show');
+        }, 320);
       }
     }
 
@@ -5502,52 +6248,78 @@
       
       const selectedDateStr = staffDateFilter === 'day' 
         ? staffSelectedDate.toLocaleDateString('tr-TR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-        : 'Seçilen tarih';
+        : (staffDateFilter === 'custom' && staffCustomDateRange.start && staffCustomDateRange.end
+          ? staffCustomDateRange.start.toLocaleDateString('tr-TR') + ' - ' + staffCustomDateRange.end.toLocaleDateString('tr-TR')
+          : 'Seçilen tarih');
 
+      const isRangeMode = staffDateFilter === 'custom';
+      const rangeStart = staffCustomDateRange.start ? staffDateToLocalYMD(staffCustomDateRange.start) : '';
+      const rangeEnd = staffCustomDateRange.end ? staffDateToLocalYMD(staffCustomDateRange.end) : '';
       let html = `
-        <div class="staff-container">
-          <div class="staff-header-section">
-            <h2 class="staff-title">👥 Personel Detayları</h2>
-            <div class="staff-date-navigation-wrapper" style="display: flex; align-items: center; gap: 12px; margin-bottom: 20px;">
-              <button onclick="navigateStaffDate(-1)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#f9fafb'; this.style.borderColor='#d1d5db';" onmouseout="this.style.background='#ffffff'; this.style.borderColor='#e5e7eb';">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
-              </button>
-              <input type="date" id="staffDatePicker" value="${staffDateToLocalYMD(staffSelectedDate)}" onchange="setStaffSelectedDate(this.value)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 16px; font-size: 15px; font-weight: 500; color: #111827; cursor: pointer; min-width: 160px; text-align: center;">
-              <button onclick="navigateStaffDate(1)" style="background: #ffffff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.05);" onmouseover="this.style.background='#f9fafb'; this.style.borderColor='#d1d5db';" onmouseout="this.style.background='#ffffff'; this.style.borderColor='#e5e7eb';">
-                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="color: #374151;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
-              </button>
-              <button onclick="setStaffDateToToday()" style="background: #3b82f6; color: white; border: none; border-radius: 8px; padding: 10px 16px; font-size: 14px; font-weight: 500; cursor: pointer;">Bugün</button>
+        <div class="staff-container staff-modern">
+          <header class="staff-elite-header">
+            <h2 class="staff-title">Personel Detayları</h2>
+            <p class="staff-subtitle">Günlük ve dönemsel ciro özeti</p>
+          </header>
+          <div class="staff-date-modal">
+            <div class="staff-mode-toggle">
+              <button type="button" class="staff-mode-btn ${!isRangeMode ? 'active' : ''}" onclick="setStaffDateFilter('day'); renderStaffDetails();">Günlük</button>
+              <button type="button" class="staff-mode-btn ${isRangeMode ? 'active' : ''}" onclick="document.getElementById('staffRangeSection').style.display='flex'; var d=document.getElementById('staffDaySection'); if(d)d.style.display='none';">Tarih aralığı</button>
+            </div>
+            <div id="staffDaySection" class="staff-day-bar" style="display: ${!isRangeMode ? 'flex' : 'none'};">
+              <input type="date" id="staffDatePicker" class="staff-date-input" value="${staffDateToLocalYMD(staffSelectedDate)}" onchange="setStaffSelectedDate(this.value)">
+              <button type="button" class="staff-today-btn" onclick="setStaffDateToToday()">Bugün</button>
+            </div>
+            <div id="staffRangeSection" class="staff-range-bar" style="display: ${isRangeMode ? 'flex' : 'none'};">
+              <div class="staff-range-row">
+                <label class="staff-range-label">Başlangıç</label>
+                <input type="date" id="staffCustomDateStart" class="staff-range-input" value="${rangeStart}">
+              </div>
+              <div class="staff-range-row">
+                <label class="staff-range-label">Bitiş</label>
+                <input type="date" id="staffCustomDateEnd" class="staff-range-input" value="${rangeEnd}">
+              </div>
+              <div class="staff-range-actions">
+                <button type="button" class="staff-apply-btn" onclick="setStaffCustomDateRange();">Uygula</button>
+                <button type="button" class="staff-back-btn" onclick="setStaffDateFilter('day'); renderStaffDetails();">Günlüğe dön</button>
+              </div>
             </div>
           </div>
-          
-          <div class="staff-ciro-list" style="background: #fff; border-radius: 12px; border: 1px solid #e5e7eb; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-top: 20px;">
-            <table style="width: 100%; border-collapse: collapse;">
-              <thead>
-                <tr style="background: #f9fafb; border-bottom: 2px solid #e5e7eb;">
-                  <th style="padding: 14px 16px; text-align: left; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase;">#</th>
-                  <th style="padding: 14px 16px; text-align: left; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase;">Garson</th>
-                  <th style="padding: 14px 16px; text-align: right; font-weight: 600; font-size: 12px; color: #6b7280; text-transform: uppercase;">Ciro (₺)</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sortedStaff.map((staff, i) => `
-                  <tr style="border-bottom: 1px solid #f3f4f6;">
-                    <td style="padding: 14px 16px; font-size: 14px; color: #6b7280;">${i + 1}</td>
-                    <td style="padding: 14px 16px; font-weight: 600; font-size: 15px; color: #111827;">${staff.name}</td>
-                    <td style="padding: 14px 16px; text-align: right; font-weight: 700; font-size: 15px; color: #059669;">₺${Math.round(staff.totalRevenue).toLocaleString('tr-TR')}</td>
-                  </tr>
-                `).join('')}
-              </tbody>
-            </table>
+          <div class="staff-nav-arrows" style="display: ${isRangeMode ? 'none' : 'flex'};">
+            <button type="button" class="staff-arrow-btn" onclick="navigateStaffDate(-1)" aria-label="Önceki">
+              <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+            </button>
+            <button type="button" class="staff-arrow-btn" onclick="navigateStaffDate(1)" aria-label="Sonraki">
+              <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+            </button>
           </div>
-          
+          <div class="staff-ciro-list">
+            <div class="staff-table-wrap">
+              <table class="staff-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Garson</th>
+                    <th class="staff-th-amount">Ciro (₺)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${sortedStaff.map((staff, i) => `
+                    <tr>
+                      <td class="staff-td-num">${i + 1}</td>
+                      <td class="staff-td-name">${staff.name}</td>
+                      <td class="staff-td-amount">₺${Math.round(staff.totalRevenue).toLocaleString('tr-TR')}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
           ${sortedStaff.length === 0 ? `
-            <div class="empty-state" style="padding: 60px 20px; margin-top: 40px;">
-              <div class="empty-icon" style="font-size: 64px; margin-bottom: 16px;">📊</div>
-              <h3 style="font-size: 18px; font-weight: 600; color: #374151; margin-bottom: 8px;">
-                ${staffDateFilter === 'day' ? selectedDateStr + ' tarihinde' : 'Seçilen zaman diliminde'} ciro verisi yok
-              </h3>
-              <p style="font-size: 14px; color: #6b7280;">Bu tarih için personel satış kaydı bulunmuyor.</p>
+            <div class="staff-empty-state">
+              <div class="staff-empty-icon">📊</div>
+              <h3 class="staff-empty-title">${staffDateFilter === 'day' ? selectedDateStr + ' tarihinde' : 'Seçilen zaman diliminde'} ciro verisi yok</h3>
+              <p class="staff-empty-desc">Bu tarih için personel satış kaydı bulunmuyor.</p>
             </div>
           ` : ''}
         </div>
@@ -6346,6 +7118,65 @@
         card.style.boxShadow = '0 4px 16px rgba(0,0,0,0.12)';
       }
     };
+    function confirmResetAllData() {
+      showResetDataModal();
+    }
+
+    function showResetDataModal() {
+      const el = document.getElementById('resetDataModal');
+      if (el) { el.style.display = 'flex'; el.classList.add('reset-data-modal-visible'); }
+    }
+
+    function hideResetDataModal() {
+      const el = document.getElementById('resetDataModal');
+      if (el) { el.style.display = 'none'; el.classList.remove('reset-data-modal-visible'); }
+    }
+
+    function confirmResetFromModal() {
+      hideResetDataModal();
+      resetAllFirebaseData();
+    }
+
+    async function resetAllFirebaseData() {
+      if (!db) {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Firebase bağlantısı yok.');
+        return;
+      }
+      if (typeof showToast === 'function') showToast('info', 'Sıfırlanıyor...', 'Veriler siliniyor, lütfen bekleyin.');
+      const BATCH_SIZE = 500;
+      function batchDeleteCollection(collectionRef) {
+        return collectionRef.limit(BATCH_SIZE).get().then(snap => {
+          if (snap.empty) return Promise.resolve();
+          const batch = collectionRef.firestore.batch();
+          snap.docs.forEach(doc => batch.delete(doc.ref));
+          return batch.commit().then(() => batchDeleteCollection(collectionRef));
+        });
+      }
+      try {
+        await batchDeleteCollection(db.collection('sales'));
+        await batchDeleteCollection(db.collection('cancels'));
+        await batchDeleteCollection(db.collection('broadcasts'));
+        if (tablesDb) {
+          const tablesSnap = await tablesDb.collection('tables').get();
+          const tablesBatch = tablesDb.batch();
+          tablesSnap.docs.forEach(doc => { tablesBatch.delete(doc.ref); });
+          if (!tablesSnap.empty) await tablesBatch.commit();
+          Object.keys(allStaticTables).forEach(id => resetTableInDb(id));
+        }
+        if (onlineDb) {
+          await batchDeleteCollection(onlineDb.collection('orders'));
+        }
+        allSales = [];
+        allCancels = [];
+        if (typeof loadSales === 'function') loadSales();
+        if (typeof renderCurrentView === 'function') renderCurrentView();
+        if (typeof showToast === 'function') showToast('success', 'Sıfırlandı', 'Tüm veriler silindi.');
+      } catch (err) {
+        console.error('Sıfırlama hatası:', err);
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Sıfırlama başarısız: ' + (err.message || 'Bilinmeyen'));
+      }
+    }
+
     window.logout = function() {
       sessionStorage.removeItem('adminAuthenticated');
       localStorage.removeItem('adminAuthenticated');
@@ -6727,6 +7558,120 @@
       padding: 28px;
     }
 
+    /* Tüm verileri sıfırla modal – uygulama içi elit */
+    .reset-data-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 10001;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      background: rgba(15, 23, 42, 0.5);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      opacity: 0;
+      transition: opacity 0.25s ease;
+    }
+
+    .reset-data-modal.reset-data-modal-visible {
+      opacity: 1;
+    }
+
+    .reset-data-modal-card {
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border-radius: 24px;
+      width: 100%;
+      max-width: 420px;
+      padding: 32px 28px;
+      box-shadow: 0 0 0 1px rgba(124, 58, 237, 0.12), 0 24px 64px rgba(15, 23, 42, 0.2), 0 0 0 1px rgba(0, 0, 0, 0.02);
+      transform: scale(0.96);
+      transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    .reset-data-modal.reset-data-modal-visible .reset-data-modal-card {
+      transform: scale(1);
+    }
+
+    .reset-data-modal-icon-wrap {
+      width: 56px;
+      height: 56px;
+      border-radius: 16px;
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.15) 0%, rgba(239, 68, 68, 0.12) 100%);
+      border: 1px solid rgba(245, 158, 11, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+
+    .reset-data-modal-icon {
+      color: #d97706;
+    }
+
+    .reset-data-modal-title {
+      margin: 0 0 12px 0;
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: #0f172a;
+      text-align: center;
+      letter-spacing: -0.02em;
+    }
+
+    .reset-data-modal-desc {
+      margin: 0 0 16px 0;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      color: #475569;
+      text-align: center;
+    }
+
+    .reset-data-modal-question {
+      margin: 0 0 24px 0;
+      font-size: 1rem;
+      font-weight: 700;
+      color: #334155;
+      text-align: center;
+    }
+
+    .reset-data-modal-actions {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .reset-data-modal-btn {
+      padding: 14px 24px;
+      font-size: 15px;
+      font-weight: 600;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .reset-data-modal-cancel {
+      background: #f1f5f9;
+      color: #475569;
+    }
+
+    .reset-data-modal-cancel:hover {
+      background: #e2e8f0;
+      color: #334155;
+    }
+
+    .reset-data-modal-confirm {
+      background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+      color: #fff;
+      box-shadow: 0 4px 14px rgba(220, 38, 38, 0.4);
+    }
+
+    .reset-data-modal-confirm:hover {
+      background: linear-gradient(135deg, #b91c1c 0%, #991b1b 100%);
+      box-shadow: 0 6px 20px rgba(220, 38, 38, 0.45);
+    }
+
     .change-password-input {
       width: 100%;
       padding: 12px 16px;
@@ -6837,6 +7782,14 @@
 
     .dashboard.active {
       display: block;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    @media (max-width: 768px) {
+      .dashboard.active {
+        padding-left: env(safe-area-inset-left, 0);
+        padding-right: env(safe-area-inset-right, 0);
+      }
     }
 
     /* Modern Navbar */
@@ -6847,9 +7800,34 @@
       background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
       border-bottom: 2px solid #ec4899;
       padding: 12px 20px;
+      padding-top: max(12px, env(safe-area-inset-top));
       margin: 0;
       box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
       backdrop-filter: blur(10px);
+    }
+
+    @media (max-width: 480px) {
+      .admin-navbar {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+      }
+    }
+
+    /* İçerik alanları mobil yatay boşluk */
+    @media (max-width: 768px) {
+      #staffContainer,
+      #salesContainer,
+      #reportsContainer,
+      #tablesContainer,
+      #cancelsContainer,
+      #onlineOrdersContainer {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+      }
+      .stats-grid {
+        padding-left: max(16px, env(safe-area-inset-left));
+        padding-right: max(16px, env(safe-area-inset-right));
+      }
     }
 
     .navbar-content {
@@ -6919,6 +7897,7 @@
     }
 
     .refresh-btn,
+    .reset-btn,
     .logout-btn,
     .notifications-btn {
       border-radius: 12px;
@@ -6958,6 +7937,19 @@
       border-color: #db2777;
       background: linear-gradient(135deg, #db2777 0%, #be185d 100%);
       box-shadow: 0 4px 16px rgba(236, 72, 153, 0.35);
+      transform: translateY(-1px);
+    }
+
+    .reset-btn {
+      border-color: #f59e0b;
+      color: #b45309;
+      background: #ffffff;
+    }
+
+    .reset-btn:hover {
+      border-color: #d97706;
+      background: #fffbeb;
+      box-shadow: 0 4px 16px rgba(245, 158, 11, 0.25);
       transform: translateY(-1px);
     }
 
@@ -7287,15 +8279,16 @@
     }
 
     .payment-breakdown-card {
-      background: #f8fafc;
-      padding: 10px 12px;
-      border-radius: 12px;
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      padding: 14px 16px;
+      border-radius: 14px;
       border: 1px solid #e2e8f0;
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 16px;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      flex-wrap: wrap;
     }
 
     .payment-breakdown-item {
@@ -7319,9 +8312,114 @@
       white-space: nowrap;
     }
 
+    /* Mobile: safe area & touch-friendly */
+    @media (max-width: 768px) {
+      .payment-breakdown-card {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+      }
+      .payment-breakdown-item {
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid #e2e8f0;
+      }
+      .payment-breakdown-item:last-of-type {
+        border-bottom: none;
+      }
+      .stat-value {
+        font-size: clamp(16px, 4.5vw, 20px);
+      }
+    }
+
+    @media (max-width: 480px) {
+      .tab-buttons {
+        gap: 10px;
+        margin: 16px 0 20px;
+      }
+      .tab-btn {
+        min-height: 64px;
+        padding: 12px 6px;
+        font-size: 11px;
+      }
+      .tab-btn-icon {
+        font-size: 22px;
+      }
+    }
+
     /* Tarih grupları + satış kartları */
     #salesContainer {
       min-height: 220px;
+    }
+
+    .sales-header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      padding: 0 4px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+
+    .sales-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .sales-discounted-toggle {
+      padding: 8px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      border: 2px solid #e5e7eb;
+      border-radius: 10px;
+      background: #fff;
+      color: #6b7280;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .sales-discounted-toggle:hover {
+      border-color: #a78bfa;
+      color: #7c3aed;
+      background: #f5f3ff;
+    }
+
+    .sales-discounted-toggle.active {
+      border-color: #7c3aed;
+      background: linear-gradient(135deg, #ede9fe 0%, #ddd6fe 100%);
+      color: #6d28d9;
+    }
+
+    .sale-discount-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 6px;
+      flex-wrap: wrap;
+    }
+
+    .sale-discount-badge {
+      font-size: 11px;
+      font-weight: 700;
+      color: #6d28d9;
+      background: #ede9fe;
+      padding: 4px 8px;
+      border-radius: 6px;
+    }
+
+    .sale-old-price {
+      font-size: 13px;
+      color: #9ca3af;
+      text-decoration: line-through;
+    }
+
+    .sale-final-price {
+      font-size: 14px;
+      font-weight: 700;
+      color: #059669;
     }
 
     .date-group {
@@ -7787,6 +8885,24 @@
       border-top: 1px solid #f3f4f6;
       display: flex;
       justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .sale-revert-online-btn {
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      color: #b45309;
+      background: #fffbeb;
+      border: 1px solid #fcd34d;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s, color 0.2s;
+    }
+    .sale-revert-online-btn:hover {
+      background: #fef3c7;
+      color: #92400e;
     }
 
     .sale-delete-btn {
@@ -7917,6 +9033,63 @@
       grid-template-columns: repeat(5, 1fr);
       gap: 6px;
     }
+
+    .gorsel-ekle-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 24px;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+      color: white;
+      border: none;
+      border-radius: 14px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4);
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .gorsel-ekle-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(99, 102, 241, 0.5); }
+    .gorsel-ekle-loading .gorsel-ekle-spinner {
+      width: 48px; height: 48px; border: 4px solid #e2e8f0; border-top-color: #6366f1; border-radius: 50%;
+      animation: gorsel-ekle-spin 0.8s linear infinite; margin: 0 auto;
+    }
+    @keyframes gorsel-ekle-spin { to { transform: rotate(360deg); } }
+    .gorsel-ekle-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: 16px;
+    }
+    .gorsel-ekle-grid-small {
+      grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+      gap: 10px;
+    }
+    .gorsel-ekle-product-card {
+      background: linear-gradient(180deg, #f8fafc 0%, #fff 100%);
+      border: 2px solid #e2e8f0;
+      border-radius: 12px;
+      overflow: hidden;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    .gorsel-ekle-grid-small .gorsel-ekle-product-card { border-radius: 10px; }
+    .gorsel-ekle-product-card:hover { border-color: #c7d2fe; box-shadow: 0 6px 16px rgba(99, 102, 241, 0.12); }
+    .gorsel-ekle-product-img-wrap {
+      width: 100%; aspect-ratio: 1; background: #ffffff; display: flex; align-items: center; justify-content: center; overflow: hidden;
+    }
+    .gorsel-ekle-product-img-wrap img { width: 100%; height: 100%; object-fit: cover; }
+    .gorsel-ekle-grid-small .gorsel-ekle-product-img-wrap { min-height: 0; }
+    .gorsel-ekle-product-body { padding: 8px; }
+    .gorsel-ekle-grid-small .gorsel-ekle-product-body { padding: 6px; }
+    .gorsel-ekle-product-name { font-size: 12px; font-weight: 700; color: #1e293b; margin-bottom: 6px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .gorsel-ekle-grid-small .gorsel-ekle-product-name { font-size: 10px; margin-bottom: 6px; }
+    .gorsel-ekle-product-btn {
+      display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%; padding: 8px 10px;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; border: none; border-radius: 8px;
+      font-size: 11px; font-weight: 700; cursor: pointer; transition: opacity 0.2s;
+    }
+    .gorsel-ekle-grid-small .gorsel-ekle-product-btn { padding: 6px 8px; font-size: 10px; }
+    .gorsel-ekle-product-btn:hover { opacity: 0.95; }
+    .gorsel-ekle-product-btn.saving { pointer-events: none; opacity: 0.7; }
 
     .table-card {
       background: #ffffff;
@@ -10651,8 +11824,370 @@
       }
     }
 
-    /* Personel kartları */
-    .staff-container {
+    /* Personel Detayları - Elit / Prestij / Kurumsal */
+    .staff-container.staff-modern {
+      padding: clamp(16px, 3vw, 28px) 0;
+      max-width: 100%;
+    }
+
+    .staff-elite-header {
+      text-align: center;
+      margin-bottom: 24px;
+    }
+
+    .staff-modern .staff-title {
+      font-size: clamp(1.35rem, 4vw, 1.6rem);
+      font-weight: 800;
+      color: #0f172a;
+      margin: 0 0 6px 0;
+      letter-spacing: -0.03em;
+    }
+
+    .staff-subtitle {
+      font-size: 0.9rem;
+      color: #64748b;
+      font-weight: 500;
+      margin: 0;
+      letter-spacing: 0.02em;
+    }
+
+    .staff-date-modal {
+      background: linear-gradient(145deg, #ffffff 0%, #f8fafc 100%);
+      border: 1px solid rgba(124, 58, 237, 0.2);
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(124, 58, 237, 0.06);
+      margin-bottom: 20px;
+      position: relative;
+    }
+
+    .staff-date-modal::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: 20px;
+      padding: 1px;
+      background: linear-gradient(135deg, rgba(124, 58, 237, 0.25), rgba(167, 139, 250, 0.15), transparent 50%);
+      -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+      -webkit-mask-composite: xor;
+      mask-composite: exclude;
+      pointer-events: none;
+    }
+
+    .staff-mode-toggle {
+      display: flex;
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid #e2e8f0;
+      background: #f1f5f9;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.04);
+      margin-bottom: 20px;
+    }
+
+    .staff-mode-btn {
+      flex: 1;
+      padding: 14px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      border: none;
+      cursor: pointer;
+      background: transparent;
+      color: #94a3b8;
+      transition: all 0.25s ease;
+      min-height: 48px;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .staff-mode-btn.active {
+      background: linear-gradient(135deg, #7c3aed 0%, #a78bfa 50%, #8b5cf6 100%);
+      color: #fff;
+      box-shadow: 0 4px 16px rgba(124, 58, 237, 0.4);
+    }
+
+    .staff-mode-btn:not(.active) {
+      opacity: 0.85;
+    }
+
+    .staff-mode-btn:not(.active):hover {
+      background: #e2e8f0;
+      color: #475569;
+      opacity: 1;
+    }
+
+    .staff-day-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .staff-date-input {
+      flex: 1;
+      min-width: 160px;
+      max-width: 220px;
+      height: 46px;
+      padding: 0 16px;
+      font-size: 15px;
+      font-weight: 500;
+      color: #0f172a;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .staff-today-btn {
+      padding: 0 20px;
+      height: 46px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35);
+      transition: all 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .staff-today-btn:hover {
+      background: linear-gradient(135deg, #6d28d9, #7c3aed);
+      box-shadow: 0 6px 16px rgba(124, 58, 237, 0.45);
+    }
+
+    .staff-nav-arrows {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 32px;
+      margin-bottom: 24px;
+    }
+
+    .staff-arrow-btn {
+      width: 48px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 14px;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .staff-arrow-btn:hover {
+      background: linear-gradient(135deg, #f5f3ff, #ede9fe);
+      border-color: rgba(124, 58, 237, 0.3);
+      color: #7c3aed;
+      box-shadow: 0 4px 12px rgba(124, 58, 237, 0.15);
+    }
+
+    .staff-range-bar {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .staff-range-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .staff-range-label {
+      font-size: 13px;
+      font-weight: 600;
+      color: #475569;
+      min-width: 80px;
+    }
+
+    .staff-range-input {
+      height: 46px;
+      padding: 0 14px;
+      font-size: 14px;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      min-width: 160px;
+      cursor: pointer;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+
+    .staff-range-actions {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+
+    .staff-apply-btn {
+      height: 46px;
+      padding: 0 22px;
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, #059669, #10b981);
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .staff-apply-btn:hover {
+      background: linear-gradient(135deg, #047857, #059669);
+    }
+
+    .staff-back-btn {
+      height: 46px;
+      padding: 0 18px;
+      font-size: 13px;
+      font-weight: 500;
+      color: #475569;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .staff-back-btn:hover {
+      background: #e2e8f0;
+      color: #334155;
+    }
+
+    .staff-ciro-list {
+      background: #fff;
+      border-radius: 18px;
+      border: 1px solid #e2e8f0;
+      overflow: hidden;
+      box-shadow: 0 4px 24px rgba(15, 23, 42, 0.06), 0 0 0 1px rgba(0,0,0,0.02);
+      margin-top: 8px;
+    }
+
+    .staff-table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .staff-table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 260px;
+    }
+
+    .staff-table th {
+      padding: 16px 20px;
+      text-align: left;
+      font-weight: 700;
+      font-size: 11px;
+      color: #475569;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      border-bottom: 2px solid #e2e8f0;
+    }
+
+    .staff-table th.staff-th-amount {
+      text-align: right;
+    }
+
+    .staff-table td {
+      padding: 16px 20px;
+      border-bottom: 1px solid #f1f5f9;
+      font-size: 14px;
+    }
+
+    .staff-table tbody tr:last-child td {
+      border-bottom: none;
+    }
+
+    .staff-table tbody tr:hover {
+      background: #f8fafc;
+    }
+
+    .staff-td-num {
+      color: #64748b;
+      font-weight: 500;
+    }
+
+    .staff-td-name {
+      font-weight: 600;
+      color: #0f172a;
+    }
+
+    .staff-td-amount {
+      text-align: right;
+      font-weight: 700;
+      color: #059669;
+      font-size: 15px;
+    }
+
+    .staff-empty-state {
+      padding: 56px 24px;
+      margin-top: 24px;
+      text-align: center;
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      border-radius: 18px;
+      border: 1px dashed #e2e8f0;
+    }
+
+    .staff-empty-icon {
+      font-size: 56px;
+      margin-bottom: 16px;
+      line-height: 1;
+    }
+
+    .staff-empty-title {
+      font-size: 17px;
+      font-weight: 600;
+      color: #334155;
+      margin: 0 0 8px 0;
+    }
+
+    .staff-empty-desc {
+      font-size: 14px;
+      color: #64748b;
+      margin: 0;
+    }
+
+    @media (max-width: 480px) {
+      .staff-modern .staff-day-bar {
+        gap: 8px;
+      }
+      .staff-date-input {
+        min-width: 100%;
+        max-width: none;
+      }
+      .staff-range-bar {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .staff-range-bar .staff-range-label { margin-bottom: -6px; }
+      .staff-range-input {
+        min-width: 0;
+        width: 100%;
+      }
+      .staff-table th,
+      .staff-table td {
+        padding: 12px 14px;
+        font-size: 13px;
+      }
+      .staff-td-amount {
+        font-size: 14px;
+      }
+    }
+
+    /* Personel kartları (legacy) */
+    .staff-container:not(.staff-modern) {
       padding: 10px 0 6px;
     }
 
@@ -11346,6 +12881,7 @@
       }
 
       .refresh-btn,
+      .reset-btn,
       .logout-btn {
         flex: 1;
         justify-content: center;
@@ -11726,23 +13262,13 @@
       }
     }
 
-    /* Personel Detayları Loading Overlay */
-    @keyframes staff-spin {
-      0% { transform: rotate(0deg); }
-      100% { transform: rotate(360deg); }
-    }
-
+    /* Personel Detayları Loading Overlay - Oyun kalitesi dairesel dolum */
     #staffLoadingOverlay {
       display: none;
       position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.85);
+      inset: 0;
+      background: #ffffff;
       z-index: 9999;
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
       align-items: center;
       justify-content: center;
       flex-direction: column;
@@ -11750,26 +13276,129 @@
 
     #staffLoadingOverlay.show {
       display: flex;
+      animation: staffOverlayIn 0.4s ease-out;
     }
 
-    .staff-loading-spinner {
-      width: 64px;
-      height: 64px;
-      border: 4px solid rgba(255, 255, 255, 0.1);
-      border-top-color: #ffffff;
+    #staffLoadingOverlay {
+      gap: 32px;
+    }
+
+    @keyframes staffOverlayIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+
+    @keyframes staffLogoSpin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+
+    .staff-loading-logo {
+      width: 216px;
+      height: 216px;
+      object-fit: contain;
+      animation: staffLogoSpin 2.2s linear infinite;
+      margin-bottom: 16px;
+      transform: translateY(-48px);
+    }
+
+    .staff-loading-card {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 28px;
+      padding: 48px 56px;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 28px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+    }
+
+    .staff-loading-ring-wrap {
+      position: relative;
+      width: 160px;
+      height: 160px;
+    }
+
+    .staff-loading-ring {
+      width: 100%;
+      height: 100%;
+      transform: rotate(-90deg);
+    }
+
+    .staff-ring-bg {
+      stroke: #e2e8f0;
+    }
+
+    .staff-ring-progress {
+      transition: stroke-dashoffset 0.15s ease-out;
+    }
+
+    .staff-loading-percent {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 2.25rem;
+      font-weight: 800;
+      color: #1e1b4b;
+      letter-spacing: -0.04em;
+    }
+
+    .staff-loading-label {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #475569;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .staff-loading-dots {
+      display: flex;
+      gap: 8px;
+    }
+
+    .staff-loading-dots span {
+      width: 6px;
+      height: 6px;
       border-radius: 50%;
-      animation: staff-spin 0.8s linear infinite;
+      background: #7c3aed;
+      animation: staffDotPulse 1.2s ease-in-out infinite;
+    }
+
+    .staff-loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+    .staff-loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes staffDotPulse {
+      0%, 100% { opacity: 0.4; transform: scale(0.9); }
+      50% { opacity: 1; transform: scale(1.2); }
     }
 
     @media (max-width: 768px) {
-      .staff-loading-spinner {
-        width: 48px;
-        height: 48px;
-        border-width: 3px;
+      #staffLoadingOverlay {
+        gap: 24px;
       }
-
-      #staffLoadingOverlay div:last-child {
-        font-size: 16px;
+      .staff-loading-logo {
+        width: 168px;
+        height: 168px;
+        transform: translateY(-32px);
+      }
+      .staff-loading-card {
+        padding: 36px 40px;
+        gap: 22px;
+      }
+      .staff-loading-ring-wrap {
+        width: 130px;
+        height: 130px;
+      }
+      .staff-loading-percent {
+        font-size: 1.85rem;
+      }
+      .staff-loading-label {
+        font-size: 0.9rem;
+        letter-spacing: 0.08em;
       }
     }
   </style>
@@ -11946,6 +13575,12 @@
               </svg>
               <span>Yenile</span>
             </button>
+            <button onclick="confirmResetAllData()" class="reset-btn" title="Tüm verileri sıfırla">
+              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+              </svg>
+              <span>Sıfırla</span>
+            </button>
             <button onclick="logout()" class="logout-btn">
               <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
                 <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/>
@@ -12016,16 +13651,41 @@
       <div id="reportsContainer" style="min-height: 200px; display: none;"></div>
       <div id="staffContainer" style="min-height: 200px; display: none; position: relative;"></div>
       
-      <!-- Personel Detayları Loading Overlay -->
+      <!-- Personel Detayları Loading Overlay - Elit dairesel ilerleme -->
       <div id="staffLoadingOverlay">
-        <div style="display: flex; flex-direction: column; align-items: center; gap: 24px;">
-          <!-- Spinner -->
-          <div class="staff-loading-spinner"></div>
-          <!-- Text -->
-          <div style="color: #ffffff; font-size: 18px; font-weight: 600; letter-spacing: 0.5px;">Hesaplanıyor...</div>
+        <img src="logo.png" alt="MAKARA" class="staff-loading-logo" onerror="this.style.display='none';">
+        <div class="staff-loading-card">
+          <div class="staff-loading-ring-wrap">
+            <svg class="staff-loading-ring" viewBox="0 0 120 120">
+              <defs>
+                <linearGradient id="staffRingGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#a78bfa"/>
+                  <stop offset="50%" stop-color="#7c3aed"/>
+                  <stop offset="100%" stop-color="#5b21b6"/>
+                </linearGradient>
+                <filter id="staffRingGlow">
+                  <feGaussianBlur stdDeviation="2" result="blur"/>
+                  <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+              </defs>
+              <circle class="staff-ring-bg" cx="60" cy="60" r="54" fill="none" stroke-width="6"/>
+              <circle id="staffRingProgress" class="staff-ring-progress" cx="60" cy="60" r="54" fill="none" stroke="url(#staffRingGradient)" stroke-width="6" stroke-linecap="round" stroke-dasharray="339.292" stroke-dashoffset="339.292" filter="url(#staffRingGlow)"/>
+            </svg>
+            <div class="staff-loading-percent" id="staffLoadingPercent">0</div>
+          </div>
+          <p class="staff-loading-label">Hesaplanıyor</p>
+          <div class="staff-loading-dots"><span></span><span></span><span></span></div>
         </div>
       </div>
-      <div id="tablesContainer" style="min-height: 200px; display: none;"></div>
+      <div id="tablesTabWrapper" style="display: none;">
+        <div class="tables-toolbar" style="margin-bottom: 20px; display: flex; justify-content: flex-end; align-items: center;">
+          <button type="button" id="btnGorselEkle" class="gorsel-ekle-btn" onclick="openGorselEkleModal()">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            <span>GÖRSEL EKLE</span>
+          </button>
+        </div>
+        <div id="tablesContainer" style="min-height: 200px;"></div>
+      </div>
       <div id="cancelsContainer" style="min-height: 200px; display: none;"></div>
       <div id="onlineOrdersContainer" style="min-height: 200px; display: none;"></div>
     </div>
@@ -12063,6 +13723,74 @@
     </div>
   </div>
 
+  <!-- Görsel Ekle Modal (Firebase ürünler + galeriden görsel seç, base64 kaydet) -->
+  <div id="gorselEkleModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10001; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(6px);" onclick="if(event.target === this) hideGorselEkleModal()">
+    <div class="gorsel-ekle-modal-card" onclick="event.stopPropagation();" style="background: white; border-radius: 24px; width: 100%; max-width: 900px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.35);">
+      <div class="gorsel-ekle-modal-header" style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 50%, #4338ca 100%); color: white; padding: 24px 28px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0; font-size: 22px; font-weight: 800;">Ürün Görseli Ekle</h2>
+          <button type="button" onclick="hideGorselEkleModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 40px; height: 40px; border-radius: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold;">×</button>
+        </div>
+        <p style="margin: 8px 0 0 0; font-size: 14px; opacity: 0.95;">Ürün seçin, galeriden görsel seçip base64 olarak kaydedin.</p>
+      </div>
+      <div id="gorselEkleProductsWrap" style="padding: 24px; overflow-y: auto; flex: 1;">
+        <div id="gorselEkleToolbar" class="gorsel-ekle-toolbar" style="display: none; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; align-items: center;">
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #475569;">
+            <span>Kategori:</span>
+            <select id="gorselEkleCategorySelect" onchange="renderGorselEkleGrid()" style="padding: 8px 12px; border: 2px solid #e2e8f0; border-radius: 10px; font-size: 13px; min-width: 160px;">
+              <option value="">Tüm kategoriler</option>
+            </select>
+          </label>
+          <label style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #475569;">
+            <span>Ürün ara:</span>
+            <input type="text" id="gorselEkleSearchInput" placeholder="Ürün ismi yazın..." oninput="renderGorselEkleGrid()" style="padding: 8px 14px; border: 2px solid #e2e8f0; border-radius: 10px; font-size: 13px; min-width: 180px;">
+          </label>
+        </div>
+        <div id="gorselEkleLoading" class="gorsel-ekle-loading" style="text-align: center; padding: 48px 24px;">
+          <div class="gorsel-ekle-spinner"></div>
+          <p style="margin: 16px 0 0 0; font-weight: 600; color: #64748b;">Ürünler yükleniyor...</p>
+        </div>
+        <div id="gorselEkleGrid" class="gorsel-ekle-grid gorsel-ekle-grid-small" style="display: none;"></div>
+      </div>
+    </div>
+  </div>
+  <input type="file" id="gorselEkleFileInput" accept="image/*" style="display: none;" onchange="onGorselEkleFileSelected(event)">
+
+  <!-- Görsel Kırp Modal (manuel kırpma, altta kare/daire) -->
+  <div id="gorselEkleCropModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 10002; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(6px);" onclick="if(event.target === this) hideGorselEkleCropModal()">
+    <div class="gorsel-ekle-crop-card" onclick="event.stopPropagation();" style="background: white; border-radius: 20px; max-width: 520px; width: 100%; overflow: hidden; box-shadow: 0 25px 60px rgba(0,0,0,0.4);">
+      <div style="background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; padding: 18px 22px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h3 style="margin: 0; font-size: 18px; font-weight: 800;">Görseli kırp</h3>
+          <button type="button" onclick="hideGorselEkleCropModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; font-size: 22px; line-height: 1;">×</button>
+        </div>
+        <p style="margin: 6px 0 0 0; font-size: 13px; opacity: 0.95;">Kare veya daire seçin, çizgiyi sürükleyerek konumlandırıp Kaydet'e basın.</p>
+      </div>
+      <div style="padding: 20px;">
+        <div id="gorselEkleCropPreview" style="width: 100%; max-height: 360px; background: #1e293b; border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; min-height: 200px;">
+          <div id="gorselEkleCropWrap" style="position: relative; display: inline-block; max-width: 100%; max-height: 320px;">
+            <img id="gorselEkleCropImg" alt="" style="max-width: 100%; max-height: 320px; display: block; vertical-align: top;">
+            <canvas id="gorselEkleCropCanvas" style="position: absolute; left: 0; top: 0; cursor: crosshair; z-index: 2; touch-action: none; user-select: none;"></canvas>
+          </div>
+        </div>
+        <p id="gorselEkleCropHint" style="margin: 10px 0 0 0; font-size: 12px; color: #64748b; text-align: center;">Kareyi sürükleyerek konumlandırın</p>
+        <div style="display: flex; gap: 16px; margin-top: 18px; justify-content: center; align-items: center; flex-wrap: wrap;">
+          <button type="button" onclick="setGorselEkleCropShape('square')" id="gorselEkleCropBtnSquare" title="Kare çizgi göster" style="width: 56px; height: 56px; padding: 0; background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%); color: white; border: none; border-radius: 14px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(99,102,241,0.4);">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z"/></svg>
+          </button>
+          <button type="button" onclick="setGorselEkleCropShape('circle')" id="gorselEkleCropBtnCircle" title="Daire çizgi göster" style="width: 56px; height: 56px; padding: 0; background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); color: white; border: none; border-radius: 50%; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: 0 4px 14px rgba(139,92,246,0.4);">
+            <svg width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" stroke-width="2"/></svg>
+          </button>
+          <button type="button" onclick="applyGorselEkleCropWithCurrentShape()" id="gorselEkleCropBtnSave" style="padding: 14px 24px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; border-radius: 14px; font-weight: 700; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; box-shadow: 0 4px 14px rgba(16,185,129,0.4);">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Kaydet
+          </button>
+        </div>
+        <button type="button" onclick="hideGorselEkleCropModal()" style="display: block; width: 100%; margin-top: 14px; padding: 10px; background: #f1f5f9; color: #64748b; border: none; border-radius: 10px; font-weight: 600; font-size: 13px; cursor: pointer;">İptal</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Masa Detay Modal (garson, saat, ödeme durumu) -->
   <div id="tableDetailModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideTableDetail()">
     <div style="background: white; border-radius: 24px; width: 100%; max-width: 440px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;" onclick="event.stopPropagation();">
@@ -12074,6 +13802,24 @@
       </div>
       <div id="tableDetailModalBody" style="padding: 24px; max-height: 70vh; overflow-y: auto;">
         <!-- showTableDetail() ile doldurulur -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Tüm Verileri Sıfırla Onay Modal (elit in-app) -->
+  <div id="resetDataModal" class="reset-data-modal" onclick="if(event.target === this) hideResetDataModal()">
+    <div class="reset-data-modal-card" onclick="event.stopPropagation();">
+      <div class="reset-data-modal-icon-wrap">
+        <svg class="reset-data-modal-icon" width="28" height="28" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+      </div>
+      <h2 class="reset-data-modal-title">Tüm verileri sıfırla</h2>
+      <p class="reset-data-modal-desc">Satış, iptal, masalar, online siparişler ve duyurular kalıcı olarak silinecek. Bu işlem geri alınamaz.</p>
+      <p class="reset-data-modal-question">Emin misiniz?</p>
+      <div class="reset-data-modal-actions">
+        <button type="button" class="reset-data-modal-btn reset-data-modal-cancel" onclick="hideResetDataModal()">İptal</button>
+        <button type="button" class="reset-data-modal-btn reset-data-modal-confirm" onclick="confirmResetFromModal()">Evet, sıfırla</button>
       </div>
     </div>
   </div>

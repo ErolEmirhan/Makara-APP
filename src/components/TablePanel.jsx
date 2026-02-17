@@ -234,15 +234,17 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         original_sales: group.original_sales
       };
     });
+    // Masanın sonlandırılma tarihine göre sırala (en yeni önce) – parseDateTime ile doğru tarih karşılaştırması
     const allSales = [...groupedSales, ...standalone].sort((a, b) => {
-      // Gruplanmış satışlar için kapanış tarihini (last_sale_date), diğerleri için normal tarihi kullan
-      const dateA = a.isGrouped && a.last_sale_date && a.last_sale_time
-        ? `${a.last_sale_date} ${a.last_sale_time}`
-        : `${a.sale_date} ${a.sale_time}`;
-      const dateB = b.isGrouped && b.last_sale_date && b.last_sale_time
-        ? `${b.last_sale_date} ${b.last_sale_time}`
-        : `${b.sale_date} ${b.sale_time}`;
-      return dateB.localeCompare(dateA); // En yakın zaman (yeni) önce
+      const dateStrA = a.isGrouped && a.last_sale_date && a.last_sale_time
+        ? [a.last_sale_date, a.last_sale_time]
+        : [a.sale_date, a.sale_time];
+      const dateStrB = b.isGrouped && b.last_sale_date && b.last_sale_time
+        ? [b.last_sale_date, b.last_sale_time]
+        : [b.sale_date, b.sale_time];
+      const timeA = parseDateTime(dateStrA[0], dateStrA[1])?.getTime() ?? 0;
+      const timeB = parseDateTime(dateStrB[0], dateStrB[1])?.getTime() ?? 0;
+      return timeB - timeA; // Sonlandırılma tarihi en yeni olan önce
     });
     return allSales;
   }, [parseDateTime]);
@@ -2151,6 +2153,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             setOrderItems([]);
             loadTableOrders(); // Siparişleri yenile
           }}
+          onTransferItems={() => loadTableOrders()}
         />
       )}
 

@@ -7,6 +7,7 @@ import Toast from './Toast';
 
 const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit, onOpenSettings }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showHamburgerMenu, setShowHamburgerMenu] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [showSettingsSplash, setShowSettingsSplash] = useState(false);
   const [showExitConfirm, setShowExitConfirm] = useState(false);
@@ -23,6 +24,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [successMessage, setSuccessMessage] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
   const menuRef = useRef(null);
+  const hamburgerMenuRef = useRef(null);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -37,11 +39,56 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       if (menuRef.current && !menuRef.current.contains(event.target)) {
         setShowUserMenu(false);
       }
+      if (hamburgerMenuRef.current && !hamburgerMenuRef.current.contains(event.target)) {
+        const panel = document.getElementById('hamburger-panel');
+        if (panel && !panel.contains(event.target)) setShowHamburgerMenu(false);
+      }
     };
 
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  const toggleHamburgerMenu = () => setShowHamburgerMenu((prev) => !prev);
+
+  const closeHamburgerAnd = (fn) => {
+    setShowHamburgerMenu(false);
+    fn?.();
+  };
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.();
+      showToast('Tam ekran açıldı', 'success');
+    } else {
+      document.exitFullscreen?.();
+      showToast('Tam ekran kapatıldı', 'info');
+    }
+    setShowHamburgerMenu(false);
+  };
+
+  const handleCheckUpdates = async () => {
+    setShowHamburgerMenu(false);
+    try {
+      if (window.electronAPI?.checkForUpdates) {
+        await window.electronAPI.checkForUpdates();
+        showToast('Güncelleme kontrol edildi', 'success');
+      } else {
+        showToast('Bu sürümde güncelleme kontrolü yok', 'info');
+      }
+    } catch (e) {
+      showToast('Güncelleme kontrolü başarısız', 'error');
+    }
+  };
+
+  const handleQuickLock = () => {
+    setShowHamburgerMenu(false);
+    setUserType('Personel');
+    setShowUserMenu(false);
+    onRoleSplash?.('Personel');
+    if (currentView === 'sales') setCurrentView('pos');
+    showToast('Hızlı kilit: Personel moduna geçildi', 'info');
+  };
 
   const handleUserTypeChange = (type) => {
     setShowUserMenu(false);
@@ -182,7 +229,22 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
   return (
     <nav className="h-20 bg-white/90 backdrop-blur-xl border-b border-purple-200 px-8 flex items-center justify-between shadow-lg relative z-50">
+      {/* Sol üst: Hamburger menü butonu */}
       <div className="flex items-center space-x-4">
+        <div ref={hamburgerMenuRef} className="flex items-center">
+          <button
+            type="button"
+            onClick={toggleHamburgerMenu}
+            className="w-11 h-11 rounded-xl flex flex-col items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-all duration-200 shadow-sm hover:shadow"
+            aria-label="Menüyü aç"
+            title="Menü"
+          >
+            <span className="w-5 h-0.5 bg-current rounded-full" />
+            <span className="w-5 h-0.5 bg-current rounded-full" />
+            <span className="w-5 h-0.5 bg-current rounded-full" />
+          </button>
+        </div>
+
         <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-lg overflow-hidden bg-white p-1">
           <img 
             src="./logo.png" 
@@ -198,7 +260,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
         <div>
           <h1 className="text-lg font-bold text-pink-500">Makara Satış Sistemi</h1>
-          <p className="text-xs text-gray-500 font-medium">v2.9.0</p>
+          <p className="text-xs text-gray-500 font-medium">v4.0.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300">
           <DateTimeDisplay />
@@ -394,6 +456,121 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           )}
         </div>
       </div>
+
+      {/* Sol taraftan açılan menü paneli - body'e portal ile çiziliyor ki navbar'ın arkasında kalmasın */}
+      {showHamburgerMenu && createPortal(
+        <>
+          <div
+            className="fixed inset-0 bg-black/40 transition-opacity"
+            style={{ zIndex: 9998 }}
+            aria-hidden
+            onClick={() => setShowHamburgerMenu(false)}
+          />
+          <div
+            id="hamburger-panel"
+            className="fixed left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-white shadow-2xl flex flex-col border-r border-gray-200"
+            style={{ zIndex: 9999, animation: 'slideInLeft 0.2s ease-out' }}
+          >
+            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+              <span className="font-bold text-gray-800">Menü</span>
+              <button
+                type="button"
+                onClick={() => setShowHamburgerMenu(false)}
+                className="w-9 h-9 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-600"
+                aria-label="Menüyü kapat"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto py-2">
+              <button
+                onClick={() => closeHamburgerAnd(() => setCurrentView('pos'))}
+                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${currentView === 'pos' ? 'bg-purple-50 text-purple-700' : 'text-gray-700'}`}
+              >
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                <span className="font-medium">Satış Yap</span>
+              </button>
+              <button
+                onClick={() => closeHamburgerAnd(() => setCurrentView('tables'))}
+                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${currentView === 'tables' ? 'bg-purple-50 text-purple-700' : 'text-gray-700'}`}
+              >
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                </svg>
+                <span className="font-medium">Masalar</span>
+              </button>
+              <button
+                onClick={() => closeHamburgerAnd(handleOpenMobileModal)}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                </svg>
+                <span className="font-medium">Mobil Personel</span>
+              </button>
+              {userType === 'Admin' && (
+                <button
+                  onClick={() => closeHamburgerAnd(() => setShowSettingsSplash(true))}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  </svg>
+                  <span className="font-medium">Ayarlar</span>
+                </button>
+              )}
+              <div className="my-2 border-t border-gray-100" />
+              <button
+                onClick={toggleFullscreen}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                </svg>
+                <span className="font-medium">Tam Ekran</span>
+              </button>
+              {typeof window !== 'undefined' && window.electronAPI?.checkForUpdates && (
+                <button
+                  onClick={handleCheckUpdates}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span className="font-medium">Güncellemeleri Kontrol Et</span>
+                </button>
+              )}
+              {userType === 'Admin' && (
+                <button
+                  onClick={handleQuickLock}
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  <span className="font-medium">Hızlı Kilit</span>
+                </button>
+              )}
+              <div className="my-2 border-t border-gray-100" />
+              <button
+                onClick={() => closeHamburgerAnd(() => setShowExitConfirm(true))}
+                className="w-full flex items-center gap-3 px-4 py-3 text-left text-red-600 hover:bg-red-50 transition-colors"
+              >
+                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                </svg>
+                <span className="font-medium">Çıkış Yap</span>
+              </button>
+            </div>
+          </div>
+        </>,
+        document.body
+      )}
 
       {/* Çıkış Onay Modal */}
       {showExitConfirm && createPortal(

@@ -2317,6 +2317,159 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
   };
 });
 
+// Sipariş ürünlerini başka masaya aktar (ürünleri kaynak masadan sil, hedef masaya ekle, kategori bazlı yazdır + aktarım bildirimi)
+function getTableNameFromId(tableId) {
+  if (tableId.startsWith('inside-')) return `İçeri ${tableId.replace('inside-', '')}`;
+  if (tableId.startsWith('outside-')) return `Dışarı ${tableId.replace('outside-', '')}`;
+  if (tableId.startsWith('package-')) {
+    const parts = tableId.split('-');
+    return `Paket ${parts[parts.length - 1]}`;
+  }
+  return tableId;
+}
+function getTableTypeFromId(tableId) {
+  if (tableId.startsWith('inside-') || (tableId.startsWith('package-') && tableId.includes('inside'))) return 'inside';
+  if (tableId.startsWith('outside-') || (tableId.startsWith('package-') && tableId.includes('outside'))) return 'outside';
+  return 'inside';
+}
+
+ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableId, itemsToTransfer) => {
+  const sourceOrder = db.tableOrders.find(o => o.id === sourceOrderId);
+  if (!sourceOrder) return { success: false, error: 'Sipariş bulunamadı' };
+  if (sourceOrder.status !== 'pending') return { success: false, error: 'Bu sipariş aktarılamaz' };
+
+  const list = Array.isArray(itemsToTransfer) ? itemsToTransfer : [];
+  if (list.length === 0) return { success: false, error: 'Aktarılacak ürün seçin' };
+
+  if (sourceOrder.table_id === targetTableId) return { success: false, error: 'Hedef masa, mevcut masa ile aynı olamaz' };
+
+  const targetTableName = getTableNameFromId(targetTableId);
+  const targetTableType = getTableTypeFromId(targetTableId);
+  let targetOrder = db.tableOrders.find(o => o.table_id === targetTableId && o.status === 'pending');
+
+  const now = new Date();
+  const orderDate = now.toLocaleDateString('tr-TR');
+  const orderTime = getFormattedTime(now);
+
+  if (!targetOrder) {
+    const newOrderId = db.tableOrders.length > 0 ? Math.max(...db.tableOrders.map(o => o.id)) + 1 : 1;
+    targetOrder = {
+      id: newOrderId,
+      table_id: targetTableId,
+      table_name: targetTableName,
+      table_type: targetTableType,
+      total_amount: 0,
+      order_date: orderDate,
+      order_time: orderTime,
+      status: 'pending',
+      order_note: null
+    };
+    db.tableOrders.push(targetOrder);
+  }
+
+  let transferredAmount = 0;
+  const itemsForPrint = [];
+
+  for (const it of list) {
+    const qty = Math.max(0, Math.floor(Number(it.quantity) || 0));
+    if (qty <= 0) continue;
+
+    const productId = it.product_id;
+    const isGift = !!it.isGift;
+    let remaining = qty;
+    const sourceRows = db.tableOrderItems.filter(oi => oi.order_id === sourceOrderId && oi.product_id === productId && !!oi.isGift === isGift);
+
+    for (const row of sourceRows) {
+      if (remaining <= 0) break;
+      const unpaid = row.quantity - (Number(row.paid_quantity) || 0);
+      const take = Math.min(remaining, Math.max(0, unpaid));
+      if (take <= 0) continue;
+      remaining -= take;
+      row.quantity -= take;
+      if (row.quantity <= 0) {
+        row.paid_quantity = 0;
+        const idx = db.tableOrderItems.findIndex(oi => oi.id === row.id);
+        if (idx !== -1) db.tableOrderItems.splice(idx, 1);
+      } else {
+        row.paid_quantity = Math.min(row.paid_quantity || 0, row.quantity);
+      }
+      const itemAmount = isGift ? 0 : Math.round(row.price * take * 100) / 100;
+      transferredAmount += itemAmount;
+    }
+
+    if (qty - remaining > 0) {
+      const addQty = qty - remaining;
+      const newItemId = db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 : 1;
+      db.tableOrderItems.push({
+        id: newItemId,
+        order_id: targetOrder.id,
+        product_id: productId,
+        product_name: it.product_name || '',
+        quantity: addQty,
+        price: it.price || 0,
+        isGift: isGift,
+        staff_id: it.staff_id || null,
+        staff_name: it.staff_name || null,
+        added_date: orderDate,
+        added_time: orderTime,
+        paid_quantity: 0,
+        is_paid: false,
+        payment_method: null
+      });
+      itemsForPrint.push({
+        id: productId,
+        name: it.product_name || '',
+        quantity: addQty,
+        price: it.price || 0,
+        isGift: isGift,
+        staff_name: it.staff_name || null,
+        added_date: orderDate,
+        added_time: orderTime
+      });
+    }
+  }
+
+  const sourceRemainingItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrderId);
+  sourceOrder.total_amount = Math.round(sourceRemainingItems.reduce((sum, oi) => sum + (oi.isGift ? 0 : oi.price * oi.quantity), 0) * 100) / 100;
+  targetOrder.total_amount = Math.round(((targetOrder.total_amount || 0) + transferredAmount) * 100) / 100;
+
+  if (sourceRemainingItems.length === 0) {
+    sourceOrder.status = 'completed';
+    if (io) io.emit('table-update', { tableId: sourceOrder.table_id, hasOrder: false });
+    syncSingleTableToFirebase(sourceOrder.table_id).catch(() => {});
+  }
+
+  saveDatabase();
+  if (io) io.emit('table-update', { tableId: targetTableId, hasOrder: true });
+  syncSingleTableToFirebase(targetTableId).catch(() => {});
+
+  if (itemsForPrint.length > 0) {
+    const adisyonDataForPrint = {
+      tableName: targetTableName,
+      tableType: targetTableType,
+      sale_date: orderDate,
+      sale_time: orderTime,
+      transferFromTableName: sourceOrder.table_name,
+      transferToTableName: targetTableName
+    };
+    printAdisyonByCategory(itemsForPrint, adisyonDataForPrint).catch(err => {
+      console.error('Aktarım adisyon yazdırma hatası:', err);
+    });
+  }
+
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', { orderId: sourceOrder.id, targetOrderId: targetOrder.id, targetTableId });
+  }
+
+  return {
+    success: true,
+    sourceOrderId: sourceOrder.id,
+    targetOrderId: targetOrder.id,
+    targetTableId,
+    transferredCount: itemsForPrint.length
+  };
+});
+
 // Masa birleştir: dolu masayı başka bir dolu masaya aktar (kaynak masanın ürünleri hedef masaya eklenir, kaynak kapanır)
 ipcMain.handle('merge-table-order', async (event, sourceTableId, targetTableId) => {
   const sourceOrder = db.tableOrders.find(
@@ -2495,7 +2648,7 @@ ipcMain.handle('cancel-entire-table-order', async (event, orderId, cancelReason 
   return { success: true };
 });
 
-ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit') => {
+ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit', campaignPercentage = null) => {
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
     return { success: false, error: 'Sipariş bulunamadı' };
@@ -2510,12 +2663,24 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
     return { success: false, error: 'Geçerli bir ödeme yöntemi seçilmedi' };
   }
 
+  // İndirim: ciro ve satış geçmişine alınan para (indirimli tutar) yazılır
+  const originalAmount = parseFloat(order.total_amount) || 0;
+  const pct = campaignPercentage != null ? parseFloat(campaignPercentage) : 0;
+  const finalAmount = pct > 0 ? Math.round((originalAmount * (1 - pct / 100)) * 100) / 100 : originalAmount;
+  const discountAmount = originalAmount - finalAmount;
+  if (pct > 0) {
+    order.firstOrderDiscount = {
+      applied: true,
+      discountPercent: pct,
+      discountAmount,
+      subtotal: originalAmount,
+      finalTotal: finalAmount
+    };
+  }
+
   // Sipariş durumunu tamamlandı olarak işaretle
   order.status = 'completed';
 
-  // Satış geçmişine ekle (seçilen ödeme yöntemi ile)
-  // Masa açılış tarihini kullan (masa hangi tarihte açıldıysa o tarihin cirosuna geçer)
-  // Bu sayede çift sayım önlenir ve masa açılış tarihine göre ciraya eklenir
   const saleDate = order.order_date || new Date().toLocaleDateString('tr-TR');
   const saleTime = order.order_time || getFormattedTime(new Date());
 
@@ -2543,10 +2708,10 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
     ? Object.keys(staffCounts).reduce((a, b) => staffCounts[a] > staffCounts[b] ? a : b)
     : null;
 
-  // Satış ekle (seçilen ödeme yöntemi ile)
+  // Satış ekle — tutar: indirimli son tutar (alınan para)
   db.sales.push({
     id: saleId,
-    total_amount: order.total_amount,
+    total_amount: finalAmount,
     payment_method: paymentMethod,
     sale_date: saleDate,
     sale_time: saleTime,
@@ -2591,9 +2756,14 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
       const staffNames = [...new Set(orderItems.filter(oi => oi.staff_name).map(oi => oi.staff_name))];
       const staffName = staffNames.length > 0 ? staffNames.join(', ') : null;
 
-      await firebaseAddDoc(salesRef, {
+      const di = order.firstOrderDiscount;
+      const hasDiscount = di && di.applied === true;
+      const subtotal = hasDiscount && (di.subtotal != null) ? di.subtotal : null;
+      const discountPercent = hasDiscount && (di.discountPercent != null) ? di.discountPercent : 0;
+      const discountAmount = hasDiscount && (di.discountAmount != null) ? di.discountAmount : 0;
+      const firebaseSale = {
         sale_id: saleId,
-        total_amount: order.total_amount,
+        total_amount: finalAmount,
         payment_method: paymentMethod,
         sale_date: saleDate,
         sale_time: saleTime,
@@ -2608,10 +2778,17 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
           price: item.price,
           isGift: item.isGift || false,
           staff_id: item.staff_id || null,
-          staff_name: item.staff_name || null // Her item için personel bilgisi
+          staff_name: item.staff_name || null
         })),
         created_at: firebaseServerTimestamp()
-      });
+      };
+      if (hasDiscount) {
+        firebaseSale.discountInfo = { applied: true, discountPercent: discountPercent, discountAmount: discountAmount };
+        if (subtotal != null) firebaseSale.subtotal = subtotal;
+        firebaseSale.discount_percent = discountPercent;
+        if (discountAmount > 0) firebaseSale.discount_amount = discountAmount;
+      }
+      await firebaseAddDoc(salesRef, firebaseSale);
       console.log('Masa siparişi Firebase\'e kaydedildi:', saleId);
     } catch (error) {
       console.error('Firebase\'e kaydetme hatası:', error);
@@ -4289,9 +4466,9 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
         console.log(`   ✅ Yazdırma başarılı`);
       }
       
-      // Yazıcılar arası kısa bekleme
+      // Yazıcılar arası bekleme kaldırıldı (hız için)
       if (i < printJobs.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
     }
     
@@ -4384,8 +4561,8 @@ async function printToPrinter(printerName, printerType, receiptData, isProductio
           printWindow.setSize(220, windowHeight);
           console.log('Pencere yüksekliği ayarlandı:', windowHeight, 'px');
           
-          // Ekstra bir kısa bekleme - pencere boyutu değişikliğinin uygulanması için
-          await new Promise(resolve => setTimeout(resolve, 200));
+          // Pencere boyutu uygulanması için kısa bekleme (hız için 50ms)
+          await new Promise(resolve => setTimeout(resolve, 50));
         } catch (error) {
           console.log('Yükseklik kontrolü hatası:', error);
         }
@@ -4502,11 +4679,11 @@ async function printToPrinter(printerName, printerType, receiptData, isProductio
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(receiptHTML)}`);
     console.log('HTML URL yüklendi');
 
-    // Fallback: Eğer 3 saniye içinde hiçbir event tetiklenmezse yine de yazdır
+    // Fallback: Eğer 1 saniye içinde hiçbir event tetiklenmezse yine de yazdır (hız için kısaltıldı)
     setTimeout(() => {
       console.log('Fallback timeout: Yazdırma zorla başlatılıyor...');
       startPrint();
-    }, 3000);
+    }, 1000);
 
     // Yazdırma işleminin tamamlanmasını bekle (max 10 saniye)
     await Promise.race([
@@ -5033,7 +5210,7 @@ function generateReceiptHTML(receiptData) {
           ADRES İÇİN QR KOD
         </div>
         <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 6px;">
-          <img src="${receiptData.qrCodeDataURL}" alt="QR Code" style="width: 120px; height: 120px; border: 2px solid #000; padding: 4px; background: #fff;" />
+          <img src="${receiptData.qrCodeDataURL}" alt="QR Code" style="width: 180px; height: 180px; min-width: 180px; min-height: 180px; border: 3px solid #000; padding: 6px; background: #fff; image-rendering: crisp-edges;" />
         </div>
         <div style="font-size: 8px; font-weight: 700; font-style: italic; color: #000; font-family: 'Montserrat', sans-serif; line-height: 1.2;">
           QR kodu okutarak<br/>adresi Google Maps'te açın
@@ -5455,20 +5632,16 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
         return { success: false, error: 'Kasa yazıcısı ayarlanmamış' };
       }
       
-      // Online sipariş için QR kod oluştur (adres varsa)
+      // Online sipariş için QR kod oluştur (adres varsa) – yazdırıldığında rahat okutulabilsin
       let qrCodeDataURL = null;
       if (adisyonData.tableType === 'online' && adisyonData.customer_address) {
         try {
-          // Google Maps URL oluştur
           const mapsURL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(adisyonData.customer_address)}`;
-          // QR kod oluştur
           qrCodeDataURL = await QRCode.toDataURL(mapsURL, {
-            width: 150,
-            margin: 1,
-            color: {
-              dark: '#000000',
-              light: '#FFFFFF'
-            }
+            width: 280,
+            margin: 4,
+            errorCorrectionLevel: 'H',
+            color: { dark: '#000000', light: '#FFFFFF' }
           });
           console.log('   ✅ QR kod oluşturuldu (Google Maps adres linki)');
         } catch (qrError) {
@@ -5604,8 +5777,8 @@ async function printAdisyonToPrinter(printerName, printerType, items, adisyonDat
           printWindow.setSize(220, windowHeight);
           console.log('Pencere yüksekliği ayarlandı:', windowHeight, 'px');
           
-          // Ekstra bir kısa bekleme - pencere boyutu değişikliğinin uygulanması için
-          await new Promise(resolve => setTimeout(resolve, 200));
+          // Pencere boyutu uygulanması için kısa bekleme (hız için 50ms)
+          await new Promise(resolve => setTimeout(resolve, 50));
         } catch (error) {
           console.log('Yükseklik kontrolü hatası:', error);
         }
@@ -5722,11 +5895,11 @@ async function printAdisyonToPrinter(printerName, printerType, items, adisyonDat
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(adisyonHTML)}`);
     console.log('HTML URL yüklendi');
 
-    // Fallback: Eğer 3 saniye içinde hiçbir event tetiklenmezse yine de yazdır
+    // Fallback: Eğer 1 saniye içinde hiçbir event tetiklenmezse yine de yazdır (hız için kısaltıldı)
     setTimeout(() => {
       console.log('Fallback timeout: Yazdırma zorla başlatılıyor...');
       startPrint();
-    }, 3000);
+    }, 1000);
 
     // Yazdırma işleminin tamamlanmasını bekle (max 18 saniye - yazıcı kuyruğu için)
     await Promise.race([
@@ -5923,7 +6096,7 @@ async function printAdisyonByCategory(items, adisyonData) {
         if (!result || !result.success) {
           console.error(`      ❌ Adisyon yazdırma hatası:`, result?.error);
           // Bir kez yeniden dene (geçici yazıcı/kuyruk hataları için)
-          await new Promise(resolve => setTimeout(resolve, 1200));
+          await new Promise(resolve => setTimeout(resolve, 400));
           result = await printAdisyonToPrinter(
             job.printerName,
             job.printerType,
@@ -5937,9 +6110,9 @@ async function printAdisyonByCategory(items, adisyonData) {
           console.log(`      ✅ Yeniden deneme başarılı: "${job.printerName}"`);
         }
         
-        // Yazıcılar arası kısa bekleme
+        // Yazıcılar arası bekleme kaldırıldı (hız için)
         if (i < printJobs.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
+          await new Promise(resolve => setTimeout(resolve, 0));
         }
       }
       
@@ -6197,6 +6370,12 @@ function generateAdisyonHTML(items, adisyonData) {
       </style>
     </head>
     <body>
+      ${adisyonData.transferFromTableName && adisyonData.transferToTableName ? `
+      <div style="margin: 0 0 12px 0; padding: 10px 12px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 2px solid #f59e0b; border-radius: 8px; text-align: center; box-shadow: 0 2px 6px rgba(245,158,11,0.4);">
+        <p style="font-size: 9px; font-weight: 900; color: #92400e; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;">🔄 Aktarım</p>
+        <p style="font-size: 12px; font-weight: 900; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif; line-height: 1.3;">${adisyonData.transferFromTableName} masasından<br/><strong>${adisyonData.transferToTableName}</strong> masasına aktarıldı</p>
+      </div>
+      ` : ''}
       <div class="info">
         ${adisyonData.tableName ? (adisyonData.tableType === 'online' ? `
         <div class="table-row" style="margin-bottom: 14px; padding-bottom: 12px; border-bottom: 2px solid #e2e8f0;">
@@ -10172,7 +10351,7 @@ function generateMobileHTML(serverURL) {
       }
     }
     
-    async function sendOrder() {
+    function sendOrder() {
       if (!selectedTable || cart.length === 0) { 
         showToast('error', 'Eksik Bilgi', 'Lütfen masa seçin ve ürün ekleyin');
         return; 
@@ -10185,74 +10364,66 @@ function generateMobileHTML(serverURL) {
       var sendBtn = document.getElementById('sendOrderBtn');
       var sendBtnContent = document.getElementById('sendOrderBtnContent');
       var originalSendHTML = sendBtnContent ? sendBtnContent.innerHTML : '';
-      if (sendBtn) {
-        sendBtn.disabled = true;
-        if (sendBtnContent) sendBtnContent.innerHTML = '<span style="display: inline-block; width: 20px; height: 20px; border: 2px solid rgba(255,255,255,0.9); border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;"></span> Gönderiliyor...';
-      }
       
+      // Gönderilecek veriyi şimdi al (hemen sonra cart temizlenecek)
       var totalAmount = cart.reduce(function(sum, item) {
         if (item.isGift) return sum;
         return sum + (item.price * item.quantity);
       }, 0);
+      var payload = { 
+        items: cart.map(item => ({
+          id: item.id,
+          name: item.name,
+          price: item.price,
+          quantity: item.quantity,
+          isGift: item.isGift || false,
+          isYanUrun: item.isYanUrun || (typeof item.id === 'string' && item.id.startsWith('yan_urun_'))
+        })), 
+        totalAmount, 
+        tableId: selectedTable.id, 
+        tableName: selectedTable.name, 
+        tableType: selectedTable.type,
+        staffId: currentStaff.id,
+        orderNote: orderNote || null
+      };
+      var currentTableId = selectedTable.id;
       
-      try {
-        var response = await fetch(API_URL + '/orders', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            items: cart.map(item => ({
-              id: item.id,
-              name: item.name,
-              price: item.price,
-              quantity: item.quantity,
-              isGift: item.isGift || false,
-              isYanUrun: item.isYanUrun || (typeof item.id === 'string' && item.id.startsWith('yan_urun_'))
-            })), 
-            totalAmount, 
-            tableId: selectedTable.id, 
-            tableName: selectedTable.name, 
-            tableType: selectedTable.type,
-            staffId: currentStaff.id,
-            orderNote: orderNote || null
-          })
+      if (sendBtn) sendBtn.disabled = true;
+      // Anında frontend: butonda "Gönderildi" göster, sepeti temizle, toast göster
+      if (sendBtnContent) sendBtnContent.innerHTML = '<svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg> Gönderildi';
+      showToast('success', 'Sipariş Gönderildi', 'Ürünler gönderildi.');
+      cart = []; 
+      orderNote = '';
+      updateCart();
+      updateNoteButton();
+      var searchEl = document.getElementById('searchInput');
+      if (searchEl) searchEl.value = '';
+      searchQuery = '';
+      loadExistingOrders(currentTableId).catch(function(err) { console.error('Sipariş listesi yenileme:', err); });
+      loadData().then(function() { renderProducts(); }).catch(function(err) { console.error('Veri yenileme:', err); });
+      
+      // Butonu kısa süre sonra eski haline getir
+      setTimeout(function() {
+        if (sendBtn) sendBtn.disabled = false;
+        if (sendBtnContent) sendBtnContent.innerHTML = originalSendHTML;
+      }, 1500);
+      
+      // Backend isteği arka planda (birebir aynı işlem devam etsin)
+      fetch(API_URL + '/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+        .then(function(response) { return response.json(); })
+        .then(function(result) {
+          if (!result.success) {
+            showToast('error', 'Hata', result.error || 'Sipariş sunucuda işlenemedi.');
+          }
+        })
+        .catch(function(error) { 
+          console.error('Sipariş gönderme hatası:', error); 
+          showToast('error', 'Bağlantı Hatası', 'Sunucuya iletilemedi. Lütfen kontrol edin.');
         });
-        
-        const result = await response.json();
-        
-        if (result.success) {
-          const message = result.isNewOrder 
-            ? selectedTable.name + ' için yeni sipariş başarıyla oluşturuldu!' 
-            : selectedTable.name + ' için mevcut siparişe eklendi!';
-          
-          showToast('success', 'Sipariş Başarılı', message);
-          
-          // Sepeti temizle ama masada kal
-          const currentTableId = selectedTable.id;
-          cart = []; 
-          orderNote = '';
-          updateCart();
-          updateNoteButton();
-          document.getElementById('searchInput').value = '';
-          searchQuery = '';
-          
-          // Siparişleri yenile
-          await loadExistingOrders(currentTableId);
-          // Ürünleri yenile (stok bilgisi güncellensin)
-          await loadData();
-          // Ürünleri render et (stok 0 olanlar "Kalmadı" göstersin)
-          renderProducts();
-        } else {
-          showToast('error', 'Hata', result.error || 'Sipariş gönderilemedi');
-        }
-      } catch (error) { 
-        console.error('Sipariş gönderme hatası:', error); 
-        showToast('error', 'Bağlantı Hatası', 'Sunucuya bağlanılamadı. Lütfen tekrar deneyin.');
-      } finally {
-        if (sendBtn) {
-          sendBtn.disabled = false;
-          if (sendBtnContent) sendBtnContent.innerHTML = originalSendHTML;
-        }
-      }
     }
   </script>
 </body>
@@ -11193,6 +11364,35 @@ function startAPIServer() {
     try {
       const { items, totalAmount, tableId, tableName, tableType, orderNote, staffId } = req.body;
       
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ success: false, error: 'Ürün listesi gerekli' });
+      }
+      
+      // Yazdırmayı hemen başlat (stok/DB'den önce) — sipariş gelir gelmez yazıcıdan çıksın
+      const staff = staffId && db.staff ? db.staff.find(s => s.id === staffId) : null;
+      const staffName = staff ? `${staff.name} ${staff.surname}` : null;
+      const now = new Date();
+      const adisyonDate = now.toLocaleDateString('tr-TR');
+      const adisyonTime = getFormattedTime(now);
+      const itemsWithStaffForPrint = items.map(item => ({
+        ...item,
+        staff_name: staffName || null,
+        added_date: adisyonDate,
+        added_time: adisyonTime
+      }));
+      const adisyonDataForPrint = {
+        items: itemsWithStaffForPrint,
+        tableName: tableName || '',
+        tableType: tableType || '',
+        orderNote: orderNote || null,
+        sale_date: adisyonDate,
+        sale_time: adisyonTime,
+        staff_name: staffName || null
+      };
+      printAdisyonByCategory(itemsWithStaffForPrint, adisyonDataForPrint).catch(err => {
+        console.error('Mobil sipariş adisyon yazdırma hatası:', err);
+      });
+      
       // Stok kontrolü ve düşürme (sadece stok takibi yapılan ürünler için)
       for (const item of items) {
         if (!item.isGift) {
@@ -11330,75 +11530,6 @@ function startAPIServer() {
           tableId: tableId,
           hasOrder: true
         });
-      }
-
-      // Mobil personel arayüzünden gelen siparişler için otomatik adisyon yazdır (kategori bazlı)
-      try {
-        // Items'a staff_name, added_time ve added_date ekle (tableOrderItems'dan al)
-        // Veritabanı zaten kaydedildi, şimdi items'ları bulabiliriz
-        // Bu sipariş için az önce eklenen item'ları bul (en yüksek ID'li olanlar - en son eklenenler)
-        // Her item için ayrı kayıt oluşturulduğu için, items array'indeki sıra ile tableOrderItems'daki sıra aynı olmalı
-        // Ama güvenlik için en son eklenen kaydı bulalım
-        const itemsWithStaff = items.map((item, index) => {
-          // Mevcut orderId için bu ürünü ekleyen garsonu bul
-          // En son eklenen item'ı al (ID'ye göre sırala - en yüksek ID = en son eklenen)
-          const matchingItems = db.tableOrderItems.filter(oi => 
-            oi.order_id === orderId && 
-            oi.product_id === item.id && 
-            oi.product_name === item.name &&
-            oi.isGift === (item.isGift || false)
-          );
-          
-          // En son eklenen item'ı al (ID'ye göre sırala - büyükten küçüğe)
-          let orderItem = null;
-          if (matchingItems.length > 0) {
-            // ID'ye göre sırala ve en yüksek ID'li olanı al (en son eklenen)
-            // Eğer birden fazla kayıt varsa, en son eklenenleri al ve index'e göre seç
-            const sortedItems = matchingItems.sort((a, b) => b.id - a.id);
-            // Eğer aynı ürün için birden fazla kayıt varsa, index'e göre seç
-            // Örneğin: 2 adet çay sipariş edildiyse, 2 ayrı kayıt olacak
-            // İlk item için en son eklenen 1. kayıt, ikinci item için en son eklenen 2. kayıt
-            orderItem = sortedItems[index] || sortedItems[0];
-          }
-          
-          // Eğer orderItem bulunduysa, onun bilgilerini kullan
-          // Bulunamazsa, genel staffName ve şu anki zamanı kullan (fallback)
-          const now = new Date();
-          const fallbackDate = now.toLocaleDateString('tr-TR');
-          const fallbackTime = getFormattedTime(now);
-          
-          return {
-            ...item,
-            staff_name: orderItem?.staff_name || staffName || null,
-            added_date: orderItem?.added_date || fallbackDate,
-            added_time: orderItem?.added_time || fallbackTime
-          };
-        });
-        
-        // Adisyon data'sı için, items'lardan personel ve zaman bilgisini al
-        // İlk item'ın bilgilerini kullan (tüm items aynı personel ve zamanda eklenmiş olmalı)
-        const firstItem = itemsWithStaff[0];
-        const adisyonDate = firstItem?.added_date || new Date().toLocaleDateString('tr-TR');
-        const adisyonTime = firstItem?.added_time || getFormattedTime(new Date());
-        const adisyonStaffName = firstItem?.staff_name || staffName || null;
-        
-        const adisyonData = {
-          items: itemsWithStaff,
-          tableName: tableName,
-          tableType: tableType,
-          orderNote: orderNote || null,
-          // Items'lardan alınan tarih/saat ve personel bilgisini kullan
-          sale_date: adisyonDate,
-          sale_time: adisyonTime,
-          staff_name: adisyonStaffName
-        };
-        
-        // Kategori bazlı adisyon yazdırma - fiş çıkana kadar bekle, sonra yanıt gönder (gecikme/çıkmama olmasın)
-        await printAdisyonByCategory(itemsWithStaff, adisyonData).catch(err => {
-          console.error('Mobil sipariş kategori bazlı adisyon yazdırma hatası:', err);
-        });
-      } catch (error) {
-        console.error('Mobil sipariş adisyon yazdırma hatası:', error);
       }
 
       res.json({ 

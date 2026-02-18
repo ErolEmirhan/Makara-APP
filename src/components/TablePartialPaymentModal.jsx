@@ -578,11 +578,9 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     const paidQty = item.groupedPaidQuantity || 0;
     return paidQty < item.groupedQuantity;
   });
-  // Ödenen kalemler: Tamamen ödenenler + kısmi ödenenler (paidQty > 0)
   const completedItems = effectiveItems.filter(item => {
     if (item.isGift) return false;
-    const paidQty = item.groupedPaidQuantity || 0;
-    return paidQty > 0; // Kısmi ödenenler de dahil
+    return (item.groupedPaidQuantity || 0) >= item.groupedQuantity;
   });
   const giftItems = effectiveItems.filter(item => item.isGift);
 
@@ -653,6 +651,42 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
               <p className="text-xs text-gray-500 mb-1 font-medium">Ödenmemiş Kalem</p>
               <p className="text-xl font-bold text-gray-900">{hasAmountBasedPartialPayment ? '—' : `${awaitingItems.length} Adet`}</p>
             </div>
+          </div>
+          {/* Parçalı Ödeme: 1/2, 1/3, ... 1/10 (baştaki toplam tutara göre) */}
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setShowSplitFractionPanel(!showSplitFractionPanel)}
+              disabled={remainingAmount <= 0.01 || processingItemId === 'split'}
+              className="px-4 py-2 rounded-xl font-semibold text-white bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+              </svg>
+              Parçalı Ödeme (1/2, 1/3 … 1/10)
+            </button>
+            {showSplitFractionPanel && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {[2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => {
+                  const initialTotal = initialOrderTotalRef.current ?? originalTotalAmount;
+                  const fractionAmount = Math.floor(initialTotal / n);
+                  const payAmount = Math.min(fractionAmount, Math.floor(remainingAmount));
+                  const isDisabled = payAmount <= 0;
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      disabled={isDisabled}
+                      onClick={() => handleSplitFractionPayment(n)}
+                      className="px-4 py-2.5 rounded-xl font-bold text-sm bg-white border-2 border-violet-200 text-violet-800 hover:bg-violet-50 hover:border-violet-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                    >
+                      <span className="block">1/{n}</span>
+                      <span className="block text-xs font-normal text-gray-600">₺{payAmount}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -824,35 +858,12 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
                     </thead>
                     <tbody>
                       {completedItems.map((item) => {
-                        const paidQty = item.groupedPaidQuantity || 0;
-                        const totalQty = item.groupedQuantity;
-                        const isFullyPaid = paidQty >= totalQty;
-                        const paidTotal = roundMoney(item.price * paidQty);
-                        const itemTotal = roundMoney(item.price * totalQty);
+                        const itemTotal = roundMoney(item.price * item.groupedQuantity);
                         return (
                           <tr key={item.id} className="border-b border-green-100/50">
                             <td className="py-3 px-4 font-medium text-green-800">{item.product_name}</td>
-                            <td className="py-3 px-4 text-center text-green-700">
-                              {isFullyPaid ? (
-                                totalQty
-                              ) : (
-                                <span className="flex items-center justify-center gap-1">
-                                  <span className="font-bold">{paidQty}</span>
-                                  <span className="text-gray-400">/</span>
-                                  <span className="text-gray-500">{totalQty}</span>
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-right font-medium text-green-700">
-                              {isFullyPaid ? (
-                                `₺${itemTotal.toFixed(2)}`
-                              ) : (
-                                <span className="flex flex-col items-end">
-                                  <span className="font-bold">₺{paidTotal.toFixed(2)}</span>
-                                  <span className="text-xs text-gray-500">/ ₺{itemTotal.toFixed(2)}</span>
-                                </span>
-                              )}
-                            </td>
+                            <td className="py-3 px-4 text-center text-green-700">{item.groupedQuantity}</td>
+                            <td className="py-3 px-4 text-right font-medium text-green-700">₺{itemTotal.toFixed(2)}</td>
                             <td className="py-3 px-4 text-green-600 text-sm">{item.paymentMethod || '—'}</td>
                           </tr>
                         );

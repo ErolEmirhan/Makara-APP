@@ -48,6 +48,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, info) => callback(info)),
   onUpdateError: (callback) => ipcRenderer.on('update-error', (event, error) => callback(error)),
   onUpdateProgress: (callback) => ipcRenderer.on('update-download-progress', (event, progress) => callback(progress)),
+  // Integration API
+  getIntegrationSettings: () => ipcRenderer.invoke('get-integration-settings'),
+  saveIntegrationSettings: (settings) => ipcRenderer.invoke('save-integration-settings', settings),
+  testIntegrationConnection: (platform, settings) => ipcRenderer.invoke('test-integration-connection', platform, settings),
   // Print API
   printReceipt: (receiptData) => ipcRenderer.invoke('print-receipt', receiptData),
   printAdisyon: (adisyonData) => ipcRenderer.invoke('print-adisyon', adisyonData),

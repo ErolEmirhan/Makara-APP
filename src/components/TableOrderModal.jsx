@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Toast from './Toast';
+
+const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
 const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems }) => {
   const [sessionDuration, setSessionDuration] = useState('');
@@ -22,6 +24,11 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   const [transferQuantities, setTransferQuantities] = useState({});
   const [selectedTargetTableId, setSelectedTargetTableId] = useState(null);
   const [transferring, setTransferring] = useState(false);
+  const [showSplitFractionPanel, setShowSplitFractionPanel] = useState(false);
+  const [processingSplitPayment, setProcessingSplitPayment] = useState(false);
+  const [showAmountPaymentModal, setShowAmountPaymentModal] = useState(false);
+  const [amountPaymentValue, setAmountPaymentValue] = useState('');
+  const initialOrderTotalRef = useRef(null);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -105,6 +112,14 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     return () => clearInterval(interval);
   }, [order.order_date, order.order_time]);
 
+  // Başlangıç toplam tutarını tek seferlik sakla (Parçalı Ödeme 1/2, 1/3... hep buna göre)
+  useEffect(() => {
+    if (order && items?.length && initialOrderTotalRef.current === null) {
+      const sumItems = items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0);
+      initialOrderTotalRef.current = roundMoney(sumItems);
+    }
+  }, [order, items]);
+
   // Başlangıç toplam tutarı (ikram edilen ürünler hariç) - groupedItems kullan
   const originalTotalAmount = groupedItems.reduce((sum, item) => {
     if (item.isGift) return sum;
@@ -118,6 +133,192 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   }, 0);
   // Kalan tutar: Toplam - Ödenen (doğru hesaplama)
   const remainingAmount = originalTotalAmount - paidAmount;
+  
+  // Parçalı ödeme için kalan tutar (backend'den gelen total_amount kullanılabilir)
+  const remainingFromBackend = Number(order?.total_amount);
+  const useBackendRemaining = typeof remainingFromBackend === 'number' && remainingFromBackend >= 0;
+  const splitPaymentRemainingAmount = useBackendRemaining
+    ? roundMoney(remainingFromBackend)
+    : roundMoney(remainingAmount);
+  
+  // Parçalı ödeme ile ödenen tutar (tutar bazlı parçalı ödeme varsa)
+  const initialTotal = initialOrderTotalRef.current ?? roundMoney(originalTotalAmount);
+  const partialPaymentPaid = roundMoney(initialTotal - splitPaymentRemainingAmount);
+  const hasPartialPayment = partialPaymentPaid > 0.01; // Parçalı ödeme yapılmış mı?
+
+  // Tutarlı ödeme: Kullanıcının girdiği tutar ile ödeme
+  const handleAmountPayment = async (amount) => {
+    const payAmount = roundMoney(Number(amount));
+    if (payAmount <= 0) {
+      showToast('Geçersiz tutar', 'warning');
+      return;
+    }
+    if (payAmount > splitPaymentRemainingAmount) {
+      showToast(`Girilen tutar kalan tutardan (₺${splitPaymentRemainingAmount.toFixed(2)}) fazla olamaz`, 'warning');
+      return;
+    }
+    if (!window.electronAPI?.createPartialPaymentSale || !window.electronAPI?.updateTableOrderAmount) {
+      showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
+      return;
+    }
+
+    const paymentMethod = await new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
+      modal.innerHTML = `
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+          <div class="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4">
+            <h3 class="text-xl font-bold text-white mb-1">Tutarlı Ödeme</h3>
+            <p class="text-sm text-white/90">Tutar: ₺${payAmount.toFixed(2)}</p>
+          </div>
+          <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                  <span class="text-base">Nakit</span>
+                </div>
+              </button>
+              <button id="cardBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+                  <span class="text-base">Kredi Kartı</span>
+                </div>
+              </button>
+            </div>
+            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">İptal</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.querySelector('#cashBtn').onclick = () => { document.body.removeChild(modal); resolve('Nakit'); };
+      modal.querySelector('#cardBtn').onclick = () => { document.body.removeChild(modal); resolve('Kredi Kartı'); };
+      modal.querySelector('#cancelBtn').onclick = () => { document.body.removeChild(modal); resolve(null); };
+    });
+
+    if (!paymentMethod) return;
+
+    setProcessingSplitPayment(true);
+    setShowAmountPaymentModal(false);
+    setAmountPaymentValue('');
+
+    try {
+      const saleResult = await window.electronAPI.createPartialPaymentSale({
+        orderId: order.id,
+        totalAmount: payAmount,
+        paymentMethod,
+        tableName: order.table_name || '',
+        tableType: order.table_type || 'inside'
+      });
+      if (!saleResult?.success) {
+        showToast('Satış kaydı oluşturulamadı', 'error');
+        return;
+      }
+      const amountResult = await window.electronAPI.updateTableOrderAmount(order.id, payAmount);
+      if (!amountResult?.success) {
+        showToast('Sipariş tutarı güncellenemedi: ' + (amountResult?.error || ''), 'error');
+        return;
+      }
+      showToast(`Tutarlı ödeme alındı: ₺${payAmount.toFixed(2)}`, 'success');
+      if (onItemCancelled) {
+        await onItemCancelled();
+      }
+    } catch (err) {
+      console.error('Tutarlı ödeme hatası:', err);
+      showToast('Ödeme alınamadı: ' + (err.message || ''), 'error');
+    } finally {
+      setProcessingSplitPayment(false);
+    }
+  };
+
+  // Parçalı ödeme: 1/2, 1/3, ... 1/10 (daima baştaki toplam tutara göre, küsüratsız tam lira)
+  const handleSplitFractionPayment = async (denominator) => {
+    const initialTotal = initialOrderTotalRef.current ?? roundMoney(originalTotalAmount);
+    if (initialTotal <= 0) {
+      showToast('Toplam tutar hesaplanamadı', 'warning');
+      return;
+    }
+    // Tam lira: küsürat yok (1/3 = 33 TL, bir taksitte 5 TL fazla/eksik olabilir)
+    const targetAmount = Math.floor(initialTotal / denominator);
+    const payAmount = Math.min(targetAmount, Math.floor(splitPaymentRemainingAmount));
+    if (payAmount <= 0) {
+      showToast('Kalan tutar yok', 'info');
+      return;
+    }
+    if (!window.electronAPI?.createPartialPaymentSale || !window.electronAPI?.updateTableOrderAmount) {
+      showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
+      return;
+    }
+
+    const paymentMethod = await new Promise((resolve) => {
+      const modal = document.createElement('div');
+      modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
+      modal.innerHTML = `
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+          <div class="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4">
+            <h3 class="text-xl font-bold text-white mb-1">Parçalı Ödeme 1/${denominator}</h3>
+            <p class="text-sm text-white/90">Tutar: ₺${payAmount} (başlangıç toplamının 1/${denominator}'i, tam lira)</p>
+          </div>
+          <div class="p-6">
+            <div class="grid grid-cols-2 gap-4 mb-4">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                  <span class="text-base">Nakit</span>
+                </div>
+              </button>
+              <button id="cardBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+                <div class="flex flex-col items-center space-y-2">
+                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+                  <span class="text-base">Kredi Kartı</span>
+                </div>
+              </button>
+            </div>
+            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">İptal</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.querySelector('#cashBtn').onclick = () => { document.body.removeChild(modal); resolve('Nakit'); };
+      modal.querySelector('#cardBtn').onclick = () => { document.body.removeChild(modal); resolve('Kredi Kartı'); };
+      modal.querySelector('#cancelBtn').onclick = () => { document.body.removeChild(modal); resolve(null); };
+    });
+
+    if (!paymentMethod) return;
+
+    setProcessingSplitPayment(true);
+    setShowSplitFractionPanel(false);
+
+    try {
+      // Sadece toplam tutara göre: 1/x taksit tutarını al, kalemlere dağıtma
+      const saleResult = await window.electronAPI.createPartialPaymentSale({
+        orderId: order.id,
+        totalAmount: payAmount,
+        paymentMethod,
+        tableName: order.table_name || '',
+        tableType: order.table_type || 'inside'
+      });
+      if (!saleResult?.success) {
+        showToast('Satış kaydı oluşturulamadı', 'error');
+        return;
+      }
+      const amountResult = await window.electronAPI.updateTableOrderAmount(order.id, payAmount);
+      if (!amountResult?.success) {
+        showToast('Sipariş tutarı güncellenemedi: ' + (amountResult?.error || ''), 'error');
+        return;
+      }
+      showToast(`Parçalı ödeme (1/${denominator}) alındı: ₺${payAmount}`, 'success');
+      // Modal'ı yenilemek için onItemCancelled callback'ini kullan (sipariş detaylarını yeniler)
+      if (onItemCancelled) {
+        await onItemCancelled();
+      }
+    } catch (err) {
+      console.error('Parçalı ödeme hatası:', err);
+      showToast('Ödeme alınamadı: ' + (err.message || ''), 'error');
+    } finally {
+      setProcessingSplitPayment(false);
+    }
+  };
 
   // Ürün iptal etme fonksiyonu
   const handleCancelItem = (item) => {
@@ -543,24 +744,58 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
 
           {/* Toplam ve Kısmi Ödeme Bilgileri - Corporate */}
           <div className="bg-gray-50/50 rounded-lg p-6 border border-gray-200 space-y-4">
-            {paidAmount > 0.01 && (
+            <div className="flex justify-between items-center py-2">
+              <span className="text-base font-semibold text-gray-700 uppercase tracking-wide">Toplam Tutar</span>
+              <span className={`text-2xl font-bold ${
+                (paidAmount > 0.01 || partialPaymentPaid > 0.01) ? 'text-gray-400 line-through' : 'text-gray-900'
+              }`}>
+                ₺{originalTotalAmount.toFixed(2)}
+              </span>
+            </div>
+            
+            {/* Parçalı Ödeme Detayları */}
+            {(hasPartialPayment || partialPaymentPaid > 0.01) && (
+              <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-lg p-4 border border-violet-200 space-y-2">
+                <div className="flex items-center gap-2 mb-2">
+                  <svg className="w-5 h-5 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                  <span className="text-sm font-bold text-violet-700 uppercase tracking-wide">Parçalı Ödeme Bilgileri</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-semibold text-gray-700">Parçalı ödeme ile ödenen:</span>
+                  <span className="text-lg font-bold text-violet-700">₺{partialPaymentPaid.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-semibold text-gray-700">Kalan tutar:</span>
+                  <span className={`text-lg font-bold ${splitPaymentRemainingAmount > 0.01 ? 'text-orange-600' : 'text-green-600'}`}>
+                    ₺{splitPaymentRemainingAmount.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            )}
+            
+            {/* Kalem Bazlı Ödenen Tutar (eğer varsa) */}
+            {paidAmount > 0.01 && !hasPartialPayment && (
               <div className="flex justify-between items-center bg-green-50/50 rounded-lg p-4 border border-green-200">
                 <span className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Ödenen Tutar</span>
                 <span className="text-lg font-bold text-green-700">₺{paidAmount.toFixed(2)}</span>
               </div>
             )}
-            <div className="flex justify-between items-center py-2">
-              <span className="text-base font-semibold text-gray-700 uppercase tracking-wide">Toplam Tutar</span>
-              <span className={`text-2xl font-bold ${
-                paidAmount > 0.01 ? 'text-gray-400 line-through' : 'text-gray-900'
-              }`}>
-                ₺{originalTotalAmount.toFixed(2)}
-              </span>
-            </div>
-            {paidAmount > 0.01 && (
+            
+            {/* Kalan Tutar (kalem bazlı ödeme varsa) */}
+            {paidAmount > 0.01 && !hasPartialPayment && (
               <div className="flex justify-between items-center pt-3 border-t border-gray-300">
                 <span className="text-base font-semibold text-orange-700 uppercase tracking-wide">Kalan Tutar</span>
                 <span className="text-2xl font-bold text-orange-700">₺{remainingAmount.toFixed(2)}</span>
+              </div>
+            )}
+            
+            {/* Hem parçalı hem kalem bazlı ödeme varsa */}
+            {paidAmount > 0.01 && partialPaymentPaid > 0.01 && (
+              <div className="flex justify-between items-center pt-3 border-t border-gray-300">
+                <span className="text-base font-semibold text-orange-700 uppercase tracking-wide">Toplam Kalan Tutar</span>
+                <span className="text-2xl font-bold text-orange-700">₺{splitPaymentRemainingAmount.toFixed(2)}</span>
               </div>
             )}
           </div>
@@ -568,7 +803,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
           {/* Masayı Sonlandır ve Kısmi Ödeme Butonları - Corporate */}
           {order.status === 'pending' && (
             <div className="space-y-3">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
                 <button
                   onClick={onRequestAdisyon}
                   className="px-5 py-3.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
@@ -595,6 +830,31 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                   </svg>
                   <span>Sipariş Ekle</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSplitFractionPanel(!showSplitFractionPanel)}
+                  disabled={splitPaymentRemainingAmount <= 0.01 || processingSplitPayment}
+                  className="px-5 py-3.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                  </svg>
+                  <span>Bölmeli Öde</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAmountPaymentModal(true);
+                    setAmountPaymentValue('');
+                  }}
+                  disabled={splitPaymentRemainingAmount <= 0.01 || processingSplitPayment}
+                  className="px-5 py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Tutarlı Öde</span>
                 </button>
                 <button
                   onClick={onCompleteTable}
@@ -1196,6 +1456,140 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Tutarlı Ödeme Modal */}
+      {showAmountPaymentModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] animate-fade-in" onClick={() => setShowAmountPaymentModal(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden border border-blue-200" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-white">Tutarlı Ödeme</h3>
+                  <p className="text-sm text-white/90 mt-1">Ödeme yapılacak tutarı girin</p>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowAmountPaymentModal(false);
+                    setAmountPaymentValue('');
+                  }}
+                  className="text-white/80 hover:text-white transition-colors p-1 hover:bg-white/10 rounded-lg"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Ödeme Tutarı
+                </label>
+                <div className="relative">
+                  <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 font-semibold">₺</span>
+                  <input
+                    type="number"
+                    value={amountPaymentValue}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      if (value === '' || (!isNaN(value) && Number(value) >= 0)) {
+                        setAmountPaymentValue(value);
+                      }
+                    }}
+                    placeholder="0.00"
+                    step="0.01"
+                    min="0"
+                    max={splitPaymentRemainingAmount}
+                    className="w-full pl-10 pr-4 py-3 border-2 border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-lg font-semibold"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && amountPaymentValue) {
+                        handleAmountPayment(amountPaymentValue);
+                      }
+                    }}
+                  />
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Maksimum: ₺{splitPaymentRemainingAmount.toFixed(2)}
+                </p>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setShowAmountPaymentModal(false);
+                    setAmountPaymentValue('');
+                  }}
+                  className="flex-1 px-4 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all"
+                >
+                  İptal
+                </button>
+                <button
+                  onClick={() => {
+                    if (amountPaymentValue) {
+                      handleAmountPayment(amountPaymentValue);
+                    } else {
+                      showToast('Lütfen bir tutar girin', 'warning');
+                    }
+                  }}
+                  disabled={!amountPaymentValue || processingSplitPayment}
+                  className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold rounded-xl transition-all"
+                >
+                  {processingSplitPayment ? 'İşleniyor...' : 'Ödeme Al'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Parçalı Ödeme Seçenekleri Modal */}
+      {showSplitFractionPanel && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] animate-fade-in" onClick={() => setShowSplitFractionPanel(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden border border-violet-200" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-lg font-bold text-white">Bölmeli Ödeme Seçenekleri</h3>
+                  <p className="text-sm text-white/90 mt-1">1/2, 1/3 … 1/10 arasından seçin</p>
+                </div>
+                <button
+                  onClick={() => setShowSplitFractionPanel(false)}
+                  className="text-white/80 hover:text-white transition-colors p-1 hover:bg-white/10 rounded-lg"
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <div className="p-6">
+              <div className="grid grid-cols-3 gap-3">
+                {[2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => {
+                  const initialTotal = initialOrderTotalRef.current ?? roundMoney(originalTotalAmount);
+                  const fractionAmount = Math.floor(initialTotal / n);
+                  const payAmount = Math.min(fractionAmount, Math.floor(splitPaymentRemainingAmount));
+                  const isDisabled = payAmount <= 0;
+                  return (
+                    <button
+                      key={n}
+                      type="button"
+                      disabled={isDisabled || processingSplitPayment}
+                      onClick={() => {
+                        handleSplitFractionPayment(n);
+                        setShowSplitFractionPanel(false);
+                      }}
+                      className="px-4 py-3 rounded-xl font-bold text-sm bg-white border-2 border-violet-200 text-violet-800 hover:bg-violet-50 hover:border-violet-400 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex flex-col items-center justify-center"
+                    >
+                      <span className="text-base font-bold">1/{n}</span>
+                      <span className="text-xs font-normal text-gray-600 mt-1">₺{payAmount}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </div>
         </div>
       )}

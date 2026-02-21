@@ -4496,6 +4496,26 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
   }
 });
 
+// Yazıcı listesi önbelleği (art arda yazdırmalarda gecikmeyi önler)
+let _printerNamesCache = { list: null, at: 0 };
+const PRINTER_CACHE_TTL_MS = 6000;
+function getAvailablePrinterNames() {
+  const now = Date.now();
+  if (_printerNamesCache.list && (now - _printerNamesCache.at) < PRINTER_CACHE_TTL_MS) {
+    return _printerNamesCache.list;
+  }
+  try {
+    const result = execSync('powershell -Command "Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json"', { encoding: 'utf-8', timeout: 4000 });
+    const data = JSON.parse(result);
+    const arr = Array.isArray(data) ? data : [data];
+    _printerNamesCache = { list: arr.map(p => (p && p.Name) ? p.Name : '').filter(n => n), at: now };
+    return _printerNamesCache.list;
+  } catch (e) {
+    if (_printerNamesCache.list) return _printerNamesCache.list;
+    return [];
+  }
+}
+
 // Yazıcıya yazdırma fonksiyonu
 async function printToPrinter(printerName, printerType, receiptData, isProductionReceipt = false, productionItems = null) {
   let printWindow = null;
@@ -4537,158 +4557,70 @@ async function printToPrinter(printerName, printerType, receiptData, isProductio
       printStarted = true;
       
       console.log('İçerik yüklendi, yazdırma başlatılıyor...');
-      
-      // İçeriğin tamamen render edilmesi için daha uzun bir bekleme
+      const RENDER_DELAY_MS = 120;
       setTimeout(async () => {
-        console.log('Yazdırma komutu gönderiliyor (varsayılan yazıcıya)...');
-        
-        // İçeriğin tamamen render edildiğinden emin olmak için scroll yüksekliğini kontrol et ve pencere boyutunu ayarla
+        console.log('Yazdırma komutu gönderiliyor...');
         try {
           const scrollHeight = await printWindow.webContents.executeJavaScript(`
             (function() {
               document.body.style.minHeight = 'auto';
               document.body.style.height = 'auto';
               document.documentElement.style.height = 'auto';
-              const height = Math.max(
-                document.body.scrollHeight, 
+              return Math.max(
+                document.body.scrollHeight,
                 document.body.offsetHeight,
                 document.documentElement.scrollHeight,
                 document.documentElement.offsetHeight
               );
-              return height;
             })();
           `);
-          
-          console.log('Sayfa yüksekliği:', scrollHeight, 'px');
-          
-          // Pencere yüksekliğini içeriğe göre ayarla (en az 2000px, içerik daha uzunsa onu kullan)
           const windowHeight = Math.max(3000, scrollHeight + 200);
           printWindow.setSize(220, windowHeight);
-          console.log('Pencere yüksekliği ayarlandı:', windowHeight, 'px');
-          
-          // Pencere boyutu uygulanması için kısa bekleme (hız için 50ms)
-          await new Promise(resolve => setTimeout(resolve, 50));
+          await new Promise(r => setTimeout(r, 50));
         } catch (error) {
           console.log('Yükseklik kontrolü hatası:', error);
         }
-        
-        // Yazıcı adını belirle
         let targetPrinterName = printerName;
-        
         if (targetPrinterName) {
-          console.log(`   🎯 Yazıcı adı belirtildi: "${targetPrinterName}"`);
-          console.log(`   🔍 Yazıcının sistemde mevcut olup olmadığı kontrol ediliyor...`);
-          
-          // Sistem yazıcılarını al
-          try {
-            const powershellCmd = `Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json`;
-            const result = execSync(`powershell -Command "${powershellCmd}"`, { 
-              encoding: 'utf-8',
-              timeout: 5000 
-            });
-            
-            const printersData = JSON.parse(result);
-            const printersArray = Array.isArray(printersData) ? printersData : [printersData];
-            const availablePrinters = printersArray.map(p => p.Name || '').filter(n => n);
-            
-            console.log(`   📋 Sistemde ${availablePrinters.length} yazıcı bulundu`);
-            
-            // Yazıcı adını kontrol et (tam eşleşme veya kısmi eşleşme)
-            const exactMatch = availablePrinters.find(p => p === targetPrinterName);
-            const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
-            
-            if (exactMatch) {
-              targetPrinterName = exactMatch;
-              console.log(`   ✅ Yazıcı bulundu (tam eşleşme): "${targetPrinterName}"`);
-            } else if (partialMatch) {
-              targetPrinterName = partialMatch;
-              console.log(`   ✅ Yazıcı bulundu (kısmi eşleşme): "${targetPrinterName}"`);
-            } else {
-              console.warn(`   ⚠️ Yazıcı "${targetPrinterName}" sistemde bulunamadı!`);
-              console.log(`   📋 Mevcut yazıcılar:`, availablePrinters);
-              console.log(`   → Varsayılan yazıcı kullanılacak`);
-              targetPrinterName = null; // Varsayılan yazıcıya yazdır
-            }
-          } catch (error) {
-            console.error(`   ❌ Yazıcı kontrolü hatası:`, error.message);
-            console.log(`   → Belirtilen yazıcı adı kullanılacak: "${targetPrinterName}"`);
-          }
-        } else {
-          console.log(`   ℹ️ Yazıcı adı belirtilmedi, varsayılan yazıcı kullanılacak`);
+          const availablePrinters = getAvailablePrinterNames();
+          const exactMatch = availablePrinters.find(p => p === targetPrinterName);
+          const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
+          if (exactMatch) targetPrinterName = exactMatch;
+          else if (partialMatch) targetPrinterName = partialMatch;
+          else targetPrinterName = null;
         }
-        
-        // Yazdırma seçenekleri
         const printOptions = {
-          silent: true, // Dialog gösterme
+          silent: true,
           printBackground: true,
-          margins: {
-            marginType: 'none' // Kenar boşluğu yok
-          },
-          landscape: false, // Dikey yönlendirme
+          margins: { marginType: 'none' },
+          landscape: false,
           scaleFactor: 100,
           pagesPerSheet: 1,
           collate: false,
-          color: false, // Siyah-beyaz (termal yazıcılar için)
+          color: false,
           copies: 1,
           duplex: 'none'
         };
-        
-        // Yazıcı adı belirtilmişse ekle
-        if (targetPrinterName) {
-          printOptions.deviceName = targetPrinterName;
-          console.log(`   📤 Yazdırma seçenekleri:`);
-          console.log(`      - Yazıcı: "${targetPrinterName}"`);
-          console.log(`      - Tip: ${printerType}`);
-        } else {
-          console.log(`   📤 Varsayılan yazıcıya yazdırılacak`);
-        }
-
-        console.log(`   🖨️ Yazdırma komutu gönderiliyor...`);
+        if (targetPrinterName) printOptions.deviceName = targetPrinterName;
         printWindow.webContents.print(printOptions, (success, errorType) => {
-          console.log(`\n   📥 Yazdırma callback alındı`);
-          console.log(`      - Başarılı: ${success}`);
-          console.log(`      - Yazıcı: "${targetPrinterName || 'Varsayılan'}"`);
-          console.log(`      - Tip: ${printerType}`);
-          
-          if (!success) {
-            console.error(`      ❌ Yazdırma başarısız!`);
-            console.error(`      Hata tipi: ${errorType}`);
-            printReject(new Error(errorType || 'Yazdırma başarısız'));
-          } else {
-            console.log(`      ✅ Yazdırma başarılı!`);
-            console.log(`      🖨️ "${targetPrinterName || 'Varsayılan yazıcı'}" yazıcısına yazdırıldı`);
-            printResolve(true);
-          }
-          
-          // Yazdırma işlemi tamamlandıktan sonra pencereyi kapat
+          if (!success) printReject(new Error(errorType || 'Yazdırma başarısız'));
+          else printResolve(true);
           setTimeout(() => {
             if (printWindow && !printWindow.isDestroyed()) {
               printWindow.close();
               printWindow = null;
             }
-          }, 1000);
+          }, 150);
         });
-        }, 2000); // 2 saniye bekle - içeriğin tamamen render edilmesi için
+      }, RENDER_DELAY_MS);
     };
 
-    printWindow.webContents.once('did-finish-load', () => {
-      console.log('did-finish-load event tetiklendi');
-      startPrint();
-    });
-
-    printWindow.webContents.once('dom-ready', () => {
-      console.log('dom-ready event tetiklendi');
-      startPrint();
-    });
+    printWindow.webContents.once('did-finish-load', () => startPrint());
+    printWindow.webContents.once('dom-ready', () => startPrint());
 
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(receiptHTML)}`);
     console.log('HTML URL yüklendi');
-
-    // Fallback: Eğer 1 saniye içinde hiçbir event tetiklenmezse yine de yazdır (hız için kısaltıldı)
-    setTimeout(() => {
-      console.log('Fallback timeout: Yazdırma zorla başlatılıyor...');
-      startPrint();
-    }, 1000);
+    setTimeout(() => startPrint(), 800);
 
     // Yazdırma işleminin tamamlanmasını bekle (max 10 saniye)
     await Promise.race([
@@ -5745,158 +5677,70 @@ async function printAdisyonToPrinter(printerName, printerType, items, adisyonDat
       printStarted = true;
       
       console.log('İçerik yüklendi, yazdırma başlatılıyor...');
-      
-      // İçeriğin tamamen render edilmesi için daha uzun bir bekleme
+      const RENDER_DELAY_MS = 120;
       setTimeout(async () => {
         console.log('Yazdırma komutu gönderiliyor...');
-        
-        // İçeriğin tamamen render edildiğinden emin olmak için scroll yüksekliğini kontrol et ve pencere boyutunu ayarla
         try {
           const scrollHeight = await printWindow.webContents.executeJavaScript(`
             (function() {
               document.body.style.minHeight = 'auto';
               document.body.style.height = 'auto';
               document.documentElement.style.height = 'auto';
-              const height = Math.max(
-                document.body.scrollHeight, 
+              return Math.max(
+                document.body.scrollHeight,
                 document.body.offsetHeight,
                 document.documentElement.scrollHeight,
                 document.documentElement.offsetHeight
               );
-              return height;
             })();
           `);
-          
-          console.log('Sayfa yüksekliği:', scrollHeight, 'px');
-          
-          // Pencere yüksekliğini içeriğe göre ayarla (en az 3000px, içerik daha uzunsa onu kullan)
           const windowHeight = Math.max(3000, scrollHeight + 200);
           printWindow.setSize(220, windowHeight);
-          console.log('Pencere yüksekliği ayarlandı:', windowHeight, 'px');
-          
-          // Pencere boyutu uygulanması için kısa bekleme (hız için 50ms)
-          await new Promise(resolve => setTimeout(resolve, 50));
+          await new Promise(r => setTimeout(r, 50));
         } catch (error) {
           console.log('Yükseklik kontrolü hatası:', error);
         }
-        
-        // Yazıcı adını belirle (güncelle)
         targetPrinterName = printerName;
-        
         if (targetPrinterName) {
-          console.log(`   🎯 Yazıcı adı belirtildi: "${targetPrinterName}"`);
-          console.log(`   🔍 Yazıcının sistemde mevcut olup olmadığı kontrol ediliyor...`);
-          
-          // Sistem yazıcılarını al
-          try {
-            const powershellCmd = `Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json`;
-            const result = execSync(`powershell -Command "${powershellCmd}"`, { 
-              encoding: 'utf-8',
-              timeout: 5000 
-            });
-            
-            const printersData = JSON.parse(result);
-            const printersArray = Array.isArray(printersData) ? printersData : [printersData];
-            const availablePrinters = printersArray.map(p => p.Name || '').filter(n => n);
-            
-            console.log(`   📋 Sistemde ${availablePrinters.length} yazıcı bulundu`);
-            
-            // Yazıcı adını kontrol et (tam eşleşme veya kısmi eşleşme)
-            const exactMatch = availablePrinters.find(p => p === targetPrinterName);
-            const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
-            
-            if (exactMatch) {
-              targetPrinterName = exactMatch;
-              console.log(`   ✅ Yazıcı bulundu (tam eşleşme): "${targetPrinterName}"`);
-            } else if (partialMatch) {
-              targetPrinterName = partialMatch;
-              console.log(`   ✅ Yazıcı bulundu (kısmi eşleşme): "${targetPrinterName}"`);
-            } else {
-              console.warn(`   ⚠️ Yazıcı "${targetPrinterName}" sistemde bulunamadı!`);
-              console.log(`   📋 Mevcut yazıcılar:`, availablePrinters);
-              console.log(`   → Varsayılan yazıcı kullanılacak`);
-              targetPrinterName = null; // Varsayılan yazıcıya yazdır
-            }
-          } catch (error) {
-            console.error(`   ❌ Yazıcı kontrolü hatası:`, error.message);
-            console.log(`   → Belirtilen yazıcı adı kullanılacak: "${targetPrinterName}"`);
-          }
-        } else {
-          console.log(`   ℹ️ Yazıcı adı belirtilmedi, varsayılan yazıcı kullanılacak`);
+          const availablePrinters = getAvailablePrinterNames();
+          const exactMatch = availablePrinters.find(p => p === targetPrinterName);
+          const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
+          if (exactMatch) targetPrinterName = exactMatch;
+          else if (partialMatch) targetPrinterName = partialMatch;
+          else targetPrinterName = null;
         }
-        
-        // Yazdırma seçenekleri
         const printOptions = {
-          silent: true, // Dialog gösterme
+          silent: true,
           printBackground: true,
-          margins: {
-            marginType: 'none' // Kenar boşluğu yok
-          },
-          landscape: false, // Dikey yönlendirme
+          margins: { marginType: 'none' },
+          landscape: false,
           scaleFactor: 100,
           pagesPerSheet: 1,
           collate: false,
-          color: false, // Siyah-beyaz (termal yazıcılar için)
+          color: false,
           copies: 1,
           duplex: 'none'
         };
-        
-        // Yazıcı adı belirtilmişse ekle
-        if (targetPrinterName) {
-          printOptions.deviceName = targetPrinterName;
-          console.log(`   📤 Yazdırma seçenekleri:`);
-          console.log(`      - Yazıcı: "${targetPrinterName}"`);
-          console.log(`      - Tip: ${printerType}`);
-        } else {
-          console.log(`   📤 Varsayılan yazıcıya yazdırılacak`);
-        }
-
-        console.log(`   🖨️ Yazdırma komutu gönderiliyor...`);
+        if (targetPrinterName) printOptions.deviceName = targetPrinterName;
         printWindow.webContents.print(printOptions, (success, errorType) => {
-          console.log(`\n   📥 Yazdırma callback alındı`);
-          console.log(`      - Başarılı: ${success}`);
-          console.log(`      - Yazıcı: "${targetPrinterName || 'Varsayılan'}"`);
-          console.log(`      - Tip: ${printerType}`);
-          
-          if (!success) {
-            console.error(`      ❌ Adisyon yazdırma başarısız!`);
-            console.error(`      Hata tipi: ${errorType}`);
-            printReject(new Error(errorType || 'Adisyon yazdırma başarısız'));
-          } else {
-            console.log(`      ✅ Adisyon yazdırma başarılı!`);
-            console.log(`      🖨️ "${targetPrinterName || 'Varsayılan yazıcı'}" yazıcısına yazdırıldı`);
-            printResolve(true);
-          }
-          
-          // Yazdırma işlemi tamamlandıktan sonra pencereyi kapat
+          if (!success) printReject(new Error(errorType || 'Adisyon yazdırma başarısız'));
+          else printResolve(true);
           setTimeout(() => {
             if (printWindow && !printWindow.isDestroyed()) {
               printWindow.close();
               printWindow = null;
             }
-          }, 1000);
+          }, 150);
         });
-      }, 2000); // 2 saniye bekle - içeriğin tamamen render edilmesi için
+      }, RENDER_DELAY_MS);
     };
 
-    printWindow.webContents.once('did-finish-load', () => {
-      console.log('did-finish-load event tetiklendi');
-      startPrint();
-    });
-
-    printWindow.webContents.once('dom-ready', () => {
-      console.log('dom-ready event tetiklendi');
-      startPrint();
-    });
+    printWindow.webContents.once('did-finish-load', () => startPrint());
+    printWindow.webContents.once('dom-ready', () => startPrint());
 
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(adisyonHTML)}`);
     console.log('HTML URL yüklendi');
-
-    // Fallback: Eğer 1 saniye içinde hiçbir event tetiklenmezse yine de yazdır (hız için kısaltıldı)
-    setTimeout(() => {
-      console.log('Fallback timeout: Yazdırma zorla başlatılıyor...');
-      startPrint();
-    }, 1000);
+    setTimeout(() => startPrint(), 800);
 
     // Yazdırma işleminin tamamlanmasını bekle (max 18 saniye - yazıcı kuyruğu için)
     await Promise.race([
@@ -6135,9 +5979,8 @@ async function printAdisyonByCategory(items, adisyonData) {
         }
       }
       
-      // Personel grupları arası kısa bekleme
       if (staffGroupIndex < staffGroups.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 300));
+        await new Promise(r => setTimeout(r, 80));
       }
     }
     
@@ -8343,7 +8186,11 @@ function generateMobileHTML(serverURL) {
         </div>
         <div style="margin-bottom: 24px;">
           <label style="display: block; margin-bottom: 8px; font-size: 15px; color: #374151; font-weight: 700;">İptal Edilecek Miktar:</label>
-          <input type="number" id="cancelItemQuantity" min="1" max="1" value="1" step="1" style="width: 100%; padding: 14px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 18px; font-weight: 700; text-align: center; outline: none; transition: all 0.3s; -moz-appearance: textfield;" onfocus="this.style.borderColor='#ef4444';" onblur="this.style.borderColor='#e5e7eb';" oninput="validateCancelQuantity()" onkeydown="if(event.key === 'e' || event.key === 'E' || event.key === '+' || event.key === '-') event.preventDefault();">
+          <div style="display: flex; align-items: center; gap: 12px; max-width: 280px; margin: 0 auto;">
+            <button type="button" onclick="changeCancelQuantity(-1)" style="flex: 0 0 52px; height: 52px; border: 2px solid #e5e7eb; border-radius: 14px; background: #f9fafb; font-size: 24px; font-weight: 800; color: #374151; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; -webkit-tap-highlight-color: transparent;" onmouseover="this.style.background='#ef4444'; this.style.borderColor='#ef4444'; this.style.color='white';" onmouseout="this.style.background='#f9fafb'; this.style.borderColor='#e5e7eb'; this.style.color='#374151';" ontouchstart="this.style.transform='scale(0.95)';" ontouchend="this.style.transform='scale(1)';">−</button>
+            <input type="number" id="cancelItemQuantity" min="1" max="1" value="1" step="1" style="flex: 1; padding: 14px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 22px; font-weight: 800; text-align: center; outline: none; transition: all 0.3s; -moz-appearance: textfield;" onfocus="this.style.borderColor='#ef4444';" onblur="this.style.borderColor='#e5e7eb'; validateCancelQuantity();" oninput="validateCancelQuantity()" onkeydown="if(event.key === 'e' || event.key === 'E' || event.key === '+' || event.key === '-') event.preventDefault();">
+            <button type="button" onclick="changeCancelQuantity(1)" style="flex: 0 0 52px; height: 52px; border: 2px solid #e5e7eb; border-radius: 14px; background: #f9fafb; font-size: 24px; font-weight: 800; color: #374151; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; -webkit-tap-highlight-color: transparent;" onmouseover="this.style.background='#22c55e'; this.style.borderColor='#22c55e'; this.style.color='white';" onmouseout="this.style.background='#f9fafb'; this.style.borderColor='#e5e7eb'; this.style.color='#374151';" ontouchstart="this.style.transform='scale(0.95)';" ontouchend="this.style.transform='scale(1)';">+</button>
+          </div>
         </div>
         <div style="background: #fef2f2; border: 2px solid #fecaca; border-radius: 12px; padding: 16px; margin-bottom: 24px;">
           <p style="margin: 0; font-size: 13px; color: #991b1b; font-weight: 600; line-height: 1.6;">
@@ -10731,12 +10578,22 @@ function generateMobileHTML(serverURL) {
     
     function validateCancelQuantity() {
       const input = document.getElementById('cancelItemQuantity');
-      let value = parseInt(input.value);
+      let value = parseInt(input.value, 10);
       if (isNaN(value) || value < 1) {
         value = 1;
       } else if (value > cancelItemMaxQuantity) {
         value = cancelItemMaxQuantity;
       }
+      input.value = value;
+    }
+    
+    function changeCancelQuantity(delta) {
+      const input = document.getElementById('cancelItemQuantity');
+      if (!input) return;
+      let value = parseInt(input.value, 10) || 1;
+      value = value + delta;
+      if (value < 1) value = 1;
+      if (value > cancelItemMaxQuantity) value = cancelItemMaxQuantity;
       input.value = value;
     }
     

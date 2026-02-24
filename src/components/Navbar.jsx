@@ -23,6 +23,10 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
+  const [networkDevices, setNetworkDevices] = useState([]);
+  const [networkScanning, setNetworkScanning] = useState(false);
+  const [mobilePreferredHost, setMobilePreferredHost] = useState(null);
+  const [computerHostname, setComputerHostname] = useState('');
   const menuRef = useRef(null);
   const hamburgerMenuRef = useRef(null);
 
@@ -120,6 +124,14 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     setShowMobileModal(true);
     loadStaff();
     try {
+      const preferred = await window.electronAPI.getMobilePreferredHost?.();
+      setMobilePreferredHost(preferred ?? null);
+    } catch (_) {}
+    try {
+      const hostname = await window.electronAPI.getComputerHostname?.();
+      setComputerHostname(hostname || '');
+    } catch (_) {}
+    try {
       const result = await window.electronAPI.generateQRCode();
       if (result && result.success) {
         setQrCode(result.qrCode);
@@ -130,6 +142,58 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     } catch (error) {
       console.error('QR kod oluşturma hatası:', error);
       showToast('QR kod oluşturulamadı', 'error');
+    }
+  };
+
+  const handleScanNetwork = async () => {
+    if (!window.electronAPI.scanNetwork) return;
+    setNetworkScanning(true);
+    setNetworkDevices([]);
+    try {
+      const result = await window.electronAPI.scanNetwork();
+      if (result && result.success && result.devices) {
+        setNetworkDevices(result.devices);
+        showToast(result.devices.length ? `${result.devices.length} cihaz bulundu` : 'Açık cihaz bulunamadı', 'info');
+      } else {
+        showToast(result?.error || 'Ağ taranamadı', 'error');
+      }
+    } catch (error) {
+      console.error('Ağ tarama hatası:', error);
+      showToast('Ağ taranamadı', 'error');
+    } finally {
+      setNetworkScanning(false);
+    }
+  };
+
+  const handleUseIpForQR = async (ip) => {
+    if (!window.electronAPI.setMobilePreferredHost) return;
+    try {
+      await window.electronAPI.setMobilePreferredHost(ip);
+      setMobilePreferredHost(ip);
+      const result = await window.electronAPI.generateQRCode();
+      if (result && result.success) {
+        setQrCode(result.qrCode);
+        setServerURL(result.url);
+        showToast('QR artık bu adrese yönlendiriliyor: ' + ip, 'success');
+      }
+    } catch (error) {
+      showToast('Ayarlanırken hata oluştu', 'error');
+    }
+  };
+
+  const handleClearPreferredHost = async () => {
+    if (!window.electronAPI.setMobilePreferredHost) return;
+    try {
+      await window.electronAPI.setMobilePreferredHost(null);
+      setMobilePreferredHost(null);
+      const result = await window.electronAPI.generateQRCode();
+      if (result && result.success) {
+        setQrCode(result.qrCode);
+        setServerURL(result.url);
+        showToast('QR tekrar otomatik IP kullanacak', 'info');
+      }
+    } catch (error) {
+      showToast('Ayarlanırken hata oluştu', 'error');
     }
   };
 
@@ -260,7 +324,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
         <div>
           <h1 className="text-lg font-bold text-pink-500">Makara Satış Sistemi</h1>
-          <p className="text-xs text-gray-500 font-medium">v7.0.0</p>
+          <p className="text-xs text-gray-500 font-medium">v8.0.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300">
           <DateTimeDisplay />
@@ -892,6 +956,80 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                       </div>
                     </div>
                   )}
+
+                  {/* Ağdaki cihazlar */}
+                  <div className="bg-white border-2 border-gray-200 rounded-2xl p-6 shadow-lg">
+                    <h4 className="text-lg font-bold text-gray-900 mb-3">Ağdaki cihazlar</h4>
+                    <p className="text-sm text-gray-500 mb-3">Hangi IP’nin kasa (mobil personel), kamera veya yazıcı olduğunu görün; QR’ı istediğiniz adrese kilitleyin.</p>
+                    {computerHostname && window.electronAPI?.setMobilePreferredHost && (
+                      <div className="mb-4 p-3 bg-emerald-50 border-2 border-emerald-200 rounded-xl">
+                        <p className="text-xs text-emerald-800 font-medium mb-2">IP değişse bile QR aynı kalsın</p>
+                        <p className="text-sm text-gray-700 mb-2">Kasa bilgisayar adı: <span className="font-mono font-semibold text-gray-900">{computerHostname}</span></p>
+                        <button
+                          type="button"
+                          onClick={() => handleUseIpForQR(computerHostname)}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold rounded-lg"
+                        >
+                          QR'da bilgisayar adını kullan
+                        </button>
+                      </div>
+                    )}
+                    {window.electronAPI?.scanNetwork && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleScanNetwork}
+                          disabled={networkScanning}
+                          className="mb-4 px-4 py-2.5 bg-slate-700 hover:bg-slate-600 disabled:opacity-60 text-white rounded-xl text-sm font-semibold flex items-center gap-2"
+                        >
+                          {networkScanning ? (
+                            <>
+                              <span className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" />
+                              Taranıyor...
+                            </>
+                          ) : (
+                            <>
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                              </svg>
+                              Ağı tara
+                            </>
+                          )}
+                        </button>
+                        {mobilePreferredHost && (
+                          <div className="mb-3 flex items-center gap-2 flex-wrap">
+                            <span className="text-xs text-gray-600">QR sabit adres: <strong className="text-gray-900">{mobilePreferredHost}</strong></span>
+                            <button
+                              type="button"
+                              onClick={handleClearPreferredHost}
+                              className="text-xs text-blue-600 hover:underline"
+                            >
+                              Otomatik IP’ye dön
+                            </button>
+                          </div>
+                        )}
+                        {networkDevices.length > 0 && (
+                          <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {networkDevices.map((d) => (
+                              <div key={d.ip} className="flex items-center justify-between gap-2 py-2 px-3 bg-gray-50 rounded-xl border border-gray-200">
+                                <div>
+                                  <span className="font-mono text-sm font-semibold text-gray-900">{d.ip}</span>
+                                  <span className="ml-2 text-xs text-gray-600">{d.label}</span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => handleUseIpForQR(d.ip)}
+                                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg whitespace-nowrap"
+                                  >
+                                    QR’da bu adresi kullan
+                                  </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
 
                   {/* QR Kod Section */}
                   <div className="bg-white border-2 border-gray-200 rounded-2xl p-6 shadow-lg">

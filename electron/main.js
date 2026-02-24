@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, Menu, dialog, webContents } = require('elec
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
@@ -10,6 +10,7 @@ const { Server } = require('socket.io');
 const QRCode = require('qrcode');
 const os = require('os');
 const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
+
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 
 // Firebase entegrasyonu
@@ -1860,7 +1861,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
       // Açıklama var, işleme devam et - fiş yazdır
       cancelReason = cancelReason.trim();
       
-      // İptal fişi yazdır (sadece açıklama varsa) - arka planda
+      // İptal fişi yazdır (bilgisayar/kasa — yazdırma tamamlansın)
       const now = new Date();
       const cancelDate = now.toLocaleDateString('tr-TR');
       const cancelTime = getFormattedTime(now);
@@ -1876,11 +1877,12 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
         categoryName: categoryName
       };
 
-      // Yazıcıya gönderme işlemini arka planda yap (await kullanmadan)
-      printCancelReceipt(printerName, printerType, cancelReceiptData).catch(error => {
-        console.error('İptal fişi yazdırma hatası:', error);
-        // Yazdırma hatası olsa bile iptal işlemi zaten tamamlandı
-      });
+      try {
+        await printCancelReceipt(printerName, printerType, cancelReceiptData);
+      } catch (err) {
+        console.error('İptal fişi yazdırma hatası:', err);
+        // Yazdırma hatası olsa bile iptal işlemi devam eder
+      }
 
   // İptal edilecek tutarı hesapla (ikram değilse)
   const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
@@ -4516,129 +4518,185 @@ function getAvailablePrinterNames() {
   }
 }
 
-// Yazıcıya yazdırma fonksiyonu
+// Metin belgesi olarak yazdır - temp .txt + PowerShell (yol/kaçış güvenli: -File script)
+function printRawToPrinter(printerName, text) {
+  let targetName = printerName || null;
+  if (targetName) {
+    const available = getAvailablePrinterNames();
+    const exact = available.find(p => p === targetName);
+    const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
+    targetName = exact || partial || null;
+  }
+  const tmpDir = os.tmpdir();
+  const tmpFile = path.join(tmpDir, 'makara-print-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.txt');
+  fs.writeFileSync(tmpFile, text, { encoding: 'utf8' });
+  const cleanup = () => { try { fs.unlinkSync(tmpFile); } catch (_) {} try { if (ps1Path) fs.unlinkSync(ps1Path); } catch (_) {} };
+  const ps1Path = path.join(tmpDir, 'makara-print-' + Date.now() + '.ps1');
+  const ps1Content = targetName
+    ? `$ErrorActionPreference = 'Stop'; Get-Content -LiteralPath $args[0] -Encoding UTF8 | Out-Printer -Name $args[1]`
+    : `$ErrorActionPreference = 'Stop'; Get-Content -LiteralPath $args[0] -Encoding UTF8 | Out-Printer`;
+  fs.writeFileSync(ps1Path, ps1Content, { encoding: 'utf8' });
+  try {
+    const args = targetName
+      ? ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1Path, tmpFile, targetName]
+      : ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1Path, tmpFile];
+    const result = spawnSync('powershell.exe', args, {
+      windowsHide: true,
+      timeout: 20000,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    if (result.status !== 0) {
+      const errMsg = (result.stderr || result.stdout || '').trim() || 'Yazdırma hatası';
+      console.error('   [printRawToPrinter] PowerShell:', errMsg);
+      cleanup();
+      return Promise.reject(new Error(errMsg));
+    }
+    console.log('   [printRawToPrinter] Gönderildi:', targetName || 'Varsayılan');
+    setTimeout(cleanup, 3000);
+    return Promise.resolve({ success: true, printerName: targetName || 'Varsayılan' });
+  } catch (err) {
+    console.error('   [printRawToPrinter] Hata:', err.message || err);
+    cleanup();
+    return Promise.reject(err || new Error('Yazdırma hatası'));
+  }
+}
+
+// Üretim fişi metin (termal RAW)
+function generateProductionReceiptText(items, receiptData) {
+  const lines = [
+    '--------------------------------',
+    '         MAKARA',
+    '      ÜRETİM FİŞİ',
+    '--------------------------------',
+    `Tarih: ${receiptData.sale_date || new Date().toLocaleDateString('tr-TR')}`,
+    `Saat:  ${receiptData.sale_time || getFormattedTime(new Date())}`,
+    receiptData.sale_id ? `Fiş No: #${receiptData.sale_id}` : null,
+    receiptData.order_id ? `Sipariş No: #${receiptData.order_id}` : null,
+    '--------------------------------',
+    'Ürün                  Adet',
+    '--------------------------------'
+  ].filter(Boolean);
+  items.forEach(item => {
+    const name = (item.name || '').substring(0, 22);
+    const qty = String(item.quantity || 0);
+    lines.push(`${name.padEnd(22)} ${qty}`);
+    if (item.isGift) lines.push('  (İKRAM)');
+    if (item.extraNote) lines.push(`  Not: ${item.extraNote}`);
+  });
+  lines.push('--------------------------------');
+  if (receiptData.orderNote) {
+    lines.push('Sipariş notu:');
+    lines.push(receiptData.orderNote);
+    lines.push('--------------------------------');
+  }
+  lines.push('');
+  return lines.join('\r\n') + '\r\n';
+}
+
+// Kasa fişi metin (termal RAW)
+function generateReceiptText(receiptData) {
+  const lines = [
+    '--------------------------------',
+    '         MAKARA',
+    receiptData.tableName
+      ? (receiptData.tableType === 'online' ? '   Online Siparis' : '   Masa Siparisi')
+      : '    Satis Fisi',
+    '--------------------------------',
+    receiptData.tableName ? `Masa: ${receiptData.tableName.replace('Online Siparis Musteri: ', '')}` : null,
+    receiptData.customer_phone ? `Tel: ${receiptData.customer_phone}` : null,
+    receiptData.customer_address ? `Adres: ${receiptData.customer_address}` : null,
+    `Tarih: ${receiptData.sale_date || new Date().toLocaleDateString('tr-TR')}`,
+    `Saat:  ${receiptData.sale_time || getFormattedTime(new Date())}`,
+    '--------------------------------',
+    'Ürün              Adet   Tutar',
+    '--------------------------------'
+  ].filter(Boolean);
+  (receiptData.items || []).forEach(item => {
+    const isGift = item.isGift || false;
+    const name = (item.name || '').substring(0, 16);
+    const qty = String(item.quantity || 0);
+    const total = isGift ? '0.00' : (item.price * item.quantity).toFixed(2);
+    lines.push(`${name.padEnd(16)} ${qty.padStart(3)}  TL${total}`);
+    if (isGift) lines.push('  (İKRAM)');
+    if (item.extraNote) lines.push(`  Not: ${item.extraNote}`);
+  });
+  lines.push('--------------------------------');
+  const totalAmount = (receiptData.totalAmount != null ? receiptData.totalAmount : (receiptData.items || []).reduce((s, i) => s + (i.isGift ? 0 : i.price * i.quantity), 0));
+  lines.push(`TOPLAM:              TL${Number(totalAmount).toFixed(2)}`);
+  lines.push('--------------------------------');
+  if (receiptData.orderNote) {
+    lines.push('Not: ' + receiptData.orderNote);
+    lines.push('--------------------------------');
+  }
+  lines.push('');
+  return lines.join('\r\n') + '\r\n';
+}
+
+// Yazıcıya yazdırma — HTML ile (okunaklı, düzgün düzen; metin belgesi silik/bozuk çıkıyordu)
 async function printToPrinter(printerName, printerType, receiptData, isProductionReceipt = false, productionItems = null) {
   let printWindow = null;
-  
   try {
     const receiptType = isProductionReceipt ? 'ÜRETİM FİŞİ' : 'KASA FİŞİ';
-    console.log(`   [printToPrinter] ${receiptType} yazdırılıyor: "${printerName || 'Varsayılan'}"`);
-    
-    // Fiş içeriğini HTML olarak oluştur
-    const receiptHTML = isProductionReceipt 
+    console.log(`   [printToPrinter] ${receiptType} (HTML): "${printerName || 'Varsayılan'}"`);
+    const receiptHTML = isProductionReceipt
       ? generateProductionReceiptHTML(productionItems || receiptData.items, receiptData)
       : generateReceiptHTML(receiptData);
-
-    // Gizli bir pencere oluştur ve fiş içeriğini yükle
     printWindow = new BrowserWindow({
       show: false,
-      width: 220, // 58mm ≈ 220px (72 DPI'da)
-      height: 3000, // Yüksekliği daha da artırdık - tüm içeriğin kesinlikle görünmesi için
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true
-      }
+      width: 220,
+      height: 3000,
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
     });
-
-    // HTML içeriğini data URL olarak yükle
-    console.log('Yazdırma penceresi oluşturuldu, HTML yükleniyor...');
-    
-    // Yazdırma işlemini Promise ile sarmalıyoruz
     let printResolve, printReject;
-    const printPromise = new Promise((resolve, reject) => {
-      printResolve = resolve;
-      printReject = reject;
-    });
-
-    // Hem did-finish-load hem de dom-ready event'lerini dinle
+    const printPromise = new Promise((resolve, reject) => { printResolve = resolve; printReject = reject; });
     let printStarted = false;
     const startPrint = () => {
       if (printStarted) return;
       printStarted = true;
-      
-      console.log('İçerik yüklendi, yazdırma başlatılıyor...');
-      const RENDER_DELAY_MS = 120;
-      setTimeout(async () => {
-        console.log('Yazdırma komutu gönderiliyor...');
+      setImmediate(async () => {
         try {
           const scrollHeight = await printWindow.webContents.executeJavaScript(`
             (function() {
-              document.body.style.minHeight = 'auto';
-              document.body.style.height = 'auto';
+              document.body.style.minHeight = 'auto'; document.body.style.height = 'auto';
               document.documentElement.style.height = 'auto';
-              return Math.max(
-                document.body.scrollHeight,
-                document.body.offsetHeight,
-                document.documentElement.scrollHeight,
-                document.documentElement.offsetHeight
-              );
+              return Math.max(document.body.scrollHeight, document.body.offsetHeight,
+                document.documentElement.scrollHeight, document.documentElement.offsetHeight);
             })();
           `);
-          const windowHeight = Math.max(3000, scrollHeight + 200);
-          printWindow.setSize(220, windowHeight);
-          await new Promise(r => setTimeout(r, 50));
-        } catch (error) {
-          console.log('Yükseklik kontrolü hatası:', error);
-        }
-        let targetPrinterName = printerName;
-        if (targetPrinterName) {
-          const availablePrinters = getAvailablePrinterNames();
-          const exactMatch = availablePrinters.find(p => p === targetPrinterName);
-          const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
-          if (exactMatch) targetPrinterName = exactMatch;
-          else if (partialMatch) targetPrinterName = partialMatch;
-          else targetPrinterName = null;
+          printWindow.setSize(220, Math.max(3000, scrollHeight + 200));
+        } catch (_) {}
+        let targetName = printerName;
+        if (targetName) {
+          const available = getAvailablePrinterNames();
+          const exact = available.find(p => p === targetName);
+          const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
+          targetName = exact || partial || null;
         }
         const printOptions = {
-          silent: true,
-          printBackground: true,
-          margins: { marginType: 'none' },
-          landscape: false,
-          scaleFactor: 100,
-          pagesPerSheet: 1,
-          collate: false,
-          color: false,
-          copies: 1,
-          duplex: 'none'
+          silent: true, printBackground: true, margins: { marginType: 'none' },
+          landscape: false, scaleFactor: 100, pagesPerSheet: 1, collate: false, color: false, copies: 1, duplex: 'none'
         };
-        if (targetPrinterName) printOptions.deviceName = targetPrinterName;
-        printWindow.webContents.print(printOptions, (success, errorType) => {
-          if (!success) printReject(new Error(errorType || 'Yazdırma başarısız'));
+        if (targetName) printOptions.deviceName = targetName;
+        printWindow.webContents.print(printOptions, (success, errType) => {
+          if (!success) printReject(new Error(errType || 'Yazdırma başarısız'));
           else printResolve(true);
-          setTimeout(() => {
-            if (printWindow && !printWindow.isDestroyed()) {
-              printWindow.close();
-              printWindow = null;
-            }
-          }, 150);
+          setTimeout(() => { if (printWindow && !printWindow.isDestroyed()) { printWindow.close(); printWindow = null; } }, 150);
         });
-      }, RENDER_DELAY_MS);
+      });
     };
-
     printWindow.webContents.once('did-finish-load', () => startPrint());
     printWindow.webContents.once('dom-ready', () => startPrint());
-
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(receiptHTML)}`);
-    console.log('HTML URL yüklendi');
-    setTimeout(() => startPrint(), 800);
-
-    // Yazdırma işleminin tamamlanmasını bekle (max 10 saniye)
+    setImmediate(() => startPrint());
     await Promise.race([
       printPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Yazdırma timeout')), 10000))
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Yazdırma timeout')), 10000))
     ]);
-
-    console.log(`   [printToPrinter] Yazdırma işlemi tamamlandı`);
-    return { success: true, printerName: targetPrinterName || 'Varsayılan' };
+    return { success: true, printerName: printerName || 'Varsayılan' };
   } catch (error) {
     console.error(`   [printToPrinter] Hata:`, error.message);
-    console.error(`   Hata detayı:`, error.stack);
-    
-    // Hata durumunda pencereyi temizle
-    if (printWindow && !printWindow.isDestroyed()) {
-      printWindow.close();
-    }
-    
+    if (printWindow && !printWindow.isDestroyed()) printWindow.close();
     return { success: false, error: error.message, printerName: printerName || 'Varsayılan' };
   }
 }
@@ -5545,6 +5603,130 @@ ipcMain.handle('get-cashier-printer', () => {
   return db.settings.cashierPrinter || null;
 });
 
+// Sepetteyken fiş hazırla (masaüstü/mobil — gönder/kaydet anında yazdırmak için)
+ipcMain.handle('prepare-adisyon-receipts', (event, adisyonData) => {
+  const items = adisyonData?.items || [];
+  return prepareAdisyonReceipts(items, adisyonData || {});
+});
+
+// Masaüstü: sepetteyken adisyon fişini arka planda hazırla (Adisyon Yazdır / Masaya Kaydet anında yazdırılır)
+ipcMain.handle('prepare-adisyon-desktop', (event, adisyonData) => {
+  try {
+    const items = adisyonData?.items || [];
+    if (!items.length) return { printJobId: null };
+
+    const cashierPrinter = db.settings.cashierPrinter;
+    if (!cashierPrinter || !cashierPrinter.printerName) return { printJobId: null };
+
+    const totalAmount = adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
+      if (item.isGift) return sum;
+      return sum + (item.price * item.quantity);
+    }, 0);
+    const receiptData = {
+      sale_id: null,
+      totalAmount,
+      paymentMethod: 'Adisyon',
+      sale_date: adisyonData.sale_date || new Date().toLocaleDateString('tr-TR'),
+      sale_time: adisyonData.sale_time || getFormattedTime(new Date()),
+      items,
+      orderNote: adisyonData.orderNote || null,
+      tableName: adisyonData.tableName || null,
+      tableType: adisyonData.tableType || null,
+      cashierOnly: true,
+      customer_name: adisyonData.customer_name || null,
+      customer_phone: adisyonData.customer_phone || null,
+      customer_address: adisyonData.customer_address || null,
+      address_note: adisyonData.address_note || null,
+      discountInfo: adisyonData.discountInfo || null,
+      subtotal: adisyonData.subtotal !== undefined ? adisyonData.subtotal : totalAmount,
+      discountAmount: adisyonData.discountAmount || 0,
+      finalTotal: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : totalAmount
+    };
+    const receiptHTML = generateReceiptHTML(receiptData);
+    const htmlReceipts = { [cashierPrinter.printerName]: receiptHTML };
+    const printJobId = preloadPrintWindows(htmlReceipts);
+    return { printJobId };
+  } catch (err) {
+    console.error('prepare-adisyon-desktop hatası:', err);
+    return { printJobId: null };
+  }
+});
+
+// Online sipariş: sepetteyken adisyonu (QR'lı, kasa fişi) arka planda hazırla — Adisyon Yazdır anında yazdırılır
+ipcMain.handle('prepare-adisyon-online', async (event, adisyonData) => {
+  try {
+    const items = adisyonData?.items || [];
+    if (!items.length) return { printJobId: null };
+    const cashierPrinter = db.settings.cashierPrinter;
+    if (!cashierPrinter || !cashierPrinter.printerName) return { printJobId: null };
+    const totalAmount = adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
+      if (item.isGift) return sum;
+      return sum + (item.price * item.quantity);
+    }, 0);
+    const receiptData = {
+      sale_id: null,
+      totalAmount,
+      paymentMethod: 'Adisyon',
+      sale_date: adisyonData.sale_date || new Date().toLocaleDateString('tr-TR'),
+      sale_time: adisyonData.sale_time || getFormattedTime(new Date()),
+      items,
+      orderNote: adisyonData.orderNote || null,
+      tableName: adisyonData.tableName || null,
+      tableType: 'online',
+      cashierOnly: true,
+      customer_name: adisyonData.customer_name || null,
+      customer_phone: adisyonData.customer_phone || null,
+      customer_address: adisyonData.customer_address || null,
+      address_note: adisyonData.address_note || null,
+      discountInfo: adisyonData.discountInfo || null,
+      subtotal: adisyonData.subtotal !== undefined ? adisyonData.subtotal : totalAmount,
+      discountAmount: adisyonData.discountAmount || 0,
+      finalTotal: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : totalAmount
+    };
+    if (adisyonData.customer_address) {
+      try {
+        const mapsURL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(adisyonData.customer_address)}`;
+        receiptData.qrCodeDataURL = await QRCode.toDataURL(mapsURL, { width: 280, margin: 4, errorCorrectionLevel: 'H', color: { dark: '#000000', light: '#FFFFFF' } });
+      } catch (_) {}
+    }
+    const receiptHTML = generateReceiptHTML(receiptData);
+    const htmlReceipts = { [cashierPrinter.printerName]: receiptHTML };
+    const printJobId = preloadPrintWindows(htmlReceipts);
+    return { printJobId };
+  } catch (err) {
+    console.error('prepare-adisyon-online hatası:', err);
+    return { printJobId: null };
+  }
+});
+
+// Hazır fişi anında yazdır (masaüstü Adisyon Yazdır / Masaya Kaydet / Online Adisyon Yazdır)
+ipcMain.handle('print-adisyon-by-job-id', async (event, printJobId) => {
+  if (!printJobId || !preloadedPrintJobs.has(printJobId)) {
+    return { success: false, error: 'Hazır fiş bulunamadı' };
+  }
+  try {
+    await printPreloadedJob(printJobId);
+    return { success: true };
+  } catch (err) {
+    console.error('print-adisyon-by-job-id hatası:', err);
+    return { success: false, error: err?.message || 'Yazdırılamadı' };
+  }
+});
+
+// Hazır fişleri anında yazdır (hazır metinleri yazıcıya gönder)
+ipcMain.handle('print-adisyon-prepared', async (event, receipts) => {
+  if (!receipts || typeof receipts !== 'object') return { success: false, error: 'Geçersiz fiş verisi' };
+  const entries = Object.entries(receipts);
+  if (entries.length === 0) return { success: true };
+  const results = await Promise.all(
+    entries.map(([printerName, text]) =>
+      printRawToPrinter(printerName, text).catch(err => ({ success: false, error: err?.message, printerName }))
+    )
+  );
+  const failed = results.filter(r => r && !r.success);
+  return { success: failed.length === 0, error: failed.length ? failed.map(f => f?.error).join('; ') : null };
+});
+
 // Adisyon yazdırma handler - Kategori bazlı yazdırma yapar
 ipcMain.handle('print-adisyon', async (event, adisyonData) => {
   console.log('\n=== ADİSYON YAZDIRMA İŞLEMİ BAŞLADI ===');
@@ -5559,68 +5741,48 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
     const items = adisyonData.items || [];
     console.log(`   Toplam ${items.length} ürün bulundu`);
     
-    // Eğer cashierOnly flag'i true ise, sadece kasa yazıcısından fiyatlı fiş yazdır
-    // ANCAK online sipariş için QR kod kategori bazlı adisyonun en altına eklenecek, ayrı fiş olmayacak
-    if (adisyonData.cashierOnly === true && adisyonData.tableType !== 'online') {
-      console.log('   💰 Sadece kasa yazıcısından fiyatlı fiş yazdırılıyor...');
-      
+    // cashierOnly = true → Sadece kasa yazıcısından tek fiş (iç masa + online hepsi; online ise adres QR'lı)
+    if (adisyonData.cashierOnly === true) {
+      console.log('   💰 Kasa yazıcısından fiyatlı fiş yazdırılıyor...');
       const cashierPrinter = db.settings.cashierPrinter;
       if (!cashierPrinter || !cashierPrinter.printerName) {
         console.error('   ❌ Kasa yazıcısı ayarlanmamış');
         return { success: false, error: 'Kasa yazıcısı ayarlanmamış' };
       }
-      
-      // Receipt formatında fiyatlı fiş oluştur
+      const totalAmount = adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
+        if (item.isGift) return sum;
+        return sum + (item.price * item.quantity);
+      }, 0);
       const receiptData = {
         sale_id: null,
-        totalAmount: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
-          if (item.isGift) return sum;
-          return sum + (item.price * item.quantity);
-        }, 0),
+        totalAmount,
         paymentMethod: 'Adisyon',
         sale_date: adisyonData.sale_date || new Date().toLocaleDateString('tr-TR'),
         sale_time: adisyonData.sale_time || getFormattedTime(new Date()),
-        items: items,
+        items,
         orderNote: adisyonData.orderNote || null,
         tableName: adisyonData.tableName || null,
         tableType: adisyonData.tableType || null,
         cashierOnly: true,
-        // Online sipariş müşteri bilgileri
         customer_name: adisyonData.customer_name || null,
         customer_phone: adisyonData.customer_phone || null,
         customer_address: adisyonData.customer_address || null,
         address_note: adisyonData.address_note || null,
-        // İndirim bilgileri
         discountInfo: adisyonData.discountInfo || null,
-        subtotal: adisyonData.subtotal !== undefined ? adisyonData.subtotal : items.reduce((sum, item) => {
-          if (item.isGift) return sum;
-          return sum + (item.price * item.quantity);
-        }, 0),
+        subtotal: adisyonData.subtotal !== undefined ? adisyonData.subtotal : totalAmount,
         discountAmount: adisyonData.discountAmount || 0,
-        finalTotal: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
-          if (item.isGift) return sum;
-          return sum + (item.price * item.quantity);
-        }, 0)
+        finalTotal: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : totalAmount
       };
-      
-      // Kasa yazıcısından fiyatlı fiş yazdır
-      await printToPrinter(
-        cashierPrinter.printerName,
-        cashierPrinter.printerType,
-        receiptData,
-        false,
-        null
-      );
-      
+      // Online sipariş: adres QR'ı fişe ekle
+      if (adisyonData.tableType === 'online' && adisyonData.customer_address) {
+        try {
+          const mapsURL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(adisyonData.customer_address)}`;
+          receiptData.qrCodeDataURL = await QRCode.toDataURL(mapsURL, { width: 280, margin: 4, errorCorrectionLevel: 'H', color: { dark: '#000000', light: '#FFFFFF' } });
+        } catch (_) {}
+      }
+      await printToPrinter(cashierPrinter.printerName, cashierPrinter.printerType, receiptData, false, null);
       console.log(`\n=== KASA YAZICISINDAN FİYATLI FİŞ YAZDIRMA TAMAMLANDI ===`);
       return { success: true, error: null };
-    }
-    
-    // Online sipariş için cashierOnly: true olsa bile kategori bazlı adisyon yazdır (QR kod en altta)
-    if (adisyonData.cashierOnly === true && adisyonData.tableType === 'online') {
-      console.log('   📱 Online sipariş: Kategori bazlı adisyon yazdırılıyor (QR kod en altta birleşik)...');
-      // cashierOnly flag'ini false yap ki kategori bazlı yazdırma yapılsın
-      adisyonData.cashierOnly = false;
     }
     
     // Normal kategori bazlı adisyon yazdırma (online sipariş için QR kod kategori bazlı adisyonun en altına eklenecek)
@@ -5640,127 +5802,234 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
   }
 });
 
-// Adisyon yazdırma fonksiyonu
+// Adisyon yazdırma — HTML ile (okunaklı; metin belgesi silik/bozuk çıkıyordu)
 async function printAdisyonToPrinter(printerName, printerType, items, adisyonData) {
   let printWindow = null;
-  
   try {
-    console.log(`   [printAdisyonToPrinter] Adisyon yazdırılıyor: "${printerName || 'Varsayılan'}"`);
-    
-    // Adisyon HTML içeriğini oluştur
+    console.log(`   [printAdisyonToPrinter] Adisyon (HTML): "${printerName || 'Varsayılan'}"`);
     const adisyonHTML = generateAdisyonHTML(items, adisyonData);
-
-    // Gizli bir pencere oluştur ve adisyon içeriğini yükle
     printWindow = new BrowserWindow({
-      show: false,
-      width: 220, // 58mm ≈ 220px (72 DPI'da)
-      height: 3000,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true
-      }
+      show: false, width: 220, height: 3000,
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
     });
-
     let printResolve, printReject;
-    const printPromise = new Promise((resolve, reject) => {
-      printResolve = resolve;
-      printReject = reject;
-    });
-
-    // Yazıcı adını başlangıçta belirle (dışarıda kullanılabilmesi için)
-    let targetPrinterName = printerName;
-
-    // Hem did-finish-load hem de dom-ready event'lerini dinle
+    const printPromise = new Promise((resolve, reject) => { printResolve = resolve; printReject = reject; });
     let printStarted = false;
     const startPrint = () => {
       if (printStarted) return;
       printStarted = true;
-      
-      console.log('İçerik yüklendi, yazdırma başlatılıyor...');
-      const RENDER_DELAY_MS = 120;
-      setTimeout(async () => {
-        console.log('Yazdırma komutu gönderiliyor...');
+      setImmediate(async () => {
         try {
           const scrollHeight = await printWindow.webContents.executeJavaScript(`
             (function() {
-              document.body.style.minHeight = 'auto';
-              document.body.style.height = 'auto';
+              document.body.style.minHeight = 'auto'; document.body.style.height = 'auto';
               document.documentElement.style.height = 'auto';
-              return Math.max(
-                document.body.scrollHeight,
-                document.body.offsetHeight,
-                document.documentElement.scrollHeight,
-                document.documentElement.offsetHeight
-              );
+              return Math.max(document.body.scrollHeight, document.body.offsetHeight,
+                document.documentElement.scrollHeight, document.documentElement.offsetHeight);
             })();
           `);
-          const windowHeight = Math.max(3000, scrollHeight + 200);
-          printWindow.setSize(220, windowHeight);
-          await new Promise(r => setTimeout(r, 50));
-        } catch (error) {
-          console.log('Yükseklik kontrolü hatası:', error);
-        }
-        targetPrinterName = printerName;
-        if (targetPrinterName) {
-          const availablePrinters = getAvailablePrinterNames();
-          const exactMatch = availablePrinters.find(p => p === targetPrinterName);
-          const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
-          if (exactMatch) targetPrinterName = exactMatch;
-          else if (partialMatch) targetPrinterName = partialMatch;
-          else targetPrinterName = null;
+          printWindow.setSize(220, Math.max(3000, scrollHeight + 200));
+        } catch (_) {}
+        let targetName = printerName;
+        if (targetName) {
+          const available = getAvailablePrinterNames();
+          const exact = available.find(p => p === targetName);
+          const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
+          targetName = exact || partial || null;
         }
         const printOptions = {
-          silent: true,
-          printBackground: true,
-          margins: { marginType: 'none' },
-          landscape: false,
-          scaleFactor: 100,
-          pagesPerSheet: 1,
-          collate: false,
-          color: false,
-          copies: 1,
-          duplex: 'none'
+          silent: true, printBackground: true, margins: { marginType: 'none' },
+          landscape: false, scaleFactor: 100, pagesPerSheet: 1, collate: false, color: false, copies: 1, duplex: 'none'
         };
-        if (targetPrinterName) printOptions.deviceName = targetPrinterName;
-        printWindow.webContents.print(printOptions, (success, errorType) => {
-          if (!success) printReject(new Error(errorType || 'Adisyon yazdırma başarısız'));
+        if (targetName) printOptions.deviceName = targetName;
+        printWindow.webContents.print(printOptions, (success, errType) => {
+          if (!success) printReject(new Error(errType || 'Adisyon yazdırma başarısız'));
           else printResolve(true);
-          setTimeout(() => {
-            if (printWindow && !printWindow.isDestroyed()) {
-              printWindow.close();
-              printWindow = null;
-            }
-          }, 150);
+          setTimeout(() => { if (printWindow && !printWindow.isDestroyed()) { printWindow.close(); printWindow = null; } }, 150);
         });
-      }, RENDER_DELAY_MS);
+      });
     };
-
     printWindow.webContents.once('did-finish-load', () => startPrint());
     printWindow.webContents.once('dom-ready', () => startPrint());
-
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(adisyonHTML)}`);
-    console.log('HTML URL yüklendi');
-    setTimeout(() => startPrint(), 800);
-
-    // Yazdırma işleminin tamamlanmasını bekle (max 18 saniye - yazıcı kuyruğu için)
+    setImmediate(() => startPrint());
     await Promise.race([
       printPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('Adisyon yazdırma timeout')), 18000))
+      new Promise((_, rej) => setTimeout(() => rej(new Error('Adisyon yazdırma timeout')), 18000))
     ]);
-
-    console.log(`   [printAdisyonToPrinter] Adisyon yazdırma işlemi tamamlandı`);
-    return { success: true, printerName: targetPrinterName || 'Varsayılan' };
+    return { success: true, printerName: printerName || 'Varsayılan' };
   } catch (error) {
     console.error(`   [printAdisyonToPrinter] Hata:`, error.message);
-    console.error(`   Hata detayı:`, error.stack);
-    
-    // Hata durumunda pencereyi temizle
-    if (printWindow && !printWindow.isDestroyed()) {
-      printWindow.close();
-    }
-    
+    if (printWindow && !printWindow.isDestroyed()) printWindow.close();
     return { success: false, error: error.message, printerName: printerName || 'Varsayılan' };
   }
+}
+
+// Sepetteyken fişi hazırla — yazıcı adı -> metin map döner (gönder/kaydet anında yazdırmak için)
+function prepareAdisyonReceipts(items, adisyonData) {
+  const receipts = {};
+  if (!items || items.length === 0) return receipts;
+  const categoryItemsMap = new Map();
+  const categoryInfoMap = new Map();
+  for (const item of items) {
+    const product = db.products.find(p => String(p.id) === String(item.id));
+    const categoryId = product?.category_id ?? 'no-category';
+    const category = db.categories.find(c => c.id === categoryId);
+    if (!categoryItemsMap.has(categoryId)) {
+      categoryItemsMap.set(categoryId, []);
+      categoryInfoMap.set(categoryId, { id: categoryId, name: category?.name || 'Diğer' });
+    }
+    categoryItemsMap.get(categoryId).push(item);
+  }
+  const printerGroupsMap = new Map();
+  categoryItemsMap.forEach((categoryItems, categoryId) => {
+    const categoryIdNum = typeof categoryId === 'string' && categoryId !== 'no-category' ? parseInt(categoryId) : categoryId;
+    const categoryInfo = categoryInfoMap.get(categoryId);
+    const assignment = db.printerAssignments.find(a => {
+      const cid = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+      return cid === categoryIdNum;
+    });
+    if (!assignment) return;
+    const printerKey = `${assignment.printerName}::${assignment.printerType}`;
+    if (!printerGroupsMap.has(printerKey)) {
+      printerGroupsMap.set(printerKey, { printerName: assignment.printerName, printerType: assignment.printerType, categories: [] });
+    }
+    printerGroupsMap.get(printerKey).categories.push({
+      categoryId,
+      categoryName: categoryInfo.name,
+      items: categoryItems
+    });
+  });
+  printerGroupsMap.forEach((job) => {
+    const allItemsWithCategory = [];
+    job.categories.forEach(cat => {
+      cat.items.forEach(item => {
+        allItemsWithCategory.push({ ...item, _categoryId: cat.categoryId, _categoryName: cat.categoryName });
+      });
+    });
+    const printerAdisyonData = {
+      ...adisyonData,
+      items: allItemsWithCategory,
+      categories: job.categories.map(cat => ({ categoryId: cat.categoryId, categoryName: cat.categoryName, items: cat.items }))
+    };
+    receipts[job.printerName] = generateAdisyonText(allItemsWithCategory, printerAdisyonData);
+  });
+  return receipts;
+}
+
+// Sepetteyken fişi HTML olarak hazırla — yazıcı adı -> HTML map (Siparişi Gönder anında anında yazdırma)
+function prepareAdisyonHtmlReceipts(items, adisyonData) {
+  const htmlReceipts = {};
+  if (!items || items.length === 0) return htmlReceipts;
+  const categoryItemsMap = new Map();
+  const categoryInfoMap = new Map();
+  for (const item of items) {
+    const product = db.products.find(p => String(p.id) === String(item.id));
+    const categoryId = product?.category_id ?? 'no-category';
+    const category = db.categories.find(c => c.id === categoryId);
+    if (!categoryItemsMap.has(categoryId)) {
+      categoryItemsMap.set(categoryId, []);
+      categoryInfoMap.set(categoryId, { id: categoryId, name: category?.name || 'Diğer' });
+    }
+    categoryItemsMap.get(categoryId).push(item);
+  }
+  const printerGroupsMap = new Map();
+  categoryItemsMap.forEach((categoryItems, categoryId) => {
+    const categoryIdNum = typeof categoryId === 'string' && categoryId !== 'no-category' ? parseInt(categoryId) : categoryId;
+    const categoryInfo = categoryInfoMap.get(categoryId);
+    const assignment = db.printerAssignments.find(a => {
+      const cid = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
+      return cid === categoryIdNum;
+    });
+    if (!assignment) return;
+    const printerKey = `${assignment.printerName}::${assignment.printerType}`;
+    if (!printerGroupsMap.has(printerKey)) {
+      printerGroupsMap.set(printerKey, { printerName: assignment.printerName, printerType: assignment.printerType, categories: [] });
+    }
+    printerGroupsMap.get(printerKey).categories.push({
+      categoryId,
+      categoryName: categoryInfo.name,
+      items: categoryItems
+    });
+  });
+  printerGroupsMap.forEach((job) => {
+    const allItemsWithCategory = [];
+    job.categories.forEach(cat => {
+      cat.items.forEach(item => {
+        allItemsWithCategory.push({ ...item, _categoryId: cat.categoryId, _categoryName: cat.categoryName });
+      });
+    });
+    const printerAdisyonData = {
+      ...adisyonData,
+      items: allItemsWithCategory,
+      categories: job.categories.map(cat => ({ categoryId: cat.categoryId, categoryName: cat.categoryName, items: cat.items }))
+    };
+    htmlReceipts[job.printerName] = generateAdisyonHTML(allItemsWithCategory, printerAdisyonData);
+  });
+  return htmlReceipts;
+}
+
+// Hazır HTML fişlerini anında yazdır (0 gecikme — Siparişi Gönder ile kullanılır)
+async function printPreparedHtmlReceipts(printerNameToHtml) {
+  if (!printerNameToHtml || typeof printerNameToHtml !== 'object') return;
+  const entries = Object.entries(printerNameToHtml);
+  if (entries.length === 0) return;
+  const printOne = (printerName, html) => {
+    return new Promise((resolve, reject) => {
+      let printWindow = null;
+      try {
+        printWindow = new BrowserWindow({
+          show: false, width: 220, height: 3000,
+          webPreferences: { nodeIntegration: false, contextIsolation: true }
+        });
+        let printResolve, printReject;
+        const printPromise = new Promise((res, rej) => { printResolve = res; printReject = rej; });
+        let printStarted = false;
+        const startPrint = () => {
+          if (printStarted) return;
+          printStarted = true;
+          setImmediate(async () => {
+            try {
+              const scrollHeight = await printWindow.webContents.executeJavaScript(`
+                (function() {
+                  document.body.style.minHeight = 'auto'; document.body.style.height = 'auto';
+                  document.documentElement.style.height = 'auto';
+                  return Math.max(document.body.scrollHeight, document.body.offsetHeight,
+                    document.documentElement.scrollHeight, document.documentElement.offsetHeight);
+                })();
+              `);
+              printWindow.setSize(220, Math.max(3000, scrollHeight + 200));
+            } catch (_) {}
+            const available = getAvailablePrinterNames();
+            const exact = available.find(p => p === printerName);
+            const partial = available.find(p => p.includes(printerName) || printerName.includes(p));
+            const targetName = exact || partial || printerName;
+            const printOptions = {
+              silent: true, printBackground: true, margins: { marginType: 'none' },
+              landscape: false, scaleFactor: 100, pagesPerSheet: 1, collate: false, color: false, copies: 1, duplex: 'none'
+            };
+            if (targetName) printOptions.deviceName = targetName;
+            printWindow.webContents.print(printOptions, (success, errType) => {
+              if (!success) printReject(new Error(errType || 'Yazdırma başarısız'));
+              else printResolve(true);
+              if (printWindow && !printWindow.isDestroyed()) { printWindow.close(); printWindow = null; }
+            });
+          });
+        };
+        printWindow.webContents.once('did-finish-load', () => startPrint());
+        printWindow.webContents.once('dom-ready', () => startPrint());
+        const timeout = setTimeout(() => printReject(new Error('Yazdırma timeout')), 15000);
+        printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
+          setImmediate(() => startPrint());
+        }).catch(err => { clearTimeout(timeout); printReject(err); });
+        printPromise.then(() => { clearTimeout(timeout); resolve(); }, err => { clearTimeout(timeout); reject(err); });
+      } catch (e) {
+        if (printWindow && !printWindow.isDestroyed()) printWindow.close();
+        reject(e);
+      }
+    });
+  };
+  await Promise.all(entries.map(([name, html]) => printOne(name, html).catch(err => console.error(`Hazır fiş yazdırma ${name}:`, err?.message || err))));
 }
 
 // Kategori bazlı adisyon yazdırma fonksiyonu
@@ -5768,20 +6037,12 @@ async function printAdisyonByCategory(items, adisyonData) {
   console.log('\n=== KATEGORİ BAZLI ADİSYON YAZDIRMA BAŞLIYOR ===');
   console.log(`   Toplam ${items.length} ürün bulundu`);
   
-  // Online sipariş için QR kod oluştur (adres varsa) – kategori bazlı adisyonun en altına eklenecek
+  // Online sipariş için QR (metin fişinde kullanılmıyor; arka planda oluştur, yazdırmayı geciktirme)
   if (adisyonData.tableType === 'online' && adisyonData.customer_address && !adisyonData.qrCodeDataURL) {
-    try {
-      const mapsURL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(adisyonData.customer_address)}`;
-      adisyonData.qrCodeDataURL = await QRCode.toDataURL(mapsURL, {
-        width: 280,
-        margin: 4,
-        errorCorrectionLevel: 'H',
-        color: { dark: '#000000', light: '#FFFFFF' }
-      });
-      console.log('   ✅ QR kod oluşturuldu (Google Maps adres linki) - kategori bazlı adisyonun en altına eklenecek');
-    } catch (qrError) {
-      console.error('   ⚠️ QR kod oluşturulamadı:', qrError);
-    }
+    const mapsURL = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(adisyonData.customer_address)}`;
+    QRCode.toDataURL(mapsURL, { width: 280, margin: 4, errorCorrectionLevel: 'H', color: { dark: '#000000', light: '#FFFFFF' } })
+      .then(url => { adisyonData.qrCodeDataURL = url; })
+      .catch(() => {});
   }
   
   try {
@@ -5904,13 +6165,9 @@ async function printAdisyonByCategory(items, adisyonData) {
       
       console.log(`   🖨️ Yazıcı grupları: ${printerGroupsMap.size} yazıcı`);
       
-      // 4. Her yazıcı için tek bir adisyon yazdır (kategoriler başlıklarla ayrılmış)
+      // 4. Tüm yazıcılara AYNI ANDA gönder (paralel) — basmaz basmaz fiş çıksın
       const printJobs = Array.from(printerGroupsMap.values());
-      
-      for (let i = 0; i < printJobs.length; i++) {
-        const job = printJobs[i];
-        
-        // Tüm kategorilerin ürünlerini birleştir (kategori bilgisiyle)
+      const printPromises = printJobs.map(job => {
         const allItemsWithCategory = [];
         job.categories.forEach(cat => {
           cat.items.forEach(item => {
@@ -5921,8 +6178,6 @@ async function printAdisyonByCategory(items, adisyonData) {
             });
           });
         });
-        
-        // Bu personel grubu için özel adisyon data'sı oluştur
         const printerAdisyonData = {
           ...adisyonData,
           items: allItemsWithCategory,
@@ -5931,57 +6186,21 @@ async function printAdisyonByCategory(items, adisyonData) {
             categoryName: cat.categoryName,
             items: cat.items
           })),
-          // Personel grubunun bilgilerini kullan
           sale_date: staffGroup.staffDate,
           sale_time: staffGroup.staffTime,
           staff_name: staffGroup.staffName,
-          // Transfer bilgilerini koru (eğer varsa)
           transferFromTableName: adisyonData.transferFromTableName || null,
           transferToTableName: adisyonData.transferToTableName || null,
-          // Online sipariş QR kodunu koru (eğer varsa)
-          qrCodeDataURL: adisyonData.qrCodeDataURL || null,
-          customer_address: adisyonData.customer_address || null
+          qrCodeDataURL: adisyonData.includeAddressQr === false ? null : (adisyonData.qrCodeDataURL || null),
+          customer_address: adisyonData.includeAddressQr === false ? null : (adisyonData.customer_address || null)
         };
-        
-        console.log(`\n   🖨️ ADİSYON YAZDIRMA ${i + 1}/${printJobs.length}`);
-        console.log(`      Yazıcı: "${job.printerName}"`);
-        console.log(`      Personel: "${staffGroup.staffName || 'Kasa'}"`);
-        console.log(`      Tarih/Saat: ${staffGroup.staffDate} ${staffGroup.staffTime}`);
-        console.log(`      Kategori sayısı: ${job.categories.length}`);
-        console.log(`      Toplam ürün sayısı: ${allItemsWithCategory.length}`);
-        
-        let result = await printAdisyonToPrinter(
-          job.printerName,
-          job.printerType,
-          allItemsWithCategory,
-          printerAdisyonData
-        );
-        if (!result || !result.success) {
-          console.error(`      ❌ Adisyon yazdırma hatası:`, result?.error);
-          // Bir kez yeniden dene (geçici yazıcı/kuyruk hataları için)
-          await new Promise(resolve => setTimeout(resolve, 400));
-          result = await printAdisyonToPrinter(
-            job.printerName,
-            job.printerType,
-            allItemsWithCategory,
-            printerAdisyonData
-          );
-          if (!result || !result.success) {
-            console.error(`      ❌ Yeniden deneme de başarısız:`, result?.error);
-            throw new Error(`Fiş yazdırılamadı (${job.printerName}): ${result?.error || 'Bilinmeyen hata'}`);
-          }
-          console.log(`      ✅ Yeniden deneme başarılı: "${job.printerName}"`);
-        }
-        
-        // Yazıcılar arası bekleme kaldırıldı (hız için)
-        if (i < printJobs.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 0));
-        }
-      }
-      
-      if (staffGroupIndex < staffGroups.length - 1) {
-        await new Promise(r => setTimeout(r, 80));
-      }
+        return printAdisyonToPrinter(job.printerName, job.printerType, allItemsWithCategory, printerAdisyonData)
+          .catch(err => {
+            console.error(`      ❌ ${job.printerName}:`, err?.message || err);
+            return { success: false, error: err?.message };
+          });
+      });
+      await Promise.all(printPromises);
     }
     
     console.log(`\n=== KATEGORİ BAZLI ADİSYON YAZDIRMA TAMAMLANDI ===`);
@@ -5989,6 +6208,52 @@ async function printAdisyonByCategory(items, adisyonData) {
     console.error('\n❌ KATEGORİ BAZLI ADİSYON YAZDIRMA HATASI:', error);
     // Hata durumunda kasa yazıcısına yazdırma yapma (sadece kategori bazlı yazıcılara yazdır)
   }
+}
+
+// Adisyon metin (termal RAW) - HTML yerine hızlı yazdırma
+function generateAdisyonText(items, adisyonData) {
+  const staffName = adisyonData.staff_name || (items.length > 0 && items[0].staff_name ? items[0].staff_name : null);
+  const lines = [
+    '--------------------------------',
+    '         MAKARA',
+    '        ADİSYON',
+    '--------------------------------',
+    adisyonData.transferFromTableName && adisyonData.transferToTableName
+      ? `AKTARIM: ${adisyonData.transferFromTableName} -> ${adisyonData.transferToTableName}`
+      : null,
+    adisyonData.tableName ? `Masa: ${adisyonData.tableName}` : null,
+    staffName ? `Garson: ${staffName}` : null,
+    `Tarih: ${adisyonData.sale_date || new Date().toLocaleDateString('tr-TR')}`,
+    `Saat:  ${adisyonData.sale_time || getFormattedTime(new Date())}`,
+    '--------------------------------'
+  ].filter(Boolean);
+  const hasCategories = adisyonData.categories && adisyonData.categories.length > 0;
+  if (hasCategories) {
+    adisyonData.categories.forEach(cat => {
+      lines.push(`[${cat.categoryName}]`);
+      (cat.items || []).forEach(item => {
+        lines.push(`  ${item.name}`);
+        lines.push(`  ${item.quantity} adet`);
+        if (item.isGift) lines.push('  İKRAM');
+        if (item.extraNote) lines.push(`  Not: ${item.extraNote}`);
+      });
+    });
+  } else {
+    (items || []).forEach(item => {
+      lines.push((item.name || '').toString());
+      lines.push(`  ${item.quantity || 0} adet`);
+      if (item.isGift) lines.push('  İKRAM');
+      if (item.extraNote) lines.push(`  Not: ${item.extraNote}`);
+    });
+  }
+  lines.push('--------------------------------');
+  if (adisyonData.orderNote) {
+    lines.push('Sipariş notu:');
+    lines.push(adisyonData.orderNote);
+    lines.push('--------------------------------');
+  }
+  lines.push('');
+  return lines.join('\r\n') + '\r\n';
 }
 
 // Modern ve profesyonel adisyon HTML formatı
@@ -6296,6 +6561,32 @@ function generateAdisyonHTML(items, adisyonData) {
   `;
 }
 
+// İptal fişi metin (termal RAW)
+function generateCancelReceiptText(cancelData) {
+  const tableTypeText = cancelData.tableType === 'inside' ? 'İç Masa' : 'Dış Masa';
+  const lines = [
+    '--------------------------------',
+    '        İPTAL FİŞİ',
+    '--------------------------------',
+    `Masa: ${tableTypeText} ${cancelData.tableName}`,
+    '--------------------------------',
+    cancelData.items && cancelData.items.length > 1
+      ? cancelData.items.map(item => `${item.productName} ${item.quantity} adet TL${(item.price * item.quantity).toFixed(2)}`).join('\n')
+      : `${cancelData.productName}\n${cancelData.quantity} adet  TL${cancelData.price.toFixed(2)}`,
+    '--------------------------------',
+    `Toplam: ${cancelData.quantity} adet`,
+    cancelData.items && cancelData.items.length > 1
+      ? `Tutar: TL${cancelData.items.reduce((s, i) => s + i.price * i.quantity, 0).toFixed(2)}`
+      : `Tutar: TL${(cancelData.price * cancelData.quantity).toFixed(2)}`,
+    '--------------------------------',
+    `${cancelData.cancelDate} ${cancelData.cancelTime}`,
+    `Kategori: ${cancelData.categoryName}`,
+    '--------------------------------',
+    ''
+  ];
+  return lines.join('\r\n') + '\r\n';
+}
+
 // Mobil HTML oluştur
 // İptal fişi HTML formatı
 function generateCancelReceiptHTML(cancelData) {
@@ -6407,130 +6698,86 @@ function generateCancelReceiptHTML(cancelData) {
 }
 
 // İptal fişi yazdırma fonksiyonu
+// İptal fişi — HTML ile (okunaklı; metin belgesi silik/bozuk çıkıyordu)
 async function printCancelReceipt(printerName, printerType, cancelData) {
   let printWindow = null;
-  
   try {
-    console.log(`   [printCancelReceipt] İptal fişi yazdırılıyor: "${printerName || 'Varsayılan'}"`);
-    
-    // İptal fişi HTML içeriğini oluştur
+    console.log(`   [printCancelReceipt] İptal fişi (HTML): "${printerName || 'Varsayılan'}"`);
     const cancelHTML = generateCancelReceiptHTML(cancelData);
-
-    // Gizli bir pencere oluştur ve içeriği yükle
     printWindow = new BrowserWindow({
       show: false,
-      width: 220, // 58mm ≈ 220px (72 DPI'da)
+      width: 220,
       height: 3000,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true
-      }
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
     });
-
-    let printResolve, printReject;
-    const printPromise = new Promise((resolve, reject) => {
-      printResolve = resolve;
-      printReject = reject;
-    });
-
-    let targetPrinterName = printerName;
-    let printStarted = false;
-    
-    const startPrint = () => {
-      if (printStarted) return;
-      printStarted = true;
-      
-      setTimeout(async () => {
-        // Yazıcı kontrolü
-        if (targetPrinterName) {
-          try {
-            const powershellCmd = `Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json`;
-            const result = execSync(`powershell -Command "${powershellCmd}"`, { 
-              encoding: 'utf-8',
-              timeout: 5000 
-            });
-            
-            const printersData = JSON.parse(result);
-            const printersArray = Array.isArray(printersData) ? printersData : [printersData];
-            const availablePrinters = printersArray.map(p => p.Name || '').filter(n => n);
-            
-            const exactMatch = availablePrinters.find(p => p === targetPrinterName);
-            const partialMatch = availablePrinters.find(p => p.includes(targetPrinterName) || targetPrinterName.includes(p));
-            
-            if (exactMatch) {
-              targetPrinterName = exactMatch;
-            } else if (partialMatch) {
-              targetPrinterName = partialMatch;
-            } else {
-              targetPrinterName = null;
-            }
-          } catch (error) {
-            console.error(`   ❌ Yazıcı kontrolü hatası:`, error.message);
-          }
-        }
-        
-        const printOptions = {
-          silent: true,
-          printBackground: true,
-          margins: { marginType: 'none' },
-          landscape: false,
-          scaleFactor: 100,
-          pagesPerSheet: 1,
-          collate: false,
-          color: false,
-          copies: 1,
-          duplex: 'none'
-        };
-        
-        if (targetPrinterName) {
-          printOptions.deviceName = targetPrinterName;
-        }
-
-        printWindow.webContents.print(printOptions, (success, errorType) => {
-          if (!success) {
-            printReject(new Error(errorType || 'İptal fişi yazdırma başarısız'));
-          } else {
-            console.log(`      ✅ İptal fişi yazdırma başarılı!`);
-            printResolve(true);
-          }
-          
-          setTimeout(() => {
-            if (printWindow && !printWindow.isDestroyed()) {
-              printWindow.close();
-              printWindow = null;
-            }
-          }, 1000);
-        });
-      }, 2000);
+    let targetName = printerName || null;
+    if (targetName) {
+      try {
+        const available = getAvailablePrinterNames();
+        const exact = available.find(p => p === targetName);
+        const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
+        targetName = exact || partial || targetName;
+      } catch (_) {}
+    }
+    const printOptions = {
+      silent: true,
+      printBackground: true,
+      margins: { marginType: 'none' },
+      landscape: false,
+      scaleFactor: 100,
+      pagesPerSheet: 1,
+      collate: false,
+      color: false,
+      copies: 1,
+      duplex: 'none'
     };
-
-    printWindow.webContents.once('did-finish-load', () => {
-      startPrint();
+    if (targetName) printOptions.deviceName = targetName;
+    const loadDone = new Promise((resolve) => {
+      printWindow.webContents.once('did-finish-load', () => resolve());
+      printWindow.webContents.once('did-fail-load', (e, code, desc) => {
+        console.warn(`   [printCancelReceipt] load uyarısı: ${code} ${desc}`);
+        resolve();
+      });
     });
-
-    printWindow.webContents.once('dom-ready', () => {
-      startPrint();
-    });
-
     await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(cancelHTML)}`);
-
-    setTimeout(() => {
-      startPrint();
-    }, 3000);
-
-    await Promise.race([
-      printPromise,
-      new Promise((_, reject) => setTimeout(() => reject(new Error('İptal fişi yazdırma timeout')), 10000))
-    ]);
-
-    return { success: true, printerName: targetPrinterName || 'Varsayılan' };
+    await Promise.race([loadDone, new Promise((r) => setTimeout(r, 3000))]);
+    await new Promise((r) => setTimeout(r, 400));
+    const doPrint = (options) => new Promise((resolve, reject) => {
+      if (!printWindow || printWindow.isDestroyed()) {
+        reject(new Error('Pencere kapatıldı'));
+        return;
+      }
+      printWindow.webContents.print(options, (success, errType) => {
+        if (!success) reject(new Error(errType || 'İptal fişi yazdırma başarısız'));
+        else resolve();
+      });
+    });
+    try {
+      await Promise.race([
+        doPrint(printOptions),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('İptal fişi yazdırma timeout (10s)')), 10000))
+      ]);
+    } catch (firstErr) {
+      if (printOptions.deviceName) {
+        console.warn(`   [printCancelReceipt] Hedef yazıcı başarısız, varsayılan deneniyor:`, firstErr.message);
+        delete printOptions.deviceName;
+        await Promise.race([
+          doPrint(printOptions),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('İptal fişi timeout')), 10000))
+        ]);
+      } else {
+        throw firstErr;
+      }
+    } finally {
+      if (printWindow && !printWindow.isDestroyed()) {
+        printWindow.close();
+        printWindow = null;
+      }
+    }
+    return { success: true, printerName: targetName || 'Varsayılan' };
   } catch (error) {
     console.error(`   [printCancelReceipt] Hata:`, error.message);
-    
-    if (printWindow && !printWindow.isDestroyed()) {
-      printWindow.close();
-    }
-    
+    if (printWindow && !printWindow.isDestroyed()) printWindow.close();
     throw error;
   }
 }
@@ -8421,6 +8668,9 @@ function generateMobileHTML(serverURL) {
     let tables = [];
     let currentTableType = 'inside';
     let orderNote = '';
+    let preparedReceipts = {}; // Sepetteyken hazırlanan fişler (metin)
+    let preparedHtmlReceipts = {}; // Sepetteyken hazırlanan HTML fişler
+    let preparedPrintJobId = null; // Sunucudaki önceden yüklenmiş BrowserWindow job kimliği
     const YAN_URUNLER_CATEGORY_ID = 999999; // Özel kategori ID'si
     let transferItemsStep = 1; // 1: Ürün/adet seç, 2: Hedef masa seç
     let selectedTransferItemsSourceTableId = null;
@@ -8583,6 +8833,34 @@ function generateMobileHTML(serverURL) {
     function debounce(key, fn, delay = 250) {
       if (debounceTimers[key]) clearTimeout(debounceTimers[key]);
       debounceTimers[key] = setTimeout(fn, delay);
+    }
+    
+    // Sepetteyken fişi arka planda hazırla (Siparişi Gönder anında anında yazdırılır)
+    function schedulePrepareReceipts() {
+      debounce('prepare-receipts', function() {
+        if (cart.length === 0 || !selectedTable) { preparedReceipts = {}; preparedHtmlReceipts = {}; preparedPrintJobId = null; return; }
+        var staffName = currentStaff ? (currentStaff.name + ' ' + currentStaff.surname) : null;
+        fetch(API_URL + '/prepare-adisyon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            items: cart.map(function(item) { return { id: item.id, name: item.name, price: item.price, quantity: item.quantity, isGift: item.isGift || false }; }),
+            tableName: selectedTable.name,
+            tableType: selectedTable.type,
+            orderNote: orderNote || null,
+            staffName: staffName
+          })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(result) {
+          if (result.success) {
+            if (result.receipts) preparedReceipts = result.receipts;
+            if (result.htmlReceipts) preparedHtmlReceipts = result.htmlReceipts;
+            if (result.printJobId) preparedPrintJobId = result.printJobId;
+          }
+        })
+        .catch(function() { preparedReceipts = {}; preparedHtmlReceipts = {}; preparedPrintJobId = null; });
+      }, 150);
     }
     
     const throttleTimers = {};
@@ -8912,6 +9190,7 @@ function generateMobileHTML(serverURL) {
     
     async function selectTable(id, name, type) {
       selectedTable = { id, name, type };
+      schedulePrepareReceipts();
       renderTables();
       document.getElementById('tableSelection').style.display = 'none';
       document.getElementById('orderSection').style.display = 'block';
@@ -10286,6 +10565,7 @@ function generateMobileHTML(serverURL) {
       if (cartItemCountEl) {
         cartItemCountEl.textContent = totalItems + ' ürün';
       }
+      schedulePrepareReceipts();
       });
     }
     
@@ -10744,7 +11024,8 @@ function generateMobileHTML(serverURL) {
     }
     
     async function submitCancelReason() {
-      const cancelReason = document.getElementById('cancelReasonInput').value.trim();
+      const cancelReasonInput = document.getElementById('cancelReasonInput');
+      const cancelReason = cancelReasonInput ? cancelReasonInput.value.trim() : '';
       
       if (!cancelReason || cancelReason === '') {
         showToast('error', 'Hata', 'Lütfen iptal açıklaması yazın');
@@ -10757,70 +11038,46 @@ function generateMobileHTML(serverURL) {
         return;
       }
       
-      // Modalı hemen kapat ve UI'ı anında güncelle
-      hideCancelReasonModal();
+      const btn = document.getElementById('confirmCancelReasonBtn');
+      const btnText = document.getElementById('confirmCancelReasonBtnText');
+      const btnSpinner = document.getElementById('confirmCancelReasonBtnSpinner');
+      if (btn) btn.disabled = true;
+      if (btnText) btnText.textContent = 'İşleniyor...';
+      if (btnSpinner) btnSpinner.style.display = 'block';
       
-      // Ürünü anında UI'dan kaldır (optimistic update)
-      const cancelBtn = document.getElementById('cancelBtn_' + pendingCancelItemId);
-      if (cancelBtn) {
-        const orderItem = cancelBtn.closest('.order-item');
-        if (orderItem) {
-          orderItem.style.opacity = '0.5';
-          orderItem.style.transition = 'opacity 0.3s';
-          setTimeout(() => {
-            orderItem.style.display = 'none';
-          }, 300);
-        }
-      }
-      
-      // Arka planda kaydet (await kullanmadan)
-      fetch(API_URL + '/cancel-table-order-item', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          itemId: pendingCancelItemId,
-          cancelQuantity: pendingCancelQuantity,
-          staffId: currentStaff ? currentStaff.id : null,
-          cancelReason: cancelReason
-        })
-      })
-      .then(response => response.json())
-      .then(result => {
+      try {
+        const response = await fetch(API_URL + '/cancel-table-order-item', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            itemId: pendingCancelItemId,
+            cancelQuantity: pendingCancelQuantity,
+            staffId: currentStaff ? currentStaff.id : null,
+            cancelReason: cancelReason
+          })
+        });
+        const result = await response.json();
+        
         if (result.success) {
-          // Siparişleri arka planda yenile
+          hideCancelReasonModal();
+          if (cancelReasonInput) cancelReasonInput.value = '';
+          pendingCancelItemId = null;
+          pendingCancelQuantity = null;
+          showToast('success', 'Başarılı', 'Ürün iptal edildi');
           if (selectedTable) {
-            loadExistingOrders(selectedTable.id).catch(err => console.error('Sipariş yenileme hatası:', err));
+            await loadExistingOrders(selectedTable.id);
           }
         } else {
-          // Hata durumunda UI'ı geri yükle
-          if (cancelBtn) {
-            const orderItem = cancelBtn.closest('.order-item');
-            if (orderItem) {
-              orderItem.style.display = '';
-              orderItem.style.opacity = '1';
-            }
-          }
           showToast('error', 'Hata', result.error || 'Ürün iptal edilemedi');
         }
-      })
-      .catch(error => {
+      } catch (error) {
         console.error('İptal işlemi hatası:', error);
-        // Hata durumunda UI'ı geri yükle
-        if (cancelBtn) {
-          const orderItem = cancelBtn.closest('.order-item');
-          if (orderItem) {
-            orderItem.style.display = '';
-            orderItem.style.opacity = '1';
-          }
-        }
         showToast('error', 'Hata', 'İptal işlemi sırasında bir hata oluştu');
-      });
-      
-      // Pending değişkenlerini temizle
-      pendingCancelItemId = null;
-      pendingCancelQuantity = null;
+      } finally {
+        if (btn) btn.disabled = false;
+        if (btnText) btnText.textContent = 'Tamamla';
+        if (btnSpinner) btnSpinner.style.display = 'none';
+      }
     }
     
     // Yayın Mesajı Fonksiyonları
@@ -10859,6 +11116,7 @@ function generateMobileHTML(serverURL) {
       orderNote = document.getElementById('noteInput').value.trim();
       updateNoteButton();
       hideNoteModal();
+      schedulePrepareReceipts();
     }
     
     function updateNoteButton() {
@@ -10905,7 +11163,17 @@ function generateMobileHTML(serverURL) {
         staffId: currentStaff.id,
         orderNote: orderNote || null
       };
+      // printJobId varsa büyük HTML göndermeye gerek yok — sunucu zaten hazır pencereyi kullanır
+      if (preparedPrintJobId) {
+        payload.printJobId = preparedPrintJobId;
+      } else {
+        // Fallback: hazır HTML yoksa sunucu kendi üretir (printAdisyonByCategory)
+        // preparedHtmlReceipts gönderme — büyük payload limit sorununa yol açar
+      }
       var currentTableId = selectedTable.id;
+      preparedReceipts = {};
+      preparedHtmlReceipts = {};
+      preparedPrintJobId = null;
       
       if (sendBtn) sendBtn.disabled = true;
       // Anında frontend: butonda "Gönderildi" göster, sepeti temizle, toast göster
@@ -10949,11 +11217,98 @@ function generateMobileHTML(serverURL) {
 </html>`;
 }
 
+// ─── Önceden Yüklenmiş Pencere Mimarisi (Anında Yazdırma) ───────────────────
+// printJobId -> { windows: [{printerName, win, ready}], createdAt }
+const preloadedPrintJobs = new Map();
+const PRINT_JOB_TTL_MS = 5 * 60 * 1000; // 5 dakika sonra temizle
+
+function cleanupOldPrintJobs() {
+  const now = Date.now();
+  for (const [jobId, job] of preloadedPrintJobs.entries()) {
+    if (now - job.createdAt > PRINT_JOB_TTL_MS) {
+      job.windows.forEach(({ win }) => {
+        try { if (win && !win.isDestroyed()) win.close(); } catch (_) {}
+      });
+      preloadedPrintJobs.delete(jobId);
+    }
+  }
+}
+
+// Sepetteyken çağrılır — her yazıcı için BrowserWindow açar + HTML yükler
+function preloadPrintWindows(htmlReceiptsMap) {
+  // Önceki preload işlerini iptal et (kart değişmişse)
+  for (const [, oldJob] of preloadedPrintJobs.entries()) {
+    oldJob.windows.forEach(({ win }) => {
+      try { if (win && !win.isDestroyed()) win.close(); } catch (_) {}
+    });
+  }
+  preloadedPrintJobs.clear();
+
+  const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2);
+  const windows = Object.entries(htmlReceiptsMap).map(([printerName, html]) => {
+    const win = new BrowserWindow({
+      show: false, width: 220, height: 3000,
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
+    });
+    const entry = { printerName, win, ready: false };
+    win.webContents.once('did-finish-load', () => { entry.ready = true; });
+    win.webContents.once('dom-ready', () => { entry.ready = true; });
+    win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => {});
+    return entry;
+  });
+  preloadedPrintJobs.set(jobId, { windows, createdAt: Date.now() });
+  cleanupOldPrintJobs();
+  return jobId;
+}
+
+// "Siparişi Gönder"e basılınca çağrılır — pencere zaten hazır, sadece .print()
+async function printPreloadedJob(printJobId) {
+  const job = preloadedPrintJobs.get(printJobId);
+  if (!job) return false;
+  preloadedPrintJobs.delete(printJobId);
+  console.log(`[printPreloadedJob] ${job.windows.length} yazıcı için yazdırma başlıyor`);
+
+  const printOne = async ({ printerName, win, ready }) => {
+    if (!win || win.isDestroyed()) return;
+    console.log(`[printPreloadedJob] Yazıcı: "${printerName}", hazır: ${ready}`);
+    // Pencere yüklenmediyse en fazla 1000ms bekle (genellikle zaten hazır)
+    if (!ready) {
+      await new Promise(r => {
+        const t = setTimeout(r, 1000);
+        win.webContents.once('did-finish-load', () => { clearTimeout(t); r(); });
+        win.webContents.once('dom-ready', () => { clearTimeout(t); r(); });
+      });
+    }
+    const available = getAvailablePrinterNames();
+    const exact = available.find(p => p === printerName);
+    const partial = available.find(p => p.includes(printerName) || printerName.includes(p));
+    const targetName = exact || partial || printerName;
+    const printOptions = {
+      silent: true, printBackground: true, margins: { marginType: 'none' },
+      landscape: false, scaleFactor: 100, pagesPerSheet: 1,
+      collate: false, color: false, copies: 1, duplex: 'none',
+      deviceName: targetName
+    };
+    await new Promise((resolve) => {
+      win.webContents.print(printOptions, () => {
+        try { if (!win.isDestroyed()) win.close(); } catch (_) {}
+        resolve();
+      });
+    });
+  };
+
+  await Promise.all(job.windows.map(e =>
+    printOne(e).catch(err => console.error(`[printPreloadedJob] ${e.printerName}:`, err?.message || err))
+  ));
+  return true;
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 // HTTP Server ve API Setup
 function startAPIServer() {
   const appExpress = express();
   appExpress.use(cors());
-  appExpress.use(express.json());
+  appExpress.use(express.json({ limit: '10mb' }));
   
   // Assets klasörünü serve et
   const assetsPath = path.join(__dirname, '../assets');
@@ -11935,7 +12290,7 @@ function startAPIServer() {
       // Açıklama var, işleme devam et - fiş yazdır
       cancelReason = cancelReason.trim();
       
-      // İptal fişi yazdır (sadece açıklama varsa) - arka planda
+      // İptal fişi yazdır (mobil — kategori yazıcısına)
       const now = new Date();
       const cancelDate = now.toLocaleDateString('tr-TR');
       const cancelTime = getFormattedTime(now);
@@ -11951,11 +12306,11 @@ function startAPIServer() {
         categoryName: categoryName
       };
 
-      // Yazıcıya gönderme işlemini arka planda yap (await kullanmadan)
-      printCancelReceipt(printerName, printerType, cancelReceiptData).catch(error => {
-        console.error('İptal fişi yazdırma hatası:', error);
-        // Yazdırma hatası olsa bile iptal işlemi zaten tamamlandı
-      });
+      try {
+        await printCancelReceipt(printerName, printerType, cancelReceiptData);
+      } catch (err) {
+        console.error('İptal fişi yazdırma hatası:', err);
+      }
 
       // İptal edilecek tutarı hesapla (ikram değilse)
       const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
@@ -12198,38 +12553,89 @@ function startAPIServer() {
     }
   });
 
+  // Mobil/masaüstü: sepetteyken fiş hazırla (tarih/saat/masa/ürünler — gönder/kaydet anında yazdırmak için)
+  appExpress.post('/api/prepare-adisyon', (req, res) => {
+    try {
+      const { items, tableName, tableType, orderNote, staffName } = req.body;
+      const now = new Date();
+      const sale_date = now.toLocaleDateString('tr-TR');
+      const sale_time = getFormattedTime(now);
+      const itemsWithMeta = (items || []).map(item => ({
+        ...item,
+        staff_name: staffName || null,
+        added_date: sale_date,
+        added_time: sale_time
+      }));
+      const adisyonData = {
+        items: itemsWithMeta,
+        tableName: tableName || '',
+        tableType: tableType || '',
+        orderNote: orderNote || null,
+        sale_date,
+        sale_time,
+        staff_name: staffName || null
+      };
+      const receipts = prepareAdisyonReceipts(itemsWithMeta, adisyonData);
+      const htmlReceipts = prepareAdisyonHtmlReceipts(itemsWithMeta, adisyonData);
+      // BrowserWindow'ları şimdiden aç + HTML yükle — Siparişi Gönder'e basılınca sadece .print() kalır
+      const printJobId = Object.keys(htmlReceipts).length > 0
+        ? preloadPrintWindows(htmlReceipts)
+        : null;
+      console.log(`[prepare-adisyon] htmlReceipts yazıcılar: [${Object.keys(htmlReceipts).join(', ')}], printJobId: ${printJobId}`);
+      res.json({ success: true, receipts, htmlReceipts, printJobId });
+    } catch (err) {
+      console.error('prepare-adisyon hatası:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   appExpress.post('/api/orders', async (req, res) => {
     try {
-      const { items, totalAmount, tableId, tableName, tableType, orderNote, staffId } = req.body;
+      const { items, totalAmount, tableId, tableName, tableType, orderNote, staffId, preparedReceipts, preparedHtmlReceipts, printJobId } = req.body;
       
       if (!items || !Array.isArray(items) || items.length === 0) {
         return res.status(400).json({ success: false, error: 'Ürün listesi gerekli' });
       }
       
-      // Yazdırmayı hemen başlat (stok/DB'den önce) — sipariş gelir gelmez yazıcıdan çıksın
-      const staff = staffId && db.staff ? db.staff.find(s => s.id === staffId) : null;
-      const staffName = staff ? `${staff.name} ${staff.surname}` : null;
-      const now = new Date();
-      const adisyonDate = now.toLocaleDateString('tr-TR');
-      const adisyonTime = getFormattedTime(now);
-      const itemsWithStaffForPrint = items.map(item => ({
-        ...item,
-        staff_name: staffName || null,
-        added_date: adisyonDate,
-        added_time: adisyonTime
-      }));
-      const adisyonDataForPrint = {
-        items: itemsWithStaffForPrint,
-        tableName: tableName || '',
-        tableType: tableType || '',
-        orderNote: orderNote || null,
-        sale_date: adisyonDate,
-        sale_time: adisyonTime,
-        staff_name: staffName || null
-      };
-      printAdisyonByCategory(itemsWithStaffForPrint, adisyonDataForPrint).catch(err => {
-        console.error('Mobil sipariş adisyon yazdırma hatası:', err);
-      });
+      // 1. YOL: Önceden yüklenmiş pencere var → sadece .print() (en hızlı, sıfır gecikme)
+      if (printJobId && preloadedPrintJobs.has(printJobId)) {
+        console.log(`[/api/orders] ✅ Hazır pencere bulundu (printJobId=${printJobId}), anında yazdırılıyor`);
+        printPreloadedJob(printJobId).catch(err => {
+          console.error('Önceden yüklenmiş fiş yazdırma hatası:', err);
+        });
+      // 2. YOL: Hazır HTML var → pencereyi yeni aç, HTML yükle, yazdır
+      } else if (preparedHtmlReceipts && typeof preparedHtmlReceipts === 'object' && Object.keys(preparedHtmlReceipts).length > 0) {
+        console.log(`[/api/orders] ⚡ Hazır HTML ile yazdırılıyor`);
+        printPreparedHtmlReceipts(preparedHtmlReceipts).catch(err => {
+          console.error('Mobil hazır fiş yazdırma hatası:', err);
+        });
+      // 3. YOL: Hiçbir hazır fiş yok → HTML üret + yazdır (yedek akış)
+      } else {
+        console.warn(`[/api/orders] ⚠️ printJobId=${printJobId} bulunamadı, yedek akış: printAdisyonByCategory. preloadedPrintJobs boyutu: ${preloadedPrintJobs.size}`);
+        const staff = staffId && db.staff ? db.staff.find(s => s.id === staffId) : null;
+        const staffName = staff ? `${staff.name} ${staff.surname}` : null;
+        const now = new Date();
+        const adisyonDate = now.toLocaleDateString('tr-TR');
+        const adisyonTime = getFormattedTime(now);
+        const itemsWithStaffForPrint = items.map(item => ({
+          ...item,
+          staff_name: staffName || null,
+          added_date: adisyonDate,
+          added_time: adisyonTime
+        }));
+        const adisyonDataForPrint = {
+          items: itemsWithStaffForPrint,
+          tableName: tableName || '',
+          tableType: tableType || '',
+          orderNote: orderNote || null,
+          sale_date: adisyonDate,
+          sale_time: adisyonTime,
+          staff_name: staffName || null
+        };
+        printAdisyonByCategory(itemsWithStaffForPrint, adisyonDataForPrint).catch(err => {
+          console.error('Mobil sipariş adisyon yazdırma hatası:', err);
+        });
+      }
       
       // Stok kontrolü ve düşürme (sadece stok takibi yapılan ürünler için)
       for (const item of items) {
@@ -12624,10 +13030,104 @@ ipcMain.handle('minimize-window', () => {
   return { success: true };
 });
 
+// Ağdaki cihazları tara: hangi IP'de Makara mobil personel / kamera / yazıcı vb. var
+function getLocalSubnetPrefix() {
+  const interfaces = os.networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === 'IPv4' && !iface.internal) {
+        const parts = iface.address.split('.');
+        if (parts.length === 4) return parts.slice(0, 3).join('.');
+      }
+    }
+  }
+  return null;
+}
+
+function probeIp(ip, port, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const url = `http://${ip}:${port}/mobile`;
+    const req = http.get(url, { timeout: timeoutMs }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve({ ok: true, status: res.statusCode, body }));
+    });
+    req.on('error', () => resolve({ ok: false }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false }); });
+    req.setTimeout(timeoutMs);
+  });
+}
+
+function probePort(ip, port, timeoutMs = 800) {
+  return new Promise((resolve) => {
+    const req = http.request({
+      hostname: ip,
+      port,
+      path: '/',
+      method: 'GET',
+      timeout: timeoutMs
+    }, (res) => resolve({ open: true }));
+    req.on('error', () => resolve({ open: false }));
+    req.on('timeout', () => { req.destroy(); resolve({ open: false }); });
+    req.setTimeout(timeoutMs);
+    req.end();
+  });
+}
+
+ipcMain.handle('scan-network', async () => {
+  const prefix = getLocalSubnetPrefix();
+  if (!prefix) return { success: false, error: 'Yerel ağ bulunamadı', devices: [] };
+  const devices = [];
+  const port = serverPort || 3000;
+  const ips = [];
+  for (let i = 1; i <= 254; i++) ips.push(`${prefix}.${i}`);
+  const chunk = (arr, n) => { const r = []; for (let i = 0; i < arr.length; i += n) r.push(arr.slice(i, i + n)); return r; };
+  for (const batch of chunk(ips, 15)) {
+    const results = await Promise.all(batch.map(async (ip) => {
+      const r = await probeIp(ip, port);
+      if (!r.ok) {
+        const p80 = await probePort(ip, 80);
+        const p554 = await probePort(ip, 554);
+        const p9100 = await probePort(ip, 9100);
+        if (p80.open) return { ip, label: 'Web arayüzü (kamera/yönlendirici vb.)', isOurBackend: false };
+        if (p554.open) return { ip, label: 'Kamera (RTSP)', isOurBackend: false };
+        if (p9100.open) return { ip, label: 'Yazıcı olabilir', isOurBackend: false };
+        return null;
+      }
+      const isOurs = (r.body || '').includes('MAKARA') || (r.body || '').includes('Mobil Sipariş');
+      return { ip, label: isOurs ? 'Makara Mobil Personel' : 'Diğer sunucu (port ' + port + ')', isOurBackend: isOurs };
+    }));
+    results.forEach((r) => { if (r) devices.push(r); });
+  }
+  return { success: true, devices };
+});
+
+ipcMain.handle('get-computer-hostname', () => {
+  return os.hostname();
+});
+
+ipcMain.handle('get-mobile-preferred-host', () => {
+  const host = db.settings && db.settings.mobilePreferredHost;
+  return host != null ? host : null;
+});
+
+ipcMain.handle('set-mobile-preferred-host', (event, host) => {
+  if (!db.settings) db.settings = {};
+  db.settings.mobilePreferredHost = host || null;
+  saveDatabase();
+  return { success: true };
+});
+
 // Mobil API IPC Handlers
 ipcMain.handle('get-server-url', () => {
   if (!apiServer) {
     return { success: false, error: 'Server başlatılmadı' };
+  }
+  const preferred = db.settings && db.settings.mobilePreferredHost;
+  if (preferred) {
+    const host = isIpAddress(preferred) ? preferred : `${preferred}.local`;
+    const serverURL = `http://${host}:${serverPort}`;
+    return { success: true, url: serverURL, ip: preferred, port: serverPort };
   }
   const interfaces = os.networkInterfaces();
   let localIP = 'localhost';
@@ -12644,20 +13144,31 @@ ipcMain.handle('get-server-url', () => {
   return { success: true, url: serverURL, ip: localIP, port: serverPort };
 });
 
+function isIpAddress(host) {
+  return /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
+
 ipcMain.handle('generate-qr-code', async () => {
   try {
-    const interfaces = os.networkInterfaces();
-    let localIP = 'localhost';
-    for (const name of Object.keys(interfaces)) {
-      for (const iface of interfaces[name]) {
-        if (iface.family === 'IPv4' && !iface.internal) {
-          localIP = iface.address;
-          break;
+    const preferred = db.settings && db.settings.mobilePreferredHost;
+    let serverURL;
+    if (preferred) {
+      const host = isIpAddress(preferred) ? preferred : `${preferred}.local`;
+      serverURL = `http://${host}:${serverPort}/mobile`;
+    } else {
+      const interfaces = os.networkInterfaces();
+      let localIP = 'localhost';
+      for (const name of Object.keys(interfaces)) {
+        for (const iface of interfaces[name]) {
+          if (iface.family === 'IPv4' && !iface.internal) {
+            localIP = iface.address;
+            break;
+          }
         }
+        if (localIP !== 'localhost') break;
       }
-      if (localIP !== 'localhost') break;
+      serverURL = `http://${localIP}:${serverPort}/mobile`;
     }
-    const serverURL = `http://${localIP}:${serverPort}/mobile`;
     const qrCodeDataURL = await QRCode.toDataURL(serverURL, {
       width: 400,
       margin: 2,

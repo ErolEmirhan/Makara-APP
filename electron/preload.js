@@ -55,6 +55,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Print API
   printReceipt: (receiptData) => ipcRenderer.invoke('print-receipt', receiptData),
   printAdisyon: (adisyonData) => ipcRenderer.invoke('print-adisyon', adisyonData),
+  prepareAdisyonReceipts: (adisyonData) => ipcRenderer.invoke('prepare-adisyon-receipts', adisyonData),
+  prepareAdisyonDesktop: (adisyonData) => ipcRenderer.invoke('prepare-adisyon-desktop', adisyonData),
+  prepareAdisyonOnline: (adisyonData) => ipcRenderer.invoke('prepare-adisyon-online', adisyonData),
+  printAdisyonByJobId: (printJobId) => ipcRenderer.invoke('print-adisyon-by-job-id', printJobId),
+  printAdisyonPrepared: (receipts) => ipcRenderer.invoke('print-adisyon-prepared', receipts),
   // Printer Management API
   getPrinters: () => ipcRenderer.invoke('get-printers'),
   assignCategoryToPrinter: (assignmentData) => ipcRenderer.invoke('assign-category-to-printer', assignmentData),
@@ -71,6 +76,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Mobile API
   getServerURL: () => ipcRenderer.invoke('get-server-url'),
   generateQRCode: () => ipcRenderer.invoke('generate-qr-code'),
+  scanNetwork: () => ipcRenderer.invoke('scan-network'),
+  getComputerHostname: () => ipcRenderer.invoke('get-computer-hostname'),
+  getMobilePreferredHost: () => ipcRenderer.invoke('get-mobile-preferred-host'),
+  setMobilePreferredHost: (host) => ipcRenderer.invoke('set-mobile-preferred-host', host),
   // Admin Dashboard API
   // Staff Management API
   createStaff: (staffData) => ipcRenderer.invoke('create-staff', staffData),

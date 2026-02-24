@@ -4,7 +4,7 @@ const ProductGrid = ({ products, onAddToCart }) => {
 
   return (
     <div className="flex-1 overflow-y-auto scrollbar-custom">
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
         {products.map((product) => {
           // Sadece stok takibi yapılan ürünler için kontrol et
           const trackStock = product.trackStock === true;
@@ -16,9 +16,9 @@ const ProductGrid = ({ products, onAddToCart }) => {
               key={product.id}
               onClick={() => !isOutOfStock && onAddToCart(product)}
               className={`
-                h-28 bg-white rounded-2xl 
+                min-h-[7rem] bg-white rounded-2xl 
                 transition-all duration-300 flex flex-row items-center
-                relative group overflow-hidden
+                relative group overflow-hidden p-0 pr-4
                 ${isOutOfStock 
                   ? 'opacity-50 cursor-not-allowed bg-gray-50' 
                   : 'cursor-pointer'
@@ -67,10 +67,10 @@ const ProductGrid = ({ products, onAddToCart }) => {
                 </>
               )}
               
-              {/* Ürün İsmi - Sol Taraf */}
-              <div className="relative z-10 flex-1 flex items-center pl-6 pr-5 min-h-0">
+              {/* Ürün İsmi - Sol Taraf (tam görünsün, kesilmesin) - min-w-0 ile dar ekranda fiyat alanına yer bırakır */}
+              <div className="relative z-10 flex-1 flex items-center pl-6 pr-2 min-h-0 min-w-0 py-3">
                 <h3 className={`
-                  font-bold leading-tight line-clamp-2 text-left
+                  font-bold leading-tight text-left break-words
                   ${isOutOfStock 
                     ? 'text-gray-500 text-sm' 
                     : 'text-gray-900 text-base group-hover:text-purple-700 transition-colors duration-300'
@@ -80,41 +80,27 @@ const ProductGrid = ({ products, onAddToCart }) => {
                 </h3>
               </div>
               
-              {/* Fiyat - Sağ Taraf */}
-              <div className="relative z-10 px-5 flex items-center justify-center flex-shrink-0">
+              {/* Fiyat - Sağ Taraf (kart içinde kalır, taşmaz) */}
+              <div className="relative z-10 flex items-center justify-end flex-shrink-0 pl-2 pr-0 min-w-0">
                 <div className={`
-                  relative inline-flex items-center justify-center
+                  relative inline-flex items-center justify-center max-w-full
                   transition-all duration-300
                   ${isOutOfStock 
                     ? 'opacity-50' 
-                    : 'group-hover:scale-105'
+                    : 'group-hover:scale-[1.02]'
                   }
                 `}>
-                  {/* Soft Arka Plan - Gradient with subtle shadow */}
-                  <div className={`
-                    absolute inset-0 rounded-xl blur-sm
-                    ${isOutOfStock 
-                      ? 'bg-gray-200' 
-                      : 'bg-gradient-to-r from-emerald-300 via-teal-300 to-emerald-300 opacity-60 group-hover:opacity-80'
-                    }
-                  `}></div>
-                  
-                  {/* Ana Fiyat Badge */}
+                  {/* Ana Fiyat Badge - kart sınırları içinde */}
                   <span className={`
-                    relative font-extrabold tracking-tight text-center
-                    px-4 py-1.5 rounded-xl
+                    relative font-extrabold tracking-tight text-center whitespace-nowrap
+                    px-3 py-1.5 rounded-lg text-sm
                     transition-all duration-300
                     ${isOutOfStock 
-                      ? 'text-gray-500 text-sm bg-gray-100 border border-gray-300' 
-                      : 'text-emerald-800 text-sm bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-200/60 shadow-md group-hover:shadow-lg group-hover:from-emerald-100 group-hover:via-teal-100 group-hover:to-emerald-100 group-hover:border-emerald-300/80'
+                      ? 'text-gray-500 bg-gray-100 border border-gray-300' 
+                      : 'text-emerald-800 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-200/60 shadow-sm group-hover:shadow group-hover:from-emerald-100 group-hover:via-teal-100 group-hover:to-emerald-100 group-hover:border-emerald-300/80'
                     }
                   `}>
                     <span className="relative z-10">₺{product.price.toFixed(2)}</span>
-                    
-                    {/* Soft İç Glow Efekti */}
-                    {!isOutOfStock && (
-                      <div className="absolute inset-0 rounded-xl bg-gradient-to-r from-white/30 via-transparent to-white/30 opacity-0 group-hover:opacity-100 transition-opacity duration-300"></div>
-                    )}
                   </span>
                 </div>
               </div>

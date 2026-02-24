@@ -59,6 +59,17 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const [isConfirmingOrder, setIsConfirmingOrder] = useState(false);
   const [togglingPreparingId, setTogglingPreparingId] = useState(null);
   const selectedTypeRef = useRef(selectedType);
+  // Online Adisyon Yazdır: hazır fiş job id (anında yazdırma için)
+  const onlineAdisyonPrintJobIdRef = useRef(null);
+  // Cihaz bazlı: bu cihazda online sipariş verilerini al (localStorage ile kalıcı)
+  const [receiveOnlineOrders, setReceiveOnlineOrders] = useState(() => {
+    try {
+      return localStorage.getItem('receiveOnlineOrdersOnThisDevice') !== 'false';
+    } catch (e) {
+      return true;
+    }
+  });
+  const onlineOrdersUnsubRef = useRef(null);
   // Geçmiş Adisyon modal
   const [showAdisyonModal, setShowAdisyonModal] = useState(false);
   const [recentSales, setRecentSales] = useState([]);
@@ -312,8 +323,17 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     }
   }, [showModal, selectedOrder]);
 
-  // Online Firebase bağlantısını başlat (component mount olduğunda)
+  // Online Firebase bağlantısı — sadece "bu cihazda online sipariş al" açıksa
   useEffect(() => {
+    if (!receiveOnlineOrders) {
+      setOnlineOrders([]);
+      setUnseenOnlineOrdersCount(0);
+      setOnlineFirebaseApp(null);
+      setOnlineFirestore(null);
+      onlineOrdersUnsubRef.current?.();
+      onlineOrdersUnsubRef.current = null;
+      return;
+    }
     try {
       const onlineFirebaseConfig = {
         apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
@@ -325,24 +345,27 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         measurementId: "G-MKPPB635ZZ"
       };
 
-      // Online Firebase'i başlat (App.jsx zaten 'onlineOrders' ile başlatmış olabilir)
       let app;
       try { app = getApp('onlineOrders'); } catch { app = initializeApp(onlineFirebaseConfig, 'onlineOrders'); }
       const db = getFirestore(app);
       setOnlineFirebaseApp(app);
       setOnlineFirestore(db);
-      
-      // Online siparişleri yükle (her zaman dinle, bildirim badge'i için)
-      loadOnlineOrders(db);
-      
-      // Online aktif durumunu dinle (manuel + otomatik 12:30/23:30 değişiklikleri anında yansır)
+
+      loadOnlineOrders(db).then((unsub) => {
+        if (unsub) onlineOrdersUnsubRef.current = unsub;
+      });
+
       const unsubActive = loadOnlineActiveStatus(db);
-      return () => { unsubActive?.(); };
+      return () => {
+        unsubActive?.();
+        onlineOrdersUnsubRef.current?.();
+        onlineOrdersUnsubRef.current = null;
+      };
     } catch (error) {
       console.error('Online Firebase başlatılamadı:', error);
       showToast('Online siparişler yüklenemedi', 'error');
     }
-  }, []); // Sadece component mount olduğunda çalış
+  }, [receiveOnlineOrders]);
 
   // Ses ayarları modalı açıldığında localStorage'dan yükle
   useEffect(() => {
@@ -382,6 +405,56 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       }
     }
   }, [selectedType, onlineOrders]);
+
+  // Online sipariş seçildiğinde Adisyon Yazdır için hazır fişi (QR'lı, kasa) arka planda hazırla — anında yazdırma
+  useEffect(() => {
+    if (selectedType !== 'online' || !selectedOrder || !orderItems.length || !window.electronAPI?.prepareAdisyonOnline) {
+      onlineAdisyonPrintJobIdRef.current = null;
+      return;
+    }
+    const adisyonItems = orderItems.map(item => ({
+      id: item.id || item.product_id,
+      name: item.name || item.product_name,
+      quantity: item.quantity || 1,
+      price: item.price || 0,
+      isGift: false,
+      staff_name: null,
+      category_id: null
+    }));
+    const customerName = selectedOrder.customer_name || selectedOrder.name || 'İsimsiz Müşteri';
+    const discountInfo = selectedOrder.firstOrderDiscount || null;
+    const subtotal = adisyonItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    let discountAmount = 0;
+    let finalTotal = subtotal;
+    if (discountInfo && discountInfo.applied === true) {
+      discountAmount = discountInfo.discountAmount || 0;
+      finalTotal = discountInfo.finalTotal || (subtotal - discountAmount);
+    }
+    const adisyonData = {
+      items: adisyonItems,
+      tableName: `Online Sipariş Müşteri: ${customerName}`,
+      tableType: 'online',
+      orderNote: selectedOrder.note || selectedOrder.orderNote || selectedOrder.order_note || null,
+      sale_date: selectedOrder.formattedDate || new Date().toLocaleDateString('tr-TR'),
+      sale_time: selectedOrder.formattedTime || new Date().toLocaleTimeString('tr-TR'),
+      cashierOnly: true,
+      customer_name: selectedOrder.customer_name || selectedOrder.name || null,
+      customer_phone: selectedOrder.customer_phone || selectedOrder.phone || null,
+      customer_address: selectedOrder.customer_address || selectedOrder.address || null,
+      address_note: selectedOrder.address_note || selectedOrder.addressNote || null,
+      discountInfo,
+      subtotal,
+      discountAmount,
+      finalTotal
+    };
+    let cancelled = false;
+    window.electronAPI.prepareAdisyonOnline(adisyonData).then(({ printJobId }) => {
+      if (!cancelled) onlineAdisyonPrintJobIdRef.current = printJobId || null;
+    }).catch(() => {
+      if (!cancelled) onlineAdisyonPrintJobIdRef.current = null;
+    });
+    return () => { cancelled = true; };
+  }, [selectedType, selectedOrder, orderItems]);
 
   // Refresh trigger değiştiğinde siparişleri yenile
   useEffect(() => {
@@ -929,10 +1002,14 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
 
       try {
         console.log('Online sipariş adisyonu yazdırılıyor...');
+        // Hazır fiş varsa anında yazdır; yoksa normal printAdisyon
+        const jobId = onlineAdisyonPrintJobIdRef.current;
+        const hasPrepared = window.electronAPI.prepareAdisyonOnline && window.electronAPI.printAdisyonByJobId && jobId;
+        const result = hasPrepared
+          ? await window.electronAPI.printAdisyonByJobId(jobId)
+          : await window.electronAPI.printAdisyon(adisyonData);
         
-        const result = await window.electronAPI.printAdisyon(adisyonData);
-        
-        if (result.success) {
+        if (result && result.success) {
           console.log('Adisyon başarıyla yazdırıldı');
           setAdisyonLoadingOrderId(null);
           setAdisyonSuccessOrderId(selectedOrder.id);
@@ -1054,6 +1131,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         sale_date: selectedOrder.formattedDate || new Date().toLocaleDateString('tr-TR'),
         sale_time: selectedOrder.formattedTime || new Date().toLocaleTimeString('tr-TR'),
         cashierOnly: false, // Kategori bazlı yazdırma için false
+        includeAddressQr: false, // Kategori fişlerinde adres QR'ı yok, sadece ürünler
         // Online sipariş müşteri bilgileri
         customer_name: selectedOrder.customer_name || selectedOrder.name || null,
         customer_phone: selectedOrder.customer_phone || selectedOrder.phone || null,
@@ -1601,6 +1679,49 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       {/* Online Siparişler - Kart Görünümü */}
       {selectedType === 'online' ? (
         <div className="space-y-4">
+          {/* Cihaz bazlı: Online sipariş verilerini bu cihaza alma */}
+          <div className="bg-slate-100 border border-slate-300 rounded-xl p-4 flex items-center justify-between gap-4">
+            <div>
+              <p className="font-semibold text-slate-800">Online sipariş verilerini bu cihaza alma</p>
+              <p className="text-sm text-slate-600 mt-0.5">Açıksa bu cihaz online siparişleri çekmez; cihazı yormaz.</p>
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer shrink-0">
+              <input
+                type="checkbox"
+                checked={!receiveOnlineOrders}
+                onChange={(e) => {
+                  const dontReceive = e.target.checked;
+                  setReceiveOnlineOrders(!dontReceive);
+                  try {
+                    localStorage.setItem('receiveOnlineOrdersOnThisDevice', dontReceive ? 'false' : 'true');
+                  } catch (err) {}
+                  if (!dontReceive) showToast('Online siparişler bu cihazda açıldı', 'success');
+                  else showToast('Bu cihazda online sipariş verileri kapatıldı', 'info');
+                }}
+                className="w-5 h-5 rounded border-slate-400 text-rose-500 focus:ring-rose-400"
+              />
+              <span className="text-sm font-medium text-slate-700">Alma (cihazı yormasın)</span>
+            </label>
+          </div>
+
+          {!receiveOnlineOrders ? (
+            <div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 p-12 text-center">
+              <p className="text-slate-600 font-medium mb-2">Bu cihazda online sipariş verileri alınmıyor.</p>
+              <p className="text-sm text-slate-500 mb-6">Cihazı yormamak için bu seçenek açıldı. Diğer cihazlardaki online siparişler etkilenmez.</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setReceiveOnlineOrders(true);
+                  try { localStorage.setItem('receiveOnlineOrdersOnThisDevice', 'true'); } catch (e) {}
+                  showToast('Online siparişler bu cihazda açıldı', 'success');
+                }}
+                className="px-6 py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white rounded-xl font-semibold hover:from-pink-600 hover:to-rose-600 transition-all"
+              >
+                Online siparişleri bu cihazda aç
+              </button>
+            </div>
+          ) : (
+            <>
           {/* Online Ürün Yönetimi ve Alınmış Ödemeler Butonları */}
           <div className="flex justify-end mb-4 gap-3">
             <button
@@ -1737,7 +1858,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
               <p className="text-slate-500 font-medium text-lg">Henüz online sipariş bulunmuyor</p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start" key="online-grid">
               {onlineOrders.map((order) => {
                 const isExpanded = expandedOrderIds.has(order.id);
                 const items = order.items || [];
@@ -1980,6 +2101,8 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
                 );
               })}
             </div>
+          )}
+          </>
           )}
         </div>
       ) : (

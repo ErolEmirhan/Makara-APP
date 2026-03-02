@@ -320,16 +320,17 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
     }
   };
 
-  // Ürün iptal etme fonksiyonu
+  // Ürün iptal etme fonksiyonu - direkt iptal açıklaması modalına gider
   const handleCancelItem = (item) => {
     if (!window.electronAPI || !window.electronAPI.cancelTableOrderItem) {
       showToast('İptal işlemi şu anda kullanılamıyor', 'error');
       return;
     }
-    setCancelConfirmItem(item);
-    setCancelQuantity(item.quantity > 1 ? 1 : item.quantity); // Varsayılan olarak 1 veya tümü
-    setShowCancelReceiptPreview(false);
-    setCancelReceiptHTML(null);
+    setPendingCancelItemId(item.id);
+    setPendingCancelQuantity(item.quantity);
+    setCancelQuantity(item.quantity);
+    setCancelReason('');
+    setShowCancelReasonModal(true);
   };
 
   // İptal fişi önizleme
@@ -388,13 +389,21 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
       return;
     }
 
+    const qtyToCancel = Math.max(1, Math.min(cancelQuantity || 1, pendingCancelQuantity || 1));
+
     // Gruplanmış item'ı bul (eğer varsa)
     const groupedItem = groupedItems.find(item => item.id === pendingCancelItemId || item.allItemIds?.includes(pendingCancelItemId));
     
+    // Modalı anında kapat - kullanıcı beklemez
+    setShowCancelReasonModal(false);
+    setCancelReason('');
+    setPendingCancelItemId(null);
+    setPendingCancelQuantity(null);
+
     // Eğer gruplanmış item varsa ve birden fazla item varsa, toplu iptal kullan
     if (groupedItem && groupedItem.originalItems && groupedItem.originalItems.length > 1) {
       // Tüm item'ları toplu iptal için hazırla
-      let remainingQuantity = pendingCancelQuantity;
+      let remainingQuantity = qtyToCancel;
       const itemsToCancel = [];
       
       for (const originalItem of groupedItem.originalItems) {
@@ -410,65 +419,33 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
         remainingQuantity -= quantityToCancel;
       }
       
-      setCancellingItemId(pendingCancelItemId);
-      
-      try {
-        // Toplu iptal işlemi (tek fiş)
-        const result = await window.electronAPI.cancelTableOrderItemsBulk(
-          itemsToCancel,
-          cancelReason.trim()
-        );
-        
-        if (result.success) {
-          // Başarılı
-          setShowCancelReasonModal(false);
-          setCancelReason('');
-          setPendingCancelItemId(null);
-          setPendingCancelQuantity(null);
-          if (onItemCancelled) {
-            onItemCancelled();
-          }
-        } else {
-          showToast(result.error || 'İptal açıklaması kaydedilemedi', 'error');
-        }
-      } catch (error) {
-        console.error('İptal açıklaması kaydetme hatası:', error);
-        showToast('İptal açıklaması kaydedilirken bir hata oluştu', 'error');
-      } finally {
-        setCancellingItemId(null);
-      }
+      // API arka planda - sonuç gelince listeyi yenile
+      window.electronAPI.cancelTableOrderItemsBulk(itemsToCancel, cancelReason.trim())
+        .then((result) => {
+          if (result.success && onItemCancelled) onItemCancelled();
+          else if (!result.success) showToast(result.error || 'İptal açıklaması kaydedilemedi', 'error');
+        })
+        .catch((error) => {
+          console.error('İptal açıklaması kaydetme hatası:', error);
+          showToast('İptal açıklaması kaydedilirken bir hata oluştu', 'error');
+        });
     } else {
-      // Normal iptal (tek item veya gruplanmamış)
-      setCancellingItemId(pendingCancelItemId);
-      try {
-        // Kısa bir delay ekleyerek UI donmasını önle
-        await new Promise(resolve => setTimeout(resolve, 100));
-        
-        const result = await window.electronAPI.cancelTableOrderItem(pendingCancelItemId, pendingCancelQuantity, cancelReason.trim());
-        
-        if (result.success) {
-          // Başarılı
-          setShowCancelReasonModal(false);
-          setCancelReason('');
-          setPendingCancelItemId(null);
-          setPendingCancelQuantity(null);
-          if (onItemCancelled) {
-            onItemCancelled();
-          }
-        } else {
-          showToast(result.error || 'İptal açıklaması kaydedilemedi', 'error');
-        }
-      } catch (error) {
-        console.error('İptal açıklaması kaydetme hatası:', error);
-        showToast('İptal açıklaması kaydedilirken bir hata oluştu', 'error');
-      } finally {
-        setCancellingItemId(null);
-      }
+      // Normal iptal (tek item veya gruplanmamış) - API arka planda
+      window.electronAPI.cancelTableOrderItem(pendingCancelItemId, qtyToCancel, cancelReason.trim())
+        .then((result) => {
+          if (result.success && onItemCancelled) onItemCancelled();
+          else if (!result.success) showToast(result.error || 'İptal açıklaması kaydedilemedi', 'error');
+        })
+        .catch((error) => {
+          console.error('İptal açıklaması kaydetme hatası:', error);
+          showToast('İptal açıklaması kaydedilirken bir hata oluştu', 'error');
+        });
     }
   };
 
-  const insideTables = useMemo(() => Array.from({ length: 20 }, (_, i) => ({ id: `inside-${i + 1}`, name: `İçeri ${i + 1}` })), []);
-  const outsideTables = useMemo(() => Array.from({ length: 24 }, (_, i) => ({ id: `outside-${61 + i}`, name: `Dışarı ${61 + i}` })), []);
+  const insideTables = useMemo(() => Array.from({ length: 20 }, (_, i) => ({ id: `inside-${i + 1}`, name: `Masa ${i + 1}` })), []);
+  const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+  const outsideTables = useMemo(() => OUTSIDE_NUMS.map(n => ({ id: `outside-${n}`, name: `Masa ${n}` })), []);
   const packageTables = useMemo(() => [
     ...Array.from({ length: 5 }, (_, i) => ({ id: `package-inside-${i + 1}`, name: `Paket ${i + 1}` })),
     ...Array.from({ length: 5 }, (_, i) => ({ id: `package-outside-${i + 1}`, name: `Paket ${i + 1}` }))
@@ -548,7 +525,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                 <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
                   Sipariş Detayları
                 </h2>
-                <p className="text-sm text-gray-500 mt-0.5">Masa: {order.table_name} • {order.table_type === 'inside' ? 'İç Masa' : 'Dış Masa'}</p>
+                <p className="text-sm text-gray-500 mt-0.5">Masa: {order.table_name}</p>
               </div>
             </div>
             <button
@@ -573,7 +550,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tip</p>
                 <p className="text-base font-bold text-gray-900">
-                  {order.table_type === 'inside' ? 'İç Masa' : 'Dış Masa'}
+                  Masa
                 </p>
               </div>
               <div>
@@ -1190,6 +1167,33 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               </div>
             </div>
 
+            {/* İptal edilecek adet seçimi */}
+            {pendingCancelQuantity > 1 && (
+              <div className="mb-6">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">İptal Edilecek Adet</label>
+                <div className="flex items-center justify-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => setCancelQuantity(Math.max(1, (cancelQuantity || 1) - 1))}
+                    className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={(cancelQuantity || 1) <= 1}
+                  >
+                    −
+                  </button>
+                  <span className="min-w-[3rem] text-center text-xl font-bold text-gray-900">{cancelQuantity || 1}</span>
+                  <button
+                    type="button"
+                    onClick={() => setCancelQuantity(Math.min(pendingCancelQuantity || 1, (cancelQuantity || 1) + 1))}
+                    className="w-12 h-12 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-xl flex items-center justify-center transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    disabled={(cancelQuantity || 1) >= (pendingCancelQuantity || 1)}
+                  >
+                    +
+                  </button>
+                </div>
+                <p className="text-xs text-gray-500 text-center mt-1">Toplam {pendingCancelQuantity} adet mevcut</p>
+              </div>
+            )}
+
             <div className="flex items-center justify-center space-x-4">
               <button
                 onClick={() => {
@@ -1257,7 +1261,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
               <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 mb-6">
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">İptal Edilecek Masa</p>
                 <p className="text-lg font-bold text-gray-900">{order.table_name}</p>
-                <p className="text-xs text-gray-500 mt-1">{order.table_type === 'inside' ? 'İç Masa' : 'Dış Masa'}</p>
+                <p className="text-xs text-gray-500 mt-1">Masa</p>
               </div>
 
               {/* İptal Açıklaması */}

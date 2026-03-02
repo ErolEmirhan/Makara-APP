@@ -18,14 +18,15 @@ const TableMergeModal = ({ onClose, onMerge }) => {
     id: `inside-${i + 1}`,
     number: i + 1,
     type: 'inside',
-    name: `İçeri ${i + 1}`
+    name: `Masa ${i + 1}`
   }));
 
-  const outsideTables = Array.from({ length: 24 }, (_, i) => ({
-    id: `outside-${61 + i}`,
-    number: 61 + i,
+  const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+  const outsideTables = OUTSIDE_NUMS.map(n => ({
+    id: `outside-${n}`,
+    number: n,
     type: 'outside',
-    name: `Dışarı ${61 + i}`
+    name: `Masa ${n}`
   }));
 
   const packageTablesInside = Array.from({ length: 5 }, (_, i) => ({

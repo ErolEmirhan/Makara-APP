@@ -487,74 +487,8 @@ function App() {
         } else {
           console.log('✨ Yeni sipariş oluşturuldu:', result.orderId);
         }
-        // Hazır fiş varsa anında yazdır, yoksa oluşturup yazdır
-        const adisyonJobId = preparedPrintJobIdRef.current;
-        if (adisyonJobId && window.electronAPI?.printAdisyonByJobId) {
-          setPrintToast({ status: 'printing', message: 'Fiş yazdırılıyor...' });
-          const printResult = await window.electronAPI.printAdisyonByJobId(adisyonJobId);
-          preparedPrintJobIdRef.current = null;
-          if (printResult?.success) {
-            setPrintToast({ status: 'success', message: 'Fiş yazdırıldı' });
-          } else {
-            setPrintToast({ status: 'error', message: printResult?.error || 'Fiş yazdırılamadı.' });
-          }
-        } else if (window.electronAPI?.printAdisyon) {
-          const now = new Date();
-          const currentDate = now.toLocaleDateString('tr-TR');
-          const currentTime = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          const itemsWithTime = cart.map(item => ({
-            ...item,
-            staff_name: null,
-            added_date: currentDate,
-            added_time: currentTime
-          }));
-          const adisyonData = {
-            items: itemsWithTime,
-            tableName: selectedTable.name,
-            tableType: selectedTable.type,
-            orderNote: orderNote || null,
-            sale_date: currentDate,
-            sale_time: currentTime,
-            cashierOnly: true
-          };
-          setPrintToast({ status: 'printing', message: 'Fiş yazdırılıyor...' });
-          let printResult = await window.electronAPI.printAdisyon(adisyonData);
-          if (!printResult?.success) {
-            await new Promise(r => setTimeout(r, 1500));
-            printResult = await window.electronAPI.printAdisyon(adisyonData);
-          }
-          if (printResult?.success) {
-            setPrintToast({ status: 'success', message: 'Fiş yazdırıldı' });
-          } else {
-            setPrintToast({ status: 'error', message: printResult?.error || 'Fiş yazdırılamadı.' });
-          }
-        }
-        // Kategori bazlı yazdırma (mutfak/kategori yazıcıları) — mobil ile aynı davranış
-        if (window.electronAPI?.printAdisyon) {
-          const now = new Date();
-          const currentDate = now.toLocaleDateString('tr-TR');
-          const currentTime = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-          const itemsWithTime = cart.map(item => ({
-            ...item,
-            staff_name: null,
-            added_date: currentDate,
-            added_time: currentTime
-          }));
-          const categoryAdisyonData = {
-            items: itemsWithTime,
-            tableName: selectedTable.name,
-            tableType: selectedTable.type,
-            orderNote: orderNote || null,
-            sale_date: currentDate,
-            sale_time: currentTime,
-            cashierOnly: false
-          };
-          window.electronAPI.printAdisyon(categoryAdisyonData).catch(err => {
-            console.error('Kategori bazlı fiş yazdırma hatası:', err);
-          });
-        }
-        
-        // Kasadan masaya sipariş eklendiğinde kasa yazıcısından fiş yazdırma (sadece adisyon yeterli)
+        // Masaya Kaydet: Adisyon otomatik yazdırılmaz (kullanıcı isterse Adisyon Yazdır ile yazdırabilir)
+        preparedPrintJobIdRef.current = null;
         
         // Sepeti temizle
         setCart([]);

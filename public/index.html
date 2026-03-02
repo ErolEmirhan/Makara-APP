@@ -1519,7 +1519,7 @@
         for (let i = 1; i <= 20; i++) {
           allStaticTables[`inside-${i}`] = {
             table_id: `inside-${i}`,
-            table_name: `İçeri ${i}`,
+            table_name: `Masa ${i}`,
             table_type: 'inside',
             table_number: i,
             is_occupied: false,
@@ -1527,20 +1527,19 @@
             items: []
           };
         }
-        // Dışarı masalar (61-84)
-        for (let i = 1; i <= 24; i++) {
-          const tableNumber = 60 + i; // 61-84
+        // Masalar 61-88 (69,70,79,80 hariç)
+        [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
           const tableId = `outside-${tableNumber}`;
           allStaticTables[tableId] = {
             table_id: tableId,
-            table_name: `Dışarı ${tableNumber}`,
+            table_name: `Masa ${tableNumber}`,
             table_type: 'outside',
             table_number: tableNumber,
             is_occupied: false,
             total_amount: 0,
             items: []
           };
-        }
+        });
         for (let i = 1; i <= 5; i++) {
           allStaticTables[`package-inside-${i}`] = {
             table_id: `package-inside-${i}`,
@@ -1577,12 +1576,12 @@
       // TÜM masaları statik olarak oluştur
       allStaticTables = {};
       
-      // İçeri masalar (1-20)
+      // Masalar 1-20
       for (let i = 1; i <= 20; i++) {
         const tableId = `inside-${i}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `İçeri ${i}`,
+          table_name: `Masa ${i}`,
           table_type: 'inside',
           table_number: i,
           is_occupied: false,
@@ -1591,20 +1590,19 @@
         };
       }
       
-      // Dışarı masalar (61-84)
-      for (let i = 1; i <= 24; i++) {
-        const tableNumber = 60 + i; // 61-84
+      // Masalar 61-88 (69,70,79,80 hariç)
+      [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
         const tableId = `outside-${tableNumber}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `Dışarı ${tableNumber}`,
+          table_name: `Masa ${tableNumber}`,
           table_type: 'outside',
           table_number: tableNumber,
           is_occupied: false,
           total_amount: 0,
           items: []
         };
-      }
+      });
       
       // Paket masaları - İçeri (1-5)
       for (let i = 1; i <= 5; i++) {
@@ -3319,18 +3317,20 @@
       packageTablesInside.sort((a, b) => a.table_number - b.table_number);
       packageTablesOutside.sort((a, b) => a.table_number - b.table_number);
 
-      // Render
+      // Render: tek bölüm, 1-20 ile 61-88 arasında boşluk (69,70,79,80 hariç)
       let html = `
         <div class="tables-container">
           <div class="tables-section">
-            <h2 class="section-title">📋 İçeri Masalar</h2>
+            <h2 class="section-title">🪑 Masalar</h2>
             <div class="tables-grid">
               ${insideTables.map(table => renderTableCard(table)).join('')}
             </div>
-          </div>
-          
-          <div class="tables-section">
-            <h2 class="section-title">☀️ Dışarı Masalar</h2>
+            <div class="tables-divider" style="padding: 20px 0; width: 100%; display: flex; align-items: center; justify-content: center;">
+              <div style="position: relative; width: 100%; display: flex; align-items: center; justify-content: center;">
+                <div style="position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; width: 100%; background: linear-gradient(90deg, #e2e8f0, #94a3b8, #e2e8f0); box-shadow: 0 1px 3px rgba(0,0,0,0.08);"></div>
+                <div style="position: relative; z-index: 10; width: 12px; height: 12px; border-radius: 50%; background: #ffffff; border: 2px solid #94a3b8; box-shadow: 0 2px 8px rgba(148,163,184,0.4), 0 0 0 2px rgba(226,232,240,0.8);"></div>
+              </div>
+            </div>
             <div class="tables-grid">
               ${outsideTables.map(table => renderTableCard(table)).join('')}
             </div>
@@ -3377,7 +3377,7 @@
         for (let i = 1; i <= 20; i++) {
           allStaticTables[`inside-${i}`] = {
             table_id: `inside-${i}`,
-            table_name: `İçeri ${i}`,
+            table_name: `Masa ${i}`,
             table_type: 'inside',
             table_number: i,
             is_occupied: false,
@@ -3385,20 +3385,19 @@
             items: []
           };
         }
-        // Dışarı masalar (61-84)
-        for (let i = 1; i <= 24; i++) {
-          const tableNumber = 60 + i; // 61-84
+        // Masalar 61-88 (69,70,79,80 hariç)
+        [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
           const tableId = `outside-${tableNumber}`;
           allStaticTables[tableId] = {
             table_id: tableId,
-            table_name: `Dışarı ${tableNumber}`,
+            table_name: `Masa ${tableNumber}`,
             table_type: 'outside',
             table_number: tableNumber,
             is_occupied: false,
             total_amount: 0,
             items: []
           };
-        }
+        });
         for (let i = 1; i <= 5; i++) {
           allStaticTables[`package-inside-${i}`] = {
             table_id: `package-inside-${i}`,
@@ -3439,12 +3438,12 @@
       // Global allStaticTables objesini kullan
       allStaticTables = {};
       
-      // İçeri masalar (1-20)
+      // Masalar 1-20
       for (let i = 1; i <= 20; i++) {
         const tableId = `inside-${i}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `İçeri ${i}`,
+          table_name: `Masa ${i}`,
           table_type: 'inside',
           table_number: i,
           is_occupied: false,
@@ -3453,20 +3452,19 @@
         };
       }
       
-      // Dışarı masalar (61-84)
-      for (let i = 1; i <= 24; i++) {
-        const tableNumber = 60 + i; // 61-84
+      // Masalar 61-88 (69,70,79,80 hariç)
+      [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
         const tableId = `outside-${tableNumber}`;
         allStaticTables[tableId] = {
           table_id: tableId,
-          table_name: `Dışarı ${tableNumber}`,
+          table_name: `Masa ${tableNumber}`,
           table_type: 'outside',
           table_number: tableNumber,
           is_occupied: false,
           total_amount: 0,
           items: []
         };
-      }
+      });
       
       // Paket masaları - İçeri (1-5)
       for (let i = 1; i <= 5; i++) {
@@ -3636,13 +3634,13 @@
       } else {
         // Boş masalar
         if (isInside) {
-          // İç masalar: açık pembe
-          bgColor = '#fce7f3';
+          // 1-20 masalar: hafif pembe
+          bgColor = '#fdf2f8';
           borderColor = '#f9a8d4';
           statusColor = '#ec4899';
         } else if (isOutside) {
-          // Dış masalar: açık sarı
-          bgColor = '#fef3c7';
+          // 61-88 masalar: hafif sarı
+          bgColor = '#fffbeb';
           borderColor = '#fde68a';
           statusColor = '#d97706';
         } else {

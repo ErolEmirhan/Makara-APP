@@ -25,18 +25,16 @@ const TableTransferModal = ({
     id: `inside-${i + 1}`,
     number: i + 1,
     type: 'inside',
-    name: `İçeri ${i + 1}`
+    name: `Masa ${i + 1}`
   }));
 
-  const outsideTables = Array.from({ length: 24 }, (_, i) => {
-    const tableNumber = 61 + i; // 61-84
-    return {
-      id: `outside-${tableNumber}`,
-      number: tableNumber,
-      type: 'outside',
-      name: `Dışarı ${tableNumber}`
-    };
-  });
+  const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+  const outsideTables = OUTSIDE_NUMS.map(tableNumber => ({
+    id: `outside-${tableNumber}`,
+    number: tableNumber,
+    type: 'outside',
+    name: `Masa ${tableNumber}`
+  }));
 
   // Paket masaları (hem içeri hem dışarı için)
   const packageTablesInside = Array.from({ length: 5 }, (_, i) => ({

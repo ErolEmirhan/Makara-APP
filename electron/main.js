@@ -1858,14 +1858,12 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
         return { success: false, requiresReason: true, error: 'İptal açıklaması zorunludur' };
       }
 
-      // Açıklama var, işleme devam et - fiş yazdır
       cancelReason = cancelReason.trim();
       
-      // İptal fişi yazdır (bilgisayar/kasa — yazdırma tamamlansın)
+      // Fiş verilerini hazırla (yazdırma arka planda yapılacak)
       const now = new Date();
       const cancelDate = now.toLocaleDateString('tr-TR');
       const cancelTime = getFormattedTime(now);
-
       const cancelReceiptData = {
         tableName: order.table_name,
         tableType: order.table_type,
@@ -1876,13 +1874,6 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
         cancelTime: cancelTime,
         categoryName: categoryName
       };
-
-      try {
-        await printCancelReceipt(printerName, printerType, cancelReceiptData);
-      } catch (err) {
-        console.error('İptal fişi yazdırma hatası:', err);
-        // Yazdırma hatası olsa bile iptal işlemi devam eder
-      }
 
   // İptal edilecek tutarı hesapla (ikram değilse)
   const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
@@ -1907,6 +1898,11 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
   }
 
   saveDatabase();
+
+  // İptal fişi arka planda yazdır (kullanıcı beklemez)
+  printCancelReceipt(printerName, printerType, cancelReceiptData).catch(err => {
+    console.error('İptal fişi yazdırma hatası:', err);
+  });
 
   // Firebase'e iptal kaydı ekle - arka planda
   if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
@@ -2130,35 +2126,30 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
 
   saveDatabase();
 
-  // Her kategori için tek bir fiş yazdır
+  // Her kategori için tek bir fiş yazdır - arka planda (kullanıcı beklemez)
   const now = new Date();
   const cancelDate = now.toLocaleDateString('tr-TR');
   const cancelTime = getFormattedTime(now);
 
   for (const [categoryId, categoryGroup] of categoryGroups) {
-    try {
-      // Tek fiş için toplam bilgileriyle yazdır
-      const cancelReceiptData = {
-        tableName: order.table_name,
-        tableType: order.table_type,
-        productName: categoryGroup.items.length === 1 
-          ? categoryGroup.items[0].productName 
-          : `${categoryGroup.items.length} Farklı Ürün`,
-        quantity: categoryGroup.totalQuantity,
-        price: categoryGroup.items.length === 1 
-          ? categoryGroup.items[0].price 
-          : categoryGroup.totalAmount / categoryGroup.totalQuantity, // Ortalama fiyat
-        cancelDate,
-        cancelTime,
-        categoryName: categoryGroup.categoryName,
-        items: categoryGroup.items // Detaylı ürün listesi
-      };
-
-      await printCancelReceipt(categoryGroup.printerName, categoryGroup.printerType, cancelReceiptData);
-    } catch (error) {
-      console.error('İptal fişi yazdırma hatası:', error);
-      // Yazdırma hatası olsa bile iptal işlemini devam ettir
-    }
+    const cancelReceiptData = {
+      tableName: order.table_name,
+      tableType: order.table_type,
+      productName: categoryGroup.items.length === 1 
+        ? categoryGroup.items[0].productName 
+        : `${categoryGroup.items.length} Farklı Ürün`,
+      quantity: categoryGroup.totalQuantity,
+      price: categoryGroup.items.length === 1 
+        ? categoryGroup.items[0].price 
+        : categoryGroup.totalAmount / categoryGroup.totalQuantity, // Ortalama fiyat
+      cancelDate,
+      cancelTime,
+      categoryName: categoryGroup.categoryName,
+      items: categoryGroup.items // Detaylı ürün listesi
+    };
+    printCancelReceipt(categoryGroup.printerName, categoryGroup.printerType, cancelReceiptData).catch(err => {
+      console.error('İptal fişi yazdırma hatası:', err);
+    });
   }
 
   // Firebase'e iptal kayıtları ekle
@@ -2255,10 +2246,12 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
 
   // Masa ID'sinden masa bilgilerini çıkar
   if (targetTableId.startsWith('inside-')) {
-    targetTableName = `İçeri ${targetTableId.replace('inside-', '')}`;
+    targetTableName = `Masa ${targetTableId.replace('inside-', '')}`;
     targetTableType = 'inside';
   } else if (targetTableId.startsWith('outside-')) {
-    targetTableName = `Dışarı ${targetTableId.replace('outside-', '')}`;
+    const num = parseInt(targetTableId.replace('outside-', ''), 10);
+    const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+    targetTableName = `Masa ${OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num)}`;
     targetTableType = 'outside';
   } else if (targetTableId.startsWith('package-')) {
     const parts = targetTableId.split('-');
@@ -2321,8 +2314,12 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
 
 // Sipariş ürünlerini başka masaya aktar (ürünleri kaynak masadan sil, hedef masaya ekle, kategori bazlı yazdır + aktarım bildirimi)
 function getTableNameFromId(tableId) {
-  if (tableId.startsWith('inside-')) return `İçeri ${tableId.replace('inside-', '')}`;
-  if (tableId.startsWith('outside-')) return `Dışarı ${tableId.replace('outside-', '')}`;
+  if (tableId.startsWith('inside-')) return `Masa ${tableId.replace('inside-', '')}`;
+  if (tableId.startsWith('outside-')) {
+    const num = parseInt(tableId.replace('outside-', ''), 10);
+    const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+    return `Masa ${OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num)}`;
+  }
   if (tableId.startsWith('package-')) {
     const parts = tableId.split('-');
     return `Paket ${parts[parts.length - 1]}`;
@@ -5240,6 +5237,9 @@ app.whenReady().then(() => {
     setupProductsRealtimeListener();
     setupBroadcastsRealtimeListener();
     
+    // 4. Tüm dolu masaları Firebase'e senkronize et (admin dashboard doğru veri görsün)
+    await syncAllOccupiedTablesToFirebase();
+    
     console.log('✅ Firebase senkronizasyonu tamamlandı ve gerçek zamanlı listener\'lar aktif');
     console.log('💡 Not: Ürünler sadece ekleme/silme işlemlerinde Firebase\'e yazılacak (maliyet optimizasyonu)');
   }, 2000); // 2 saniye bekle, Firebase tam yüklensin
@@ -6880,6 +6880,13 @@ function generateMobileHTML(serverURL) {
       flex-direction: column;
       padding: 5px;
     }
+    .table-btn.inside-empty {
+      background: linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%);
+      border-color: #f9a8d4;
+      color: #9d174d;
+    }
+    .table-btn.inside-empty .table-number,
+    .table-btn.inside-empty .table-label { color: #9d174d; }
     .table-btn.outside-empty {
       background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
       border-color: #facc15;
@@ -8195,41 +8202,14 @@ function generateMobileHTML(serverURL) {
         <span>Çıkış Yap</span>
       </button>
       
-      <!-- Masa Tipi Seçim Ekranı -->
-      <div id="tableTypeSelection" style="display: block; position: fixed; inset: 0; background: white; z-index: 1000; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px;">
-        <!-- Çıkış Yap Butonu - Sadece bu ekranda görünsün -->
-        <div style="position: absolute; top: 20px; right: 20px;">
-          <button onclick="showLogoutModal()" style="display: flex; align-items: center; gap: 8px; padding: 10px 20px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3); transition: all 0.3s; cursor: pointer;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(239, 68, 68, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(239, 68, 68, 0.3)'">
-            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
-            </svg>
-            <span>Çıkış Yap</span>
-          </button>
-        </div>
-        
-        <div style="display: flex; flex-direction: column; gap: 32px; width: 100%; max-width: 500px; flex: 1; justify-content: center; padding: 20px;">
-          <!-- İçeri Butonu -->
-          <button onclick="selectTableTypeScreen('inside')" style="width: 100%; min-height: 280px; background: #fdf2f8; border: 3px solid #fbcfe8; border-radius: 20px; color: #111827; font-size: 24px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; position: relative; box-shadow: 0 4px 16px rgba(244, 114, 182, 0.25);" onmouseover="this.style.borderColor='#f472b6'; this.style.boxShadow='0 12px 32px rgba(244, 114, 182, 0.35)'; this.style.transform='translateY(-6px)'" onmouseout="this.style.borderColor='#fbcfe8'; this.style.boxShadow='0 4px 16px rgba(244, 114, 182, 0.25)'; this.style.transform='translateY(0)'">
-            <svg width="80" height="80" fill="none" stroke="#f472b6" viewBox="0 0 24 24" stroke-width="1.5" style="transition: all 0.2s;">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/>
-            </svg>
-            <div style="font-size: 32px; font-weight: 800; color: #111827; letter-spacing: 1px;">İÇERİ</div>
-          </button>
-          
-          <!-- Dışarı Butonu -->
-          <button onclick="selectTableTypeScreen('outside')" style="width: 100%; min-height: 280px; background: #fffbeb; border: 3px solid #fde68a; border-radius: 20px; color: #111827; font-size: 24px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; position: relative; box-shadow: 0 4px 16px rgba(250, 204, 21, 0.25);" onmouseover="this.style.borderColor='#facc15'; this.style.boxShadow='0 12px 32px rgba(250, 204, 21, 0.35)'; this.style.transform='translateY(-6px)'" onmouseout="this.style.borderColor='#fde68a'; this.style.boxShadow='0 4px 16px rgba(250, 204, 21, 0.25)'; this.style.transform='translateY(0)'">
-            <svg width="80" height="80" fill="none" stroke="#facc15" viewBox="0 0 24 24" stroke-width="1.5" style="transition: all 0.2s;">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.944 11.944 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418"/>
-            </svg>
-            <div style="font-size: 32px; font-weight: 800; color: #111827; letter-spacing: 1px;">DIŞARI</div>
-          </button>
-        </div>
+      <!-- Masa Tipi Seçim Ekranı (gizli - tek ekran masalar kullanılıyor) -->
+      <div id="tableTypeSelection" style="display: none;">
       </div>
       
-      <div id="tableSelection" style="display: none;">
-        <!-- Geri Dönüş Butonu -->
+      <div id="tableSelection" style="display: block;">
+        <!-- Geri Dönüş Butonu (gizli - tek ekran) -->
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-          <button onclick="goBackToTypeSelection()" style="display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3); transition: all 0.3s; cursor: pointer;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(107, 114, 128, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(107, 114, 128, 0.3)'">
+          <button onclick="goBackToTypeSelection()" style="display: none; align-items: center; gap: 8px; padding: 10px 16px; background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3); transition: all 0.3s; cursor: pointer;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(107, 114, 128, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(107, 114, 128, 0.3)'">
             <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
             </svg>
@@ -8753,11 +8733,17 @@ function generateMobileHTML(serverURL) {
         if (staffInfoEl) {
           staffInfoEl.style.display = 'none';
         }
-        document.getElementById('tableTypeSelection').style.display = 'flex';
-        // Sipariş gönder modalını gizle
-        document.getElementById('cart').style.display = 'none';
+        document.getElementById('tableTypeSelection').style.display = 'none';
+        document.getElementById('tableSelection').style.display = 'block';
+        const mainLogoutBtn = document.getElementById('mainLogoutBtn');
+        if (mainLogoutBtn) mainLogoutBtn.style.display = 'flex';
+        document.getElementById('cart').style.display = 'block';
+        const mergeTableBtn = document.getElementById('mergeTableBtn');
+        if (mergeTableBtn && currentStaff && currentStaff.is_manager) mergeTableBtn.style.display = 'flex';
+        else if (mergeTableBtn) mergeTableBtn.style.display = 'none';
         loadData();
         initWebSocket();
+        if (typeof renderTables === 'function') renderTables();
       }
     });
     
@@ -8806,11 +8792,17 @@ function generateMobileHTML(serverURL) {
             if (staffInfoEl) {
               staffInfoEl.style.display = 'none';
             }
-            document.getElementById('tableTypeSelection').style.display = 'flex';
-            // Sipariş gönder modalını gizle
-            document.getElementById('cart').style.display = 'none';
+            document.getElementById('tableTypeSelection').style.display = 'none';
+            document.getElementById('tableSelection').style.display = 'block';
+            const mainLogoutBtn = document.getElementById('mainLogoutBtn');
+            if (mainLogoutBtn) mainLogoutBtn.style.display = 'flex';
+            document.getElementById('cart').style.display = 'block';
+            const mergeTableBtn = document.getElementById('mergeTableBtn');
+            if (mergeTableBtn && currentStaff && currentStaff.is_manager) mergeTableBtn.style.display = 'flex';
+            else if (mergeTableBtn) mergeTableBtn.style.display = 'none';
             loadData();
             initWebSocket();
+            if (typeof renderTables === 'function') renderTables();
           }, 2000);
         } else {
           errorDiv.textContent = result.error || 'Şifre hatalı';
@@ -9105,37 +9097,51 @@ function generateMobileHTML(serverURL) {
     
     function renderTables() {
       const grid = document.getElementById('tablesGrid');
-      const filteredTables = tables.filter(t => t.type === currentTableType);
-      
-      // Normal masalar (paket olmayanlar)
-      const normalTables = filteredTables.filter(t => !t.id.startsWith('package-'));
-      // Paket masaları
-      const packageTables = filteredTables.filter(t => t.id.startsWith('package-'));
+      // Tek ekran: tüm masalar (1-20, boşluk, 61-88 (69,70,79,80 hariç), paket)
+      const insideTables = tables.filter(t => t.id.startsWith('inside-') && !t.id.startsWith('package-'));
+      const outsideTables = tables.filter(t => t.id.startsWith('outside-') && !t.id.startsWith('package-'));
+      const packageTables = tables.filter(t => t.id.startsWith('package-'));
       
       let html = '';
       
-      // Normal masalar - tek grid içinde
-      if (normalTables.length > 0) {
-        html += normalTables.map(table => {
+      // Masalar 1-20 (hafif pembe)
+      if (insideTables.length > 0) {
+        html += insideTables.map(table => {
           const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
           const nameStr = table.name.replace(/'/g, "\\'");
           const typeStr = table.type.replace(/'/g, "\\'");
           const hasOrderClass = table.hasOrder ? ' has-order' : '';
           const selectedClass = selectedTable && selectedTable.id === table.id ? ' selected' : '';
-          const outsideEmptyClass = (table.type === 'outside' && !table.hasOrder) ? ' outside-empty' : '';
-          
-          // Masa numaralandırması: İç Masa 1, Dış Masa 1 gibi
-          const tableTypeLabel = table.type === 'inside' ? 'İç Masa' : 'Dış Masa';
-          const tableDisplayName = tableTypeLabel + ' ' + table.number;
-          
-          // Durum etiketi: Dolu veya Boş
+          const insideEmptyClass = (!table.hasOrder) ? ' inside-empty' : '';
           const statusLabel = table.hasOrder ? 'Dolu' : 'Boş';
-          // Dolu masalar için daha koyu yeşil ton
-          const statusColor = table.hasOrder ? '#166534' : '#6b7280';
-          
+          const statusColor = table.hasOrder ? '#166534' : '#9d174d';
+          return '<button class="table-btn' + hasOrderClass + selectedClass + insideEmptyClass + '" onclick="selectTable(' + tableIdStr + ', \\'' + nameStr + '\\', \\'' + typeStr + '\\')">' +
+            '<div class="table-number">' + table.number + '</div>' +
+            '<div style="font-size: 10px; font-weight: 600; color: ' + statusColor + '; margin-top: 4px; padding: 2px 6px; background: ' + (table.hasOrder ? 'rgba(22, 101, 52, 0.15)' : 'rgba(107, 114, 128, 0.1)') + '; border-radius: 6px;">' + statusLabel + '</div>' +
+          '</button>';
+        }).join('');
+      }
+      
+      // 1-20 ile 61-88 arası ayırıcı çizgi (ortada parlak çember)
+      html += '<div style="grid-column: 1 / -1; padding: 20px 0; width: 100%; display: flex; align-items: center; justify-content: center;">';
+      html += '<div style="position: relative; width: 100%; display: flex; align-items: center; justify-content: center;">';
+      html += '<div style="position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; width: 100%; background: linear-gradient(90deg, #e2e8f0, #94a3b8, #e2e8f0); box-shadow: 0 1px 3px rgba(0,0,0,0.08);"></div>';
+      html += '<div style="position: relative; z-index: 10; width: 12px; height: 12px; border-radius: 50%; background: #ffffff; border: 2px solid #94a3b8; box-shadow: 0 2px 8px rgba(148,163,184,0.4), 0 0 0 2px rgba(226,232,240,0.8);"></div>';
+      html += '</div></div>';
+      
+      // Masalar 61-88 (hafif sarı)
+      if (outsideTables.length > 0) {
+        html += outsideTables.map(table => {
+          const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
+          const nameStr = table.name.replace(/'/g, "\\'");
+          const typeStr = table.type.replace(/'/g, "\\'");
+          const hasOrderClass = table.hasOrder ? ' has-order' : '';
+          const selectedClass = selectedTable && selectedTable.id === table.id ? ' selected' : '';
+          const outsideEmptyClass = (!table.hasOrder) ? ' outside-empty' : '';
+          const statusLabel = table.hasOrder ? 'Dolu' : 'Boş';
+          const statusColor = table.hasOrder ? '#166534' : '#92400e';
           return '<button class="table-btn' + hasOrderClass + selectedClass + outsideEmptyClass + '" onclick="selectTable(' + tableIdStr + ', \\'' + nameStr + '\\', \\'' + typeStr + '\\')">' +
             '<div class="table-number">' + table.number + '</div>' +
-            '<div class="table-label">' + tableDisplayName + '</div>' +
             '<div style="font-size: 10px; font-weight: 600; color: ' + statusColor + '; margin-top: 4px; padding: 2px 6px; background: ' + (table.hasOrder ? 'rgba(22, 101, 52, 0.15)' : 'rgba(107, 114, 128, 0.1)') + '; border-radius: 6px;">' + statusLabel + '</div>' +
           '</button>';
         }).join('');
@@ -9299,8 +9305,8 @@ function generateMobileHTML(serverURL) {
     
     function goBackToTables() {
       selectedTable = null;
-      document.getElementById('tableSelection').style.display = 'none';
-      document.getElementById('tableTypeSelection').style.display = 'flex';
+      document.getElementById('tableSelection').style.display = 'block';
+      document.getElementById('tableTypeSelection').style.display = 'none';
       document.getElementById('orderSection').style.display = 'none';
       const cartEl = document.getElementById('cart');
       if (cartEl) {
@@ -11731,15 +11737,14 @@ function startAPIServer() {
         id: tableId,
         number: i,
         type: 'inside',
-        name: `İçeri ${i}`,
+        name: `Masa ${i}`,
         hasOrder: hasPendingOrder
       });
     }
-    for (let i = 1; i <= 24; i++) {
-      const tableNumber = 60 + i; // 61-84
+    const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+    OUTSIDE_NUMS.forEach((tableNumber, idx) => {
       const tableId = `outside-${tableNumber}`;
-      // Hem yeni format (outside-61) hem eski format (outside-1) kontrol et
-      const oldTableId = `outside-${i}`; // Eski format için
+      const oldTableId = `outside-${idx + 1}`;
       const hasPendingOrder = (db.tableOrders || []).some(
         o => (o.table_id === tableId || o.table_id === oldTableId) && o.status === 'pending'
       );
@@ -11747,10 +11752,10 @@ function startAPIServer() {
         id: tableId,
         number: tableNumber,
         type: 'outside',
-        name: `Dışarı ${tableNumber}`,
+        name: `Masa ${tableNumber}`,
         hasOrder: hasPendingOrder
       });
-    }
+    });
     // Paket masaları - İçeri
     for (let i = 1; i <= 5; i++) {
       const tableId = `package-inside-${i}`;
@@ -12141,10 +12146,12 @@ function startAPIServer() {
 
       // Masa ID'sinden masa bilgilerini çıkar
       if (targetTableId.startsWith('inside-')) {
-        targetTableName = `İçeri ${targetTableId.replace('inside-', '')}`;
+        targetTableName = `Masa ${targetTableId.replace('inside-', '')}`;
         targetTableType = 'inside';
       } else if (targetTableId.startsWith('outside-')) {
-        targetTableName = `Dışarı ${targetTableId.replace('outside-', '')}`;
+        const num = parseInt(targetTableId.replace('outside-', ''), 10);
+        const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+        targetTableName = `Masa ${OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num)}`;
         targetTableType = 'outside';
       } else if (targetTableId.startsWith('package-')) {
         const parts = targetTableId.split('-');
@@ -12415,17 +12422,13 @@ function startAPIServer() {
     // Dışarı masalar için hem yeni hem eski format kontrol et
     let tableIdsToCheck = [tableId];
     if (tableId.startsWith('outside-')) {
-      const tableNumber = parseInt(tableId.replace('outside-', '')) || 0;
-      if (tableNumber >= 61 && tableNumber <= 84) {
-        // Yeni format (outside-61), eski formatı da kontrol et (outside-1)
-        const oldTableNumber = tableNumber - 60; // 61 -> 1, 62 -> 2, etc.
-        if (oldTableNumber >= 1 && oldTableNumber <= 24) {
-          tableIdsToCheck.push(`outside-${oldTableNumber}`);
-        }
-      } else if (tableNumber >= 1 && tableNumber <= 24) {
-        // Eski format (outside-1), yeni formatı da kontrol et (outside-61)
-        const newTableNumber = tableNumber + 60; // 1 -> 61, 2 -> 62, etc.
-        tableIdsToCheck.push(`outside-${newTableNumber}`);
+      const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+      const tableNumber = parseInt(tableId.replace('outside-', ''), 10) || 0;
+      const idx = OUTSIDE_NUMS.indexOf(tableNumber);
+      if (idx >= 0) {
+        tableIdsToCheck.push(`outside-${idx + 1}`);
+      } else if (tableNumber >= 1 && tableNumber <= 24 && OUTSIDE_NUMS[tableNumber - 1]) {
+        tableIdsToCheck.push(`outside-${OUTSIDE_NUMS[tableNumber - 1]}`);
       }
     }
     
@@ -13403,12 +13406,14 @@ async function syncSingleTableToFirebase(tableId) {
     let tableType = 'inside';
     
     if (tableId.startsWith('inside-')) {
-      tableNumber = parseInt(tableId.replace('inside-', '')) || 0;
-      tableName = `İçeri ${tableNumber}`;
+      tableNumber = parseInt(tableId.replace('inside-', ''), 10) || 0;
+      tableName = `Masa ${tableNumber}`;
       tableType = 'inside';
     } else if (tableId.startsWith('outside-')) {
-      tableNumber = parseInt(tableId.replace('outside-', '')) || 0;
-      tableName = `Dışarı ${tableNumber}`;
+      const num = parseInt(tableId.replace('outside-', ''), 10) || 0;
+      const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+      tableNumber = OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num);
+      tableName = `Masa ${tableNumber}`;
       tableType = 'outside';
     } else if (tableId.startsWith('package-inside-')) {
       tableNumber = parseInt(tableId.replace('package-inside-', '')) || 0;
@@ -13480,5 +13485,27 @@ async function syncSingleTableToFirebase(tableId) {
     console.error(`❌ Hata detayı:`, error.message);
     console.error(`❌ Stack trace:`, error.stack);
   }
+}
+
+// Uygulama başlangıcında tüm dolu masaları Firebase'e senkronize et (admin dashboard doğru veri görsün)
+async function syncAllOccupiedTablesToFirebase() {
+  if (!tablesFirestore || !tablesFirebaseDoc || !tablesFirebaseSetDoc) {
+    console.warn('⚠️ Masalar Firebase başlatılamadı, toplu senkronizasyon atlanıyor');
+    return;
+  }
+
+  const pendingOrders = (db.tableOrders || []).filter(o => o.status === 'pending');
+  const uniqueTableIds = [...new Set(pendingOrders.map(o => o.table_id))];
+
+  if (uniqueTableIds.length === 0) {
+    console.log('📋 Açık masa yok, Firebase senkronizasyonu atlanıyor');
+    return;
+  }
+
+  console.log(`🔄 ${uniqueTableIds.length} dolu masa Firebase'e senkronize ediliyor...`);
+  for (const tableId of uniqueTableIds) {
+    await syncSingleTableToFirebase(tableId);
+  }
+  console.log('✅ Tüm dolu masalar Firebase\'e senkronize edildi');
 }
 

@@ -1455,7 +1455,7 @@ const SalesHistory = () => {
                             </div>
                             <div className="flex-1">
                               <p className="font-bold text-gray-800">
-                                {sale.table_name ? `${sale.table_type === 'inside' ? 'İç' : 'Dış'} Masa ${sale.table_name}` : 'Hızlı Satış'}
+                                {sale.table_name ? sale.table_name : 'Hızlı Satış'}
                                 {sale.isGrouped && (
                                   <span className="ml-2 text-xs font-normal text-purple-600 bg-purple-100 px-2 py-0.5 rounded">
                                     (Kısmi Ödemeler)

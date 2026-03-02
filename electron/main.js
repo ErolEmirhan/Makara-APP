@@ -9557,19 +9557,37 @@ function generateMobileHTML(serverURL) {
       return Math.max(0, total - paid);
     }
     
-    function setTransferItemsQty(item, delta) {
-      const key = getTransferItemsKey(item);
-      const max = getTransferableQty(item);
+    function setTransferItemsQtyByKey(key, delta) {
+      // Key için aktarılabilir maksimum adedi, tüm satırlardaki ödenmemiş miktar üzerinden hesapla
+      // (mobil arayüzde aynı üründen birden fazla satır olduğunda 1 ile sınırlı kalma hatasını önler)
+      const transferableItems = currentOrderItems.filter(item => getTransferableQty(item) > 0);
+      if (transferableItems.length === 0) return;
+
+      // Ürünleri grupla (aynı product_id ve isGift olanları birleştir)
+      const groupedItems = {};
+      transferableItems.forEach(item => {
+        const itemKey = getTransferItemsKey(item);
+        if (!groupedItems[itemKey]) {
+          groupedItems[itemKey] = {
+            product_id: item.product_id,
+            product_name: item.product_name,
+            isGift: item.isGift || false,
+            price: item.price || 0,
+            totalQty: 0,
+            paidQty: 0
+          };
+        }
+        groupedItems[itemKey].totalQty += (item.quantity || 0);
+        groupedItems[itemKey].paidQty += (item.paid_quantity || 0);
+      });
+
+      const groupedItem = groupedItems[key];
+      if (!groupedItem) return;
+
+      const max = getTransferableQty(groupedItem);
       const current = Math.max(0, Math.min(max, (transferItemsQuantities[key] || 0) + delta));
       transferItemsQuantities[key] = current;
       renderTransferItemsContent();
-    }
-    
-    function setTransferItemsQtyByKey(key, delta) {
-      // Key'den item'ı bul
-      const item = currentOrderItems.find(i => getTransferItemsKey(i) === key);
-      if (!item) return;
-      setTransferItemsQty(item, delta);
     }
     
     function getSelectedTransferTotal() {

@@ -110,18 +110,18 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     setSelectedQuantities(initialQuantities);
   }, [items]);
 
-  // Parçalı ödeme: 1/2, 1/3, ... 1/10 (daima baştaki toplam tutara göre, küsüratsız tam lira)
+  // Parçalı ödeme: 1/2, 1/3, ... 1/10 (DAİMA KALAN TUTARA GÖRE, küsüratsız tam lira)
   const handleSplitFractionPayment = async (denominator) => {
-    const initialTotal = initialOrderTotalRef.current ?? roundMoney(Number(order?.total_amount) || Number(totalAmount) || 0);
-    if (initialTotal <= 0) {
-      showToast('Toplam tutar hesaplanamadı', 'warning');
+    const remaining = remainingAmount;
+    if (remaining <= 0) {
+      showToast('Kalan tutar yok', 'info');
       return;
     }
-    // Tam lira: küsürat yok (1/3 = 33 TL, bir taksitte 5 TL fazla/eksik olabilir)
-    const targetAmount = Math.floor(initialTotal / denominator);
-    const payAmount = Math.min(targetAmount, Math.floor(remainingAmount));
+    // Tam lira: küsürat yok (1/3 = 33 TL, son taksitte küçük fark olabilir)
+    const targetAmount = Math.floor(remaining / denominator);
+    const payAmount = targetAmount;
     if (payAmount <= 0) {
-      showToast('Kalan tutar yok', 'info');
+      showToast('Kalan tutar bu bölme için uygun değil', 'info');
       return;
     }
     if (!window.electronAPI?.createPartialPaymentSale || !window.electronAPI?.updateTableOrderAmount) {

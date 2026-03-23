@@ -267,9 +267,10 @@ function App() {
       setYanUrunler(yanUrunlerList);
     }
     
-    // Tüm ürünleri sadece ilk yüklemede çek (arama için)
-    const allProds = await window.electronAPI.getProducts(null);
-    setAllProducts(allProds);
+    // Eski cihazlarda ilk açılışı hızlandırmak için tüm ürünleri lazy-load et.
+    window.electronAPI.getProducts(null)
+      .then((allProds) => setAllProducts(allProds))
+      .catch(() => setAllProducts([]));
     if (cats.length > 0) {
       setSelectedCategory(cats[0]);
     }
@@ -924,10 +925,7 @@ function App() {
     setBranchError('');
     setIsActivatingBranch(true);
     try {
-      const minLoadingMs = 2000;
-      const delayPromise = new Promise((resolve) => setTimeout(resolve, minLoadingMs));
-      const activatePromise = window.electronAPI.activateBranch(normalized);
-      const [result] = await Promise.all([activatePromise, delayPromise]);
+      const result = await window.electronAPI.activateBranch(normalized);
       if (!result?.success) {
         setBranchError(result?.error || 'Sube baglantisi kurulamadi.');
         return;
@@ -956,7 +954,7 @@ function App() {
             <div className="mb-10 text-center">
               <div className="mx-auto mb-5 h-24 w-24 md:h-28 md:w-28 rounded-3xl bg-white shadow-[0_12px_34px_rgba(0,0,0,0.14)] border border-slate-100 flex items-center justify-center overflow-hidden">
                 <img
-                  src="/logo.png"
+                  src="./logo.png"
                   alt="Makara Logo"
                   className="h-full w-full object-contain p-2"
                 />
@@ -970,8 +968,8 @@ function App() {
                 {BRANCH_OPTIONS.map((branch) => {
                   const isSelected = selectedBranchKey === branch.key;
                   const branchBgImage = branch.key === 'makara'
-                    ? '/L_height.webp'
-                    : '/meramin-yeni-merkezi-surici-carsisi-003.jpg';
+                    ? './L_height.webp'
+                    : './meramin-yeni-merkezi-surici-carsisi-003.jpg';
                   return (
                     <button
                       key={branch.key}
@@ -1043,36 +1041,6 @@ function App() {
             </div>
           </div>
 
-          {isActivatingBranch && (
-            <div className="absolute inset-0 z-40 bg-white flex items-center justify-center">
-              <div className="flex flex-col items-center gap-10">
-                <p
-                  className="text-slate-900 text-4xl md:text-6xl font-black tracking-tight"
-                  style={{ animation: 'softReveal 420ms ease-out forwards' }}
-                >
-                  {BRANCH_OPTIONS.find((b) => b.key === selectedBranchKey)?.label || 'ŞUBE YÜKLENİYOR'}
-                </p>
-
-                <div
-                  className="relative h-[360px] w-[360px] md:h-[420px] md:w-[420px]"
-                  style={{ animation: 'softReveal 560ms ease-out forwards' }}
-                >
-                  <div className="absolute inset-0 rounded-full border-[16px] border-pink-100" />
-                  <div className="absolute inset-0 rounded-full border-[16px] border-transparent border-t-pink-400 border-r-pink-300 animate-spin" />
-                  <div className="absolute inset-[34px] rounded-full bg-white shadow-inner flex items-center justify-center">
-                    <span className="text-pink-500 text-xl md:text-2xl font-extrabold tracking-wide">Yükleniyor</span>
-                  </div>
-                </div>
-              </div>
-
-              <style>{`
-                @keyframes softReveal {
-                  0% { opacity: 0; transform: translateY(10px) scale(0.985); filter: brightness(0.92); }
-                  100% { opacity: 1; transform: translateY(0) scale(1); filter: brightness(1); }
-                }
-              `}</style>
-            </div>
-          )}
         </div>
       </>
     );

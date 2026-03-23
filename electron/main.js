@@ -91,6 +91,24 @@ let branchSettingsPath = null;
 let categoriesRealtimeUnsubscribe = null;
 let productsRealtimeUnsubscribe = null;
 let broadcastsRealtimeUnsubscribe = null;
+let branchWarmupInProgress = false;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function processInChunks(items, chunkSize, handler, pauseMs = 0) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  for (let i = 0; i < items.length; i += chunkSize) {
+    const chunk = items.slice(i, i + chunkSize);
+    for (const item of chunk) {
+      handler(item);
+    }
+    if (pauseMs > 0 && i + chunkSize < items.length) {
+      await sleep(pauseMs);
+    }
+  }
+}
 
 // Cloudflare R2 entegrasyonu
 const R2_CONFIG = {
@@ -227,13 +245,34 @@ async function activateBranch(branchKey) {
 
   saveBranchSettings();
 
-  // Şube aktive edildiğinde ilgili firebase'den local cache'i güncelle
-  await syncCategoriesFromFirebase();
-  await syncProductsFromFirebase();
-  await migrateLocalImagesToFirebase();
+  // Realtime listener'ları hemen başlat, UI beklemesin.
   categoriesRealtimeUnsubscribe = setupCategoriesRealtimeListener();
   productsRealtimeUnsubscribe = setupProductsRealtimeListener();
   broadcastsRealtimeUnsubscribe = setupBroadcastsRealtimeListener();
+
+  // Ağır işlemleri lazy/background çalıştır: şube girişini bloklamasın.
+  if (!branchWarmupInProgress) {
+    branchWarmupInProgress = true;
+    const warmupBranchKey = activeBranchKey;
+    setTimeout(async () => {
+      try {
+        // Kullanıcı bu sırada başka şubeye geçtiyse eski warmup'ı atla.
+        if (activeBranchKey !== warmupBranchKey) return;
+        // Kademeli (lazy) warmup: eski cihazlarda yük bir anda binmesin.
+        await syncCategoriesFromFirebase();
+        await sleep(180);
+        if (activeBranchKey !== warmupBranchKey) return;
+        await syncProductsFromFirebase();
+        await sleep(260);
+        if (activeBranchKey !== warmupBranchKey) return;
+        await migrateLocalImagesToFirebase();
+      } catch (error) {
+        console.error('Arka plan branch warmup hatası:', error);
+      } finally {
+        branchWarmupInProgress = false;
+      }
+    }, 0);
+  }
 
   return {
     success: true,
@@ -708,8 +747,9 @@ async function syncCategoriesFromFirebase() {
     let addedCount = 0;
     let updatedCount = 0;
     
-    snapshot.forEach((doc) => {
-      const firebaseCategory = doc.data();
+    const docs = snapshot.docs || [];
+    await processInChunks(docs, 120, (snapshotDoc) => {
+      const firebaseCategory = snapshotDoc.data();
       const categoryId = typeof firebaseCategory.id === 'string' ? parseInt(firebaseCategory.id) : firebaseCategory.id;
       
       // Local database'de bu kategori var mı kontrol et
@@ -732,7 +772,7 @@ async function syncCategoriesFromFirebase() {
         });
         addedCount++;
       }
-    });
+    }, 12);
     
     // ID'leri sırala ve order_index'e göre sırala
     db.categories.sort((a, b) => {
@@ -764,8 +804,9 @@ async function syncProductsFromFirebase() {
     let addedCount = 0;
     let updatedCount = 0;
     
-    snapshot.forEach((doc) => {
-      const firebaseProduct = doc.data();
+    const docs = snapshot.docs || [];
+    await processInChunks(docs, 150, (snapshotDoc) => {
+      const firebaseProduct = snapshotDoc.data();
       const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id) : firebaseProduct.id;
       
       // Local database'de bu ürün var mı kontrol et
@@ -792,7 +833,7 @@ async function syncProductsFromFirebase() {
         });
         addedCount++;
       }
-    });
+    }, 14);
     
     saveDatabase();
     console.log(`✅ Firebase'den ${snapshot.size} ürün çekildi (${addedCount} yeni, ${updatedCount} güncellendi)`);

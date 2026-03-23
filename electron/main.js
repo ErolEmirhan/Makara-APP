@@ -32,6 +32,66 @@ let storageUploadBytes = null;
 let storageGetDownloadURL = null;
 let storageDeleteObject = null;
 
+// Firebase modülleri (tek noktadan yüklenir)
+const firebaseAppModule = require('firebase/app');
+const firebaseFirestoreModule = require('firebase/firestore');
+const firebaseStorageModule = require('firebase/storage');
+
+// Çoklu şube yapılandırması
+const BRANCH_CONFIGS = {
+  makara: {
+    key: 'makara',
+    label: 'Makara',
+    mainFirebase: {
+      apiKey: "AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA",
+      authDomain: "makara-16344.firebaseapp.com",
+      projectId: "makara-16344",
+      storageBucket: "makara-16344.firebasestorage.app",
+      messagingSenderId: "216769654742",
+      appId: "1:216769654742:web:16792742d4613f4269be77",
+      measurementId: "G-K4XZHP11MM"
+    },
+    tablesFirebase: {
+      apiKey: "AIzaSyDu_NUrgas4wZ_wdfAYE-DgxqTpb7vKxyo",
+      authDomain: "makaramasalar.firebaseapp.com",
+      projectId: "makaramasalar",
+      storageBucket: "makaramasalar.firebasestorage.app",
+      messagingSenderId: "840151572206",
+      appId: "1:840151572206:web:0afaf93deea636309e5dff",
+      measurementId: "G-2S0J3566ZY"
+    }
+  },
+  makarasur: {
+    key: 'makarasur',
+    label: 'Makara Sur',
+    mainFirebase: {
+      apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+      authDomain: "makarasurici.firebaseapp.com",
+      projectId: "makarasurici",
+      storageBucket: "makarasurici.firebasestorage.app",
+      messagingSenderId: "237735301273",
+      appId: "1:237735301273:web:bf62c8f145434df0292808",
+      measurementId: "G-WXWWQT92L6"
+    },
+    // Sur şubede tek veritabanı kullanılacağı için tables da aynı projeye bağlanır
+    tablesFirebase: {
+      apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+      authDomain: "makarasurici.firebaseapp.com",
+      projectId: "makarasurici",
+      storageBucket: "makarasurici.firebasestorage.app",
+      messagingSenderId: "237735301273",
+      appId: "1:237735301273:web:bf62c8f145434df0292808",
+      measurementId: "G-WXWWQT92L6"
+    }
+  }
+};
+
+let activeBranchKey = 'makara';
+let branchSettingsPath = null;
+let categoriesRealtimeUnsubscribe = null;
+let productsRealtimeUnsubscribe = null;
+let broadcastsRealtimeUnsubscribe = null;
+
 // Cloudflare R2 entegrasyonu
 const R2_CONFIG = {
   accountId: 'e33cde4cf4906c2179b978f47a24bc2e',
@@ -53,83 +113,133 @@ const r2Client = new S3Client({
   },
 });
 
-// Ana Firebase (satışlar, ürünler, kategoriler için)
-try {
-  // Firebase modüllerini dinamik olarak yükle
-  const firebaseAppModule = require('firebase/app');
-  const firebaseFirestoreModule = require('firebase/firestore');
-  const firebaseStorageModule = require('firebase/storage');
-  
-  const firebaseConfig = {
-    apiKey: "AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA",
-    authDomain: "makara-16344.firebaseapp.com",
-    projectId: "makara-16344",
-    storageBucket: "makara-16344.firebasestorage.app",
-    messagingSenderId: "216769654742",
-    appId: "1:216769654742:web:16792742d4613f4269be77",
-    measurementId: "G-K4XZHP11MM"
-  };
-
-  firebaseApp = firebaseAppModule.initializeApp(firebaseConfig);
-  firestore = firebaseFirestoreModule.getFirestore(firebaseApp);
-  storage = firebaseStorageModule.getStorage(firebaseApp);
-  firebaseCollection = firebaseFirestoreModule.collection;
-  firebaseAddDoc = firebaseFirestoreModule.addDoc;
-  firebaseServerTimestamp = firebaseFirestoreModule.serverTimestamp;
-  firebaseGetDocs = firebaseFirestoreModule.getDocs;
-  firebaseDeleteDoc = firebaseFirestoreModule.deleteDoc;
-  firebaseDoc = firebaseFirestoreModule.doc;
-  firebaseSetDoc = firebaseFirestoreModule.setDoc;
-  firebaseOnSnapshot = firebaseFirestoreModule.onSnapshot;
-  firebaseWhere = firebaseFirestoreModule.where;
-  firebaseQuery = firebaseFirestoreModule.query;
-  storageRef = firebaseStorageModule.ref;
-  storageUploadBytes = firebaseStorageModule.uploadBytes;
-  storageGetDownloadURL = firebaseStorageModule.getDownloadURL;
-  storageDeleteObject = firebaseStorageModule.deleteObject;
-  console.log('✅ Ana Firebase başarıyla başlatıldı (Firestore + Storage)');
-} catch (error) {
-  console.error('❌ Ana Firebase başlatılamadı:', error);
-  console.log('Firebase olmadan devam ediliyor...');
-}
-
-// Masalar için ayrı Firebase (makaramasalar)
+// Masalar için ayrı Firebase
 let tablesFirebaseApp = null;
 let tablesFirestore = null;
 let tablesFirebaseCollection = null;
 let tablesFirebaseDoc = null;
 let tablesFirebaseSetDoc = null;
 
-try {
-  const firebaseAppModule = require('firebase/app');
-  const firebaseFirestoreModule = require('firebase/firestore');
-  
-  const tablesFirebaseConfig = {
-    apiKey: "AIzaSyDu_NUrgas4wZ_wdfAYE-DgxqTpb7vKxyo",
-    authDomain: "makaramasalar.firebaseapp.com",
-    projectId: "makaramasalar",
-    storageBucket: "makaramasalar.firebasestorage.app",
-    messagingSenderId: "840151572206",
-    appId: "1:840151572206:web:0afaf93deea636309e5dff",
-    measurementId: "G-2S0J3566ZY"
-  };
-
-  tablesFirebaseApp = firebaseAppModule.initializeApp(tablesFirebaseConfig, 'tables');
-  tablesFirestore = firebaseFirestoreModule.getFirestore(tablesFirebaseApp);
-  tablesFirebaseCollection = firebaseFirestoreModule.collection;
-  tablesFirebaseDoc = firebaseFirestoreModule.doc;
-  tablesFirebaseSetDoc = firebaseFirestoreModule.setDoc;
-  console.log('✅ Masalar Firebase başarıyla başlatıldı (makaramasalar)');
-} catch (error) {
-  console.error('❌ Masalar Firebase başlatılamadı:', error);
-  console.log('Masalar Firebase olmadan devam ediliyor...');
-}
-
 let mainWindow;
 let dbPath;
 let apiServer = null;
 let io = null;
 let serverPort = 3000;
+
+function loadBranchSettings() {
+  try {
+    branchSettingsPath = path.join(app.getPath('userData'), 'branch-settings.json');
+    if (!fs.existsSync(branchSettingsPath)) return;
+    const raw = fs.readFileSync(branchSettingsPath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.activeBranchKey && BRANCH_CONFIGS[parsed.activeBranchKey]) {
+      activeBranchKey = parsed.activeBranchKey;
+    }
+  } catch (error) {
+    console.error('Branch settings yüklenemedi:', error);
+  }
+}
+
+function saveBranchSettings() {
+  try {
+    if (!branchSettingsPath) {
+      branchSettingsPath = path.join(app.getPath('userData'), 'branch-settings.json');
+    }
+    fs.writeFileSync(
+      branchSettingsPath,
+      JSON.stringify({ activeBranchKey }, null, 2),
+      'utf8'
+    );
+  } catch (error) {
+    console.error('Branch settings kaydedilemedi:', error);
+  }
+}
+
+async function initializeFirebaseForBranch(branchKey) {
+  const branch = BRANCH_CONFIGS[branchKey] || BRANCH_CONFIGS.makara;
+  activeBranchKey = branch.key;
+
+  // Önce önceki realtime listenerları kapat
+  try { categoriesRealtimeUnsubscribe?.(); } catch (_) {}
+  try { productsRealtimeUnsubscribe?.(); } catch (_) {}
+  try { broadcastsRealtimeUnsubscribe?.(); } catch (_) {}
+  categoriesRealtimeUnsubscribe = null;
+  productsRealtimeUnsubscribe = null;
+  broadcastsRealtimeUnsubscribe = null;
+  isCategoriesListenerInitialized = false;
+  isProductsListenerInitialized = false;
+  isBroadcastsListenerInitialized = false;
+
+  // Aynı isimli app'ler varsa temizle
+  const { getApps, getApp, initializeApp, deleteApp } = firebaseAppModule;
+  for (const appName of ['main-tenant', 'tables-tenant']) {
+    try {
+      const existing = getApp(appName);
+      await deleteApp(existing);
+    } catch (_) {}
+  }
+
+  try {
+    // Main firebase
+    firebaseApp = initializeApp(branch.mainFirebase, 'main-tenant');
+    firestore = firebaseFirestoreModule.getFirestore(firebaseApp);
+    storage = firebaseStorageModule.getStorage(firebaseApp);
+    firebaseCollection = firebaseFirestoreModule.collection;
+    firebaseAddDoc = firebaseFirestoreModule.addDoc;
+    firebaseServerTimestamp = firebaseFirestoreModule.serverTimestamp;
+    firebaseGetDocs = firebaseFirestoreModule.getDocs;
+    firebaseDeleteDoc = firebaseFirestoreModule.deleteDoc;
+    firebaseDoc = firebaseFirestoreModule.doc;
+    firebaseSetDoc = firebaseFirestoreModule.setDoc;
+    firebaseOnSnapshot = firebaseFirestoreModule.onSnapshot;
+    firebaseWhere = firebaseFirestoreModule.where;
+    firebaseQuery = firebaseFirestoreModule.query;
+    storageRef = firebaseStorageModule.ref;
+    storageUploadBytes = firebaseStorageModule.uploadBytes;
+    storageGetDownloadURL = firebaseStorageModule.getDownloadURL;
+    storageDeleteObject = firebaseStorageModule.deleteObject;
+
+    // Tables firebase
+    tablesFirebaseApp = initializeApp(branch.tablesFirebase, 'tables-tenant');
+    tablesFirestore = firebaseFirestoreModule.getFirestore(tablesFirebaseApp);
+    tablesFirebaseCollection = firebaseFirestoreModule.collection;
+    tablesFirebaseDoc = firebaseFirestoreModule.doc;
+    tablesFirebaseSetDoc = firebaseFirestoreModule.setDoc;
+
+    console.log(`✅ Firebase branch aktif: ${branch.key}`);
+    return true;
+  } catch (error) {
+    console.error(`❌ Firebase branch başlatılamadı (${branch.key}):`, error);
+    firestore = null;
+    storage = null;
+    tablesFirestore = null;
+    return false;
+  }
+}
+
+async function activateBranch(branchKey) {
+  if (!BRANCH_CONFIGS[branchKey]) {
+    return { success: false, error: 'Geçersiz şube anahtarı' };
+  }
+
+  const ok = await initializeFirebaseForBranch(branchKey);
+  if (!ok) return { success: false, error: 'Firebase bağlantısı kurulamadı' };
+
+  saveBranchSettings();
+
+  // Şube aktive edildiğinde ilgili firebase'den local cache'i güncelle
+  await syncCategoriesFromFirebase();
+  await syncProductsFromFirebase();
+  await migrateLocalImagesToFirebase();
+  categoriesRealtimeUnsubscribe = setupCategoriesRealtimeListener();
+  productsRealtimeUnsubscribe = setupProductsRealtimeListener();
+  broadcastsRealtimeUnsubscribe = setupBroadcastsRealtimeListener();
+
+  return {
+    success: true,
+    branch: { key: activeBranchKey, label: BRANCH_CONFIGS[activeBranchKey].label }
+  };
+}
 
 // Saat formatı helper fonksiyonu (saat:dakika:saniye)
 function getFormattedTime(date = new Date()) {
@@ -1000,6 +1110,24 @@ function createWindow() {
 }
 
 // IPC Handlers
+ipcMain.handle('get-branch-options', () => {
+  return Object.values(BRANCH_CONFIGS).map(b => ({ key: b.key, label: b.label }));
+});
+
+ipcMain.handle('get-active-branch', () => {
+  const active = BRANCH_CONFIGS[activeBranchKey] || BRANCH_CONFIGS.makara;
+  return { key: active.key, label: active.label };
+});
+
+ipcMain.handle('activate-branch', async (event, branchKey) => {
+  try {
+    return await activateBranch(branchKey);
+  } catch (error) {
+    console.error('activate-branch hatası:', error);
+    return { success: false, error: error.message || 'Şube aktifleştirilemedi' };
+  }
+});
+
 ipcMain.handle('get-categories', () => {
   return db.categories.sort((a, b) => a.order_index - b.order_index);
 });
@@ -4593,14 +4721,16 @@ function generateProductionReceiptText(items, receiptData) {
 
 // Kasa fişi metin (termal RAW)
 function generateReceiptText(receiptData) {
+  const isSuriciBranch = activeBranchKey === 'makarasur';
+  const entityLabel = isSuriciBranch ? 'Musteri' : 'Masa';
   const lines = [
     '--------------------------------',
     '         MAKARA',
     receiptData.tableName
-      ? (receiptData.tableType === 'online' ? '   Online Siparis' : '   Masa Siparisi')
+      ? (receiptData.tableType === 'online' ? '   Online Siparis' : `   ${entityLabel} Siparisi`)
       : '    Satis Fisi',
     '--------------------------------',
-    receiptData.tableName ? `Masa: ${receiptData.tableName.replace('Online Siparis Musteri: ', '')}` : null,
+    receiptData.tableName ? `${entityLabel}: ${receiptData.tableName.replace('Online Siparis Musteri: ', '')}` : null,
     receiptData.customer_phone ? `Tel: ${receiptData.customer_phone}` : null,
     receiptData.customer_address ? `Adres: ${receiptData.customer_address}` : null,
     `Tarih: ${receiptData.sale_date || new Date().toLocaleDateString('tr-TR')}`,
@@ -4910,6 +5040,11 @@ function generateProductionReceiptHTML(items, receiptData) {
 
 // Fiş HTML içeriğini oluştur
 function generateReceiptHTML(receiptData) {
+  const isSuriciBranch = activeBranchKey === 'makarasur';
+  const entityLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
+  const receiptCustomerName = (receiptData.tableName || '').replace('Online Sipariş Müşteri: ', '').trim();
+  const normalizedPaymentMethod = String(receiptData.paymentMethod || '').trim().toLocaleLowerCase('tr-TR');
+  const showPaymentInfo = normalizedPaymentMethod !== 'adisyon';
   const itemsHTML = receiptData.items.map(item => {
     const isGift = item.isGift || false;
     const displayPrice = isGift ? 0 : item.price;
@@ -5093,7 +5228,10 @@ function generateReceiptHTML(receiptData) {
     <body>
       <div class="header">
         <h3>MAKARA</h3>
-        <p style="font-size: 10px; margin: 0; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName ? (receiptData.tableType === 'online' ? 'Online Sipariş' : 'Masa Siparişi') : 'Satış Fişi'}</p>
+        ${isSuriciBranch && receiptCustomerName ? `
+        <h3 style="margin-top: 0; margin-bottom: 4px; line-height: 1.1; text-transform: uppercase; letter-spacing: 0.3px;">${receiptCustomerName}</h3>
+        ` : ''}
+        <p style="font-size: 10px; margin: 0; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName ? (receiptData.tableType === 'online' ? 'Online Sipariş' : `${entityLabel} Siparişi`) : 'Satış Fişi'}</p>
       </div>
       
       <div class="info">
@@ -5108,10 +5246,12 @@ function generateReceiptHTML(receiptData) {
           ` : ''}
         </div>
         ` : `
+        ${isSuriciBranch ? '' : `
         <div>
-          <span>Masa:</span>
+          <span>${entityLabel}:</span>
           <span style="font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">${receiptData.tableName}</span>
         </div>
+        `}
         `) : ''}
         ${receiptData.tableType === 'online' && receiptData.customer_address ? `
         <div style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #000;">
@@ -5190,10 +5330,12 @@ function generateReceiptHTML(receiptData) {
             return sum + (item.price * item.quantity);
           }, 0)).toFixed(2)}</span>
         </div>
+        ${showPaymentInfo ? `
         <div style="font-size: 11px; color: #000; font-weight: 900; font-style: italic; font-family: 'Montserrat', sans-serif;">
           <span>Ödeme:</span>
           <span>${receiptData.paymentMethod || 'Nakit'}</span>
         </div>
+        ` : ''}
       </div>
       
       ${receiptData.qrCodeDataURL && receiptData.tableType === 'online' ? `
@@ -5216,33 +5358,18 @@ function generateReceiptHTML(receiptData) {
 }
 
 app.whenReady().then(() => {
+  loadBranchSettings();
   initDatabase();
   createWindow();
   startAPIServer();
 
-  // Firebase senkronizasyonu: Sadece Firebase'den çek, gereksiz write işlemleri yapma
-  setTimeout(async () => {
-    console.log('🔄 Firebase senkronizasyonu başlatılıyor...');
-    
-    // 1. Önce Firebase'den kategorileri ve ürünleri çek (sadece read)
-    await syncCategoriesFromFirebase();
-    await syncProductsFromFirebase();
-    
-    // 2. Local path'leri Firebase Storage'a yükle (migration - sadece ilk kurulum için)
-    await migrateLocalImagesToFirebase();
-    
-    // 3. Gerçek zamanlı listener'ları başlat (anında güncellemeler için)
-    // NOT: Artık tüm ürünleri Firebase'e yazmıyoruz - sadece yeni ekleme/silme işlemlerinde yazıyoruz
-    setupCategoriesRealtimeListener();
-    setupProductsRealtimeListener();
-    setupBroadcastsRealtimeListener();
-    
-    // 4. Tüm dolu masaları Firebase'e senkronize et (admin dashboard doğru veri görsün)
-    await syncAllOccupiedTablesToFirebase();
-    
-    console.log('✅ Firebase senkronizasyonu tamamlandı ve gerçek zamanlı listener\'lar aktif');
-    console.log('💡 Not: Ürünler sadece ekleme/silme işlemlerinde Firebase\'e yazılacak (maliyet optimizasyonu)');
-  }, 2000); // 2 saniye bekle, Firebase tam yüklensin
+  // Varsayılan/son seçilen branch için Firebase istemcilerini hazırla.
+  // Not: Veri senkronizasyonu renderer'dan 'activate-branch' çağrısı ile başlatılır.
+  initializeFirebaseForBranch(activeBranchKey).then((ok) => {
+    if (!ok) {
+      console.error('⚠️ Başlangıç branch Firebase bağlantısı kurulamadı');
+    }
+  });
 
   // Uygulama paketlenmişse güncelleme kontrolü yap
   if (app.isPackaged) {
@@ -6212,6 +6339,8 @@ async function printAdisyonByCategory(items, adisyonData) {
 
 // Adisyon metin (termal RAW) - HTML yerine hızlı yazdırma
 function generateAdisyonText(items, adisyonData) {
+  const isSuriciBranch = activeBranchKey === 'makarasur';
+  const entityLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
   const staffName = adisyonData.staff_name || (items.length > 0 && items[0].staff_name ? items[0].staff_name : null);
   const lines = [
     '--------------------------------',
@@ -6221,7 +6350,7 @@ function generateAdisyonText(items, adisyonData) {
     adisyonData.transferFromTableName && adisyonData.transferToTableName
       ? `AKTARIM: ${adisyonData.transferFromTableName} -> ${adisyonData.transferToTableName}`
       : null,
-    adisyonData.tableName ? `Masa: ${adisyonData.tableName}` : null,
+    adisyonData.tableName ? `${entityLabel}: ${adisyonData.tableName}` : null,
     staffName ? `Garson: ${staffName}` : null,
     `Tarih: ${adisyonData.sale_date || new Date().toLocaleDateString('tr-TR')}`,
     `Saat:  ${adisyonData.sale_time || getFormattedTime(new Date())}`,
@@ -6258,6 +6387,8 @@ function generateAdisyonText(items, adisyonData) {
 
 // Modern ve profesyonel adisyon HTML formatı
 function generateAdisyonHTML(items, adisyonData) {
+  const isSuriciBranch = activeBranchKey === 'makarasur';
+  const entityLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
   // Garson ismini adisyonData'dan al (eğer yoksa items'dan al)
   const staffName = adisyonData.staff_name || (items.length > 0 && items[0].staff_name ? items[0].staff_name : null);
   
@@ -6500,7 +6631,7 @@ function generateAdisyonHTML(items, adisyonData) {
       ${adisyonData.transferFromTableName && adisyonData.transferToTableName ? `
       <div style="margin: 0 0 12px 0; padding: 10px 12px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 2px solid #f59e0b; border-radius: 8px; text-align: center; box-shadow: 0 2px 6px rgba(245,158,11,0.4);">
         <p style="font-size: 9px; font-weight: 900; color: #92400e; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;">🔄 Aktarım</p>
-        <p style="font-size: 12px; font-weight: 900; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif; line-height: 1.3;">${adisyonData.transferFromTableName} masasından<br/><strong>${adisyonData.transferToTableName}</strong> masasına aktarıldı</p>
+        <p style="font-size: 12px; font-weight: 900; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif; line-height: 1.3;">${adisyonData.transferFromTableName} ${isSuriciBranch ? 'müşterisinden' : 'masasından'}<br/><strong>${adisyonData.transferToTableName}</strong> ${isSuriciBranch ? 'müşterisine' : 'masasına'} aktarıldı</p>
       </div>
       ` : ''}
       <div class="info">
@@ -6511,7 +6642,7 @@ function generateAdisyonHTML(items, adisyonData) {
         </div>
         ` : `
         <div class="table-row">
-          <div class="table-label">Masa:</div>
+          <div class="table-label">${entityLabel}:</div>
           <div class="table-value">${adisyonData.tableName}</div>
         </div>
         `) : ''}
@@ -11361,6 +11492,20 @@ function startAPIServer() {
   const localIP = getLocalIP();
   const serverURL = `http://${localIP}:${serverPort}`;
 
+  function getLocalCategoriesWithYanUrunler() {
+    const YAN_URUNLER_CATEGORY_ID = 999999;
+    const base = Array.isArray(db.categories) ? [...db.categories] : [];
+    base.sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+    if (!base.find(c => c.id === YAN_URUNLER_CATEGORY_ID)) {
+      base.push({
+        id: YAN_URUNLER_CATEGORY_ID,
+        name: 'Yan Ürünler',
+        order_index: 9999
+      });
+    }
+    return base;
+  }
+
   // API Endpoints
   appExpress.get('/api/categories', async (req, res) => {
     try {
@@ -11387,51 +11532,35 @@ function startAPIServer() {
           return a.id - b.id;
         });
         
+        // Firebase boş dönerse local fallback kullan
+        if (categories.length === 0) {
+          return res.json(getLocalCategoriesWithYanUrunler());
+        }
         // Yan Ürünler kategorisini ekle
         const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
-        // Eğer zaten eklenmemişse ekle
         if (!categories.find(c => c.id === YAN_URUNLER_CATEGORY_ID)) {
           categories.push({
             id: YAN_URUNLER_CATEGORY_ID,
             name: 'Yan Ürünler',
-            order_index: 9999 // En sona ekle
+            order_index: 9999
           });
         }
         
         res.json(categories);
       } else {
         // Firebase yoksa local database'den çek
-        const localCategories = db.categories.sort((a, b) => a.order_index - b.order_index);
-        // Yan Ürünler kategorisini ekle
-        const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
-        // Eğer zaten eklenmemişse ekle
-        if (!localCategories.find(c => c.id === YAN_URUNLER_CATEGORY_ID)) {
-          localCategories.push({
-            id: YAN_URUNLER_CATEGORY_ID,
-            name: 'Yan Ürünler',
-            order_index: 9999 // En sona ekle
-          });
-        }
-        res.json(localCategories);
+        res.json(getLocalCategoriesWithYanUrunler());
       }
     } catch (error) {
       console.error('❌ Kategoriler çekilirken hata:', error);
       // Hata durumunda local database'den çek
-      const localCategories = db.categories.sort((a, b) => a.order_index - b.order_index);
-      // Yan Ürünler kategorisini ekle
-      const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
-      localCategories.push({
-        id: YAN_URUNLER_CATEGORY_ID,
-        name: 'Yan Ürünler',
-        order_index: 9999 // En sona ekle
-      });
-      res.json(localCategories);
+      res.json(getLocalCategoriesWithYanUrunler());
     }
   });
 
   appExpress.get('/api/products', async (req, res) => {
+    const categoryId = req.query.category_id;
     try {
-      const categoryId = req.query.category_id;
       const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
       
       // Yan Ürünler kategorisi seçildiyse yan ürünleri döndür
@@ -11480,6 +11609,15 @@ function startAPIServer() {
         }
       }
       
+      // Firebase boş dönerse local fallback kullan
+      if (products.length === 0) {
+        if (categoryId) {
+          products = db.products.filter(p => p.category_id === Number(categoryId));
+        } else {
+          products = db.products;
+        }
+      }
+
       // PERFORMANS: Stok bilgisini sadece local'den al (Firebase çağrısı yok - daha hızlı)
       const productsWithStock = products.map((product) => {
         const localProduct = db.products.find(p => p.id === product.id);
@@ -11715,7 +11853,8 @@ function startAPIServer() {
         }
       });
     } else {
-      res.status(401).json({ success: false, error: 'Şifre hatalı' });
+      // Konsolda "Failed to load resource: 401" görünmemesi için 200 ile dön
+      res.json({ success: false, error: 'Şifre hatalı' });
     }
   });
   

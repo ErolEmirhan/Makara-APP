@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.32">
+  <link rel="manifest" href="/manifest.json?v=2.4.34">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.32';
+      const APP_VERSION = '2.4.34';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -120,20 +120,75 @@
       }
     })();
     
-    // Firebase yapılandırması
-    const firebaseConfig = {
-      apiKey: "AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA",
-      authDomain: "makara-16344.firebaseapp.com",
-      projectId: "makara-16344",
-      storageBucket: "makara-16344.firebasestorage.app",
-      messagingSenderId: "216769654742",
-      appId: "1:216769654742:web:16792742d4613f4269be77",
-      measurementId: "G-K4XZHP11MM"
+    // Çoklu şube Firebase yapılandırması
+    const BRANCH_CONFIGS = {
+      makara: {
+        key: 'makara',
+        label: 'Makara',
+        mainFirebase: {
+          apiKey: "AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA",
+          authDomain: "makara-16344.firebaseapp.com",
+          projectId: "makara-16344",
+          storageBucket: "makara-16344.firebasestorage.app",
+          messagingSenderId: "216769654742",
+          appId: "1:216769654742:web:16792742d4613f4269be77",
+          measurementId: "G-K4XZHP11MM"
+        },
+        tablesFirebase: {
+          apiKey: "AIzaSyDu_NUrgas4wZ_wdfAYE-DgxqTpb7vKxyo",
+          authDomain: "makaramasalar.firebaseapp.com",
+          projectId: "makaramasalar",
+          storageBucket: "makaramasalar.firebasestorage.app",
+          messagingSenderId: "840151572206",
+          appId: "1:840151572206:web:0afaf93deea636309e5dff",
+          measurementId: "G-2S0J3566ZY"
+        },
+        onlineFirebase: {
+          apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
+          authDomain: "makaraonline-5464e.firebaseapp.com",
+          projectId: "makaraonline-5464e",
+          storageBucket: "makaraonline-5464e.firebasestorage.app",
+          messagingSenderId: "1041589485836",
+          appId: "1:1041589485836:web:06119973a19da0a14f0929",
+          measurementId: "G-MKPPB635ZZ"
+        }
+      },
+      makarasur: {
+        key: 'makarasur',
+        label: 'Makara Sur',
+        mainFirebase: {
+          apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+          authDomain: "makarasurici.firebaseapp.com",
+          projectId: "makarasurici",
+          storageBucket: "makarasurici.firebasestorage.app",
+          messagingSenderId: "237735301273",
+          appId: "1:237735301273:web:bf62c8f145434df0292808",
+          measurementId: "G-WXWWQT92L6"
+        },
+        tablesFirebase: {
+          apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+          authDomain: "makarasurici.firebaseapp.com",
+          projectId: "makarasurici",
+          storageBucket: "makarasurici.firebasestorage.app",
+          messagingSenderId: "237735301273",
+          appId: "1:237735301273:web:bf62c8f145434df0292808",
+          measurementId: "G-WXWWQT92L6"
+        },
+        onlineFirebase: {
+          apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+          authDomain: "makarasurici.firebaseapp.com",
+          projectId: "makarasurici",
+          storageBucket: "makarasurici.firebasestorage.app",
+          messagingSenderId: "237735301273",
+          appId: "1:237735301273:web:bf62c8f145434df0292808",
+          measurementId: "G-WXWWQT92L6"
+        }
+      }
     };
 
     // Ana Firebase (satışlar, ürünler, kategoriler için)
     let app, db;
-    // Masalar için ayrı Firebase (makaramasalar)
+    // Masalar için ayrı Firebase
     let tablesApp, tablesDb;
     let isAuthenticated = false;
     let realtimeUnsubscribe = null;
@@ -157,9 +212,15 @@
     let onlineDb = null; // Online siparişler Firestore
     let onlineOrdersUnsubscribe = null; // Online siparişler real-time listener
     let onlineOrders = []; // Online siparişler listesi
+    let activeBranchKey = localStorage.getItem('adminActiveBranch') || 'makara';
+    let pendingBranchSelection = activeBranchKey || 'makara';
+    // Ürün yönetimi için global state
+    let productAdminCategories = [];
+    let productAdminProducts = [];
+    let productAdminCategoryFilter = 'all';
     let allCancels = []; // Tüm iptal kayıtları
     // Lazy loading için değişkenler
-    let salesDisplayedCount = 10; // Gösterilen satış sayısı (10'ar 10'ar)
+    let salesDisplayedCount = 150; // Gösterilen satış sayısı (150'şer 150'şer)
     let cancelsDisplayedCount = 2; // Gösterilen iptal sayısı (2'şer 2'şer)
     let isLoadingMoreSales = false; // Satış yükleme durumu
     let isLoadingMoreCancels = false; // İptal yükleme durumu
@@ -169,86 +230,154 @@
     let saleToDeleteLabel = ''; // Silme onayı modalında gösterilecek etiket
     let salesShowDiscountedOnly = false; // Satış geçmişinde sadece indirimli satışları göster
 
-    try {
-      // Ana Firebase zaten başlatılmış mı kontrol et
+    function getOrCreateFirebaseApp(config, name) {
       try {
-        app = firebase.app();
-      } catch (e) {
-        app = firebase.initializeApp(firebaseConfig);
+        return firebase.app(name);
+      } catch (_) {
+        return firebase.initializeApp(config, name);
       }
-      db = firebase.firestore();
-      console.log('✅ Ana Firebase başarıyla başlatıldı');
-      
-      // Masalar için ayrı Firebase başlat (makaramasalar)
-      const tablesFirebaseConfig = {
-        apiKey: "AIzaSyDu_NUrgas4wZ_wdfAYE-DgxqTpb7vKxyo",
-        authDomain: "makaramasalar.firebaseapp.com",
-        projectId: "makaramasalar",
-        storageBucket: "makaramasalar.firebasestorage.app",
-        messagingSenderId: "840151572206",
-        appId: "1:840151572206:web:0afaf93deea636309e5dff",
-        measurementId: "G-2S0J3566ZY"
-      };
-      
-      try {
-        tablesApp = firebase.initializeApp(tablesFirebaseConfig, 'tables');
-        tablesDb = firebase.firestore(tablesApp);
-        console.log('✅ Masalar Firebase başarıyla başlatıldı (makaramasalar)');
-      } catch (tablesError) {
-        console.error('❌ Masalar Firebase başlatma hatası:', tablesError);
-      }
-      
-      // Online siparişler için ayrı Firebase başlat (makaraonline-5464e)
-      const onlineFirebaseConfig = {
-        apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
-        authDomain: "makaraonline-5464e.firebaseapp.com",
-        projectId: "makaraonline-5464e",
-        storageBucket: "makaraonline-5464e.firebasestorage.app",
-        messagingSenderId: "1041589485836",
-        appId: "1:1041589485836:web:06119973a19da0a14f0929",
-        measurementId: "G-MKPPB635ZZ"
-      };
-      
-      try {
-        onlineApp = firebase.initializeApp(onlineFirebaseConfig, 'onlineOrders');
-        onlineDb = firebase.firestore(onlineApp);
-        console.log('✅ Online Siparişler Firebase başarıyla başlatıldı (makaraonline-5464e)');
-        
-        // Online siparişleri dinle (badge için)
-        // Fonksiyon tanımlandıktan sonra çağrılacak (sayfa yüklendikten sonra)
-        // Şimdilik sadece bağlantıyı hazırla, listener window.load event'inde başlatılacak
-      } catch (onlineError) {
-        console.error('❌ Online Siparişler Firebase başlatma hatası:', onlineError);
-        console.error('Hata detayları:', onlineError.message, onlineError.code);
-      }
-      
-      document.getElementById('errorMessage')?.remove();
-    } catch (error) {
-      console.error('❌ Firebase başlatma hatası:', error);
-      const errorDiv = document.createElement('div');
-      errorDiv.id = 'errorMessage';
-      errorDiv.style.cssText = 'background: #ff4444; color: white; padding: 20px; text-align: center; margin: 20px; border-radius: 10px;';
-      errorDiv.innerHTML = '<h3>❌ Firebase SDK Yüklenemedi</h3><p>Lütfen sayfayı yenileyin veya internet bağlantınızı kontrol edin.</p>';
-      document.body.insertBefore(errorDiv, document.body.firstChild);
     }
 
-    // PIN girişi - Firebase'den yüklenecek (2 şifre desteği)
-    let adminPins = ['Mfp14531789.', '102030']; // Varsayılan şifreler (Firebase'den yüklenene kadar)
+    function updateDashboardHeaderTitle() {
+      const titleEl = document.querySelector('.navbar-title');
+      if (!titleEl) return;
+      const branchNameByKey = {
+        makara: 'HAVZAN',
+        makarasur: 'SURİÇİ'
+      };
+      const branchName = branchNameByKey[activeBranchKey] || 'HAVZAN';
+      titleEl.textContent = `MAKARA ${branchName} Admin Dashboard`;
+    }
+
+    function initFirebaseForBranch(branchKey) {
+      const branch = BRANCH_CONFIGS[branchKey] || BRANCH_CONFIGS.makara;
+      activeBranchKey = branch.key;
+      localStorage.setItem('adminActiveBranch', activeBranchKey);
+
+      try {
+        app = getOrCreateFirebaseApp(branch.mainFirebase, `main-${branch.key}`);
+        db = firebase.firestore(app);
+
+        tablesApp = getOrCreateFirebaseApp(branch.tablesFirebase, `tables-${branch.key}`);
+        tablesDb = firebase.firestore(tablesApp);
+
+        onlineApp = getOrCreateFirebaseApp(branch.onlineFirebase, `online-${branch.key}`);
+        onlineDb = firebase.firestore(onlineApp);
+
+        document.getElementById('errorMessage')?.remove();
+        updateDashboardHeaderTitle();
+        console.log(`✅ Firebase branch aktif: ${branch.key}`);
+        return true;
+      } catch (error) {
+        console.error('❌ Firebase başlatma hatası:', error);
+        const errorDiv = document.createElement('div');
+        errorDiv.id = 'errorMessage';
+        errorDiv.style.cssText = 'background: #ff4444; color: white; padding: 20px; text-align: center; margin: 20px; border-radius: 10px;';
+        errorDiv.innerHTML = '<h3>❌ Firebase SDK Yüklenemedi</h3><p>Lütfen sayfayı yenileyin veya internet bağlantınızı kontrol edin.</p>';
+        document.body.insertBefore(errorDiv, document.body.firstChild);
+        return false;
+      }
+    }
+
+    initFirebaseForBranch(activeBranchKey);
+
+    // Kullanıcı ve yetki modeli (şube bazlı)
+    let adminUsers = [
+      {
+        username: 'Fatih',
+        pin: 'Mfp14531789.',
+        allowedBranches: ['makara', 'makarasur']
+      },
+      {
+        username: 'Ortak',
+        pin: '102030',
+        allowedBranches: ['makarasur']
+      }
+    ];
+    let currentAdminUser = null;
+    let adminPins = adminUsers.map(u => u.pin);
+
+    // Kritik kullanıcılar için zorunlu yetki kilidi (şifre değişse bile yetki sabit kalır)
+    const FORCED_USER_BRANCH_ACCESS = {
+      'fatih': ['makara', 'makarasur'],
+      'ortak': ['makarasur']
+    };
+    const FORCED_PIN_BRANCH_ACCESS = {
+      'Mfp14531789.': ['makara', 'makarasur'],
+      '102030': ['makarasur']
+    };
+
+    function getForcedBranchesByUser(username) {
+      const key = String(username || '').trim().toLowerCase();
+      return FORCED_USER_BRANCH_ACCESS[key] || null;
+    }
+
+    function getForcedBranchesByPin(pin) {
+      return FORCED_PIN_BRANCH_ACCESS[pin] || null;
+    }
+
+    function normalizeStoredUserPolicy(user) {
+      if (!user) return null;
+      const normalized = {
+        username: user.username || 'Kullanici',
+        allowedBranches: Array.isArray(user.allowedBranches) ? user.allowedBranches : ['makara']
+      };
+      const forcedByUser = getForcedBranchesByUser(normalized.username);
+      if (forcedByUser) {
+        normalized.allowedBranches = forcedByUser;
+      }
+      return normalized;
+    }
+
+    function hasBranchAccess(branchKey) {
+      if (!currentAdminUser || !Array.isArray(currentAdminUser.allowedBranches)) return true;
+      return currentAdminUser.allowedBranches.includes(branchKey);
+    }
+
+    function canResetAllData() {
+      const pin = String(currentAdminUser?.pin || '').trim();
+      const username = String(currentAdminUser?.username || '').trim().toLowerCase();
+      // Kritik kural: 102030 (Ortak) tüm verileri temizleyemez
+      if (pin === '102030' || username === 'ortak') return false;
+      return true;
+    }
     
     // Firebase'den şifreleri yükle
     async function loadAdminPins() {
       try {
         const pinDoc = await db.collection('admin').doc('pin').get();
-        if (pinDoc.exists && pinDoc.data().passwords && Array.isArray(pinDoc.data().passwords)) {
+        if (pinDoc.exists && pinDoc.data().users && Array.isArray(pinDoc.data().users) && pinDoc.data().users.length > 0) {
+          adminUsers = pinDoc.data().users.map(u => {
+            const forced = getForcedBranchesByUser(u.username || '') || getForcedBranchesByPin(u.pin || '');
+            return {
+            username: u.username || 'Kullanici',
+            pin: u.pin || '',
+            allowedBranches: forced || (Array.isArray(u.allowedBranches) && u.allowedBranches.length > 0
+              ? u.allowedBranches
+              : ['makara'])
+            };
+          }).filter(u => u.pin);
+          adminPins = adminUsers.map(u => u.pin);
+          console.log('✅ Admin kullanıcı/yetkileri Firebase\'den yüklendi');
+        } else if (pinDoc.exists && pinDoc.data().passwords && Array.isArray(pinDoc.data().passwords)) {
           adminPins = pinDoc.data().passwords;
+          adminUsers = adminPins.map((p, i) => {
+            const username = i === 0 ? 'Fatih' : (i === 1 ? 'Ortak' : `Kullanici ${i + 1}`);
+            return {
+              username,
+              pin: p,
+              allowedBranches: getForcedBranchesByUser(username) || getForcedBranchesByPin(p) || ['makara', 'makarasur']
+            };
+          });
           console.log('✅ Admin şifreleri Firebase\'den yüklendi');
         } else {
-          // İlk kullanım - varsayılan şifreleri Firebase'e kaydet
+          // İlk kullanım - varsayılan kullanıcıları Firebase'e kaydet
           await db.collection('admin').doc('pin').set({
-            passwords: adminPins,
+            users: adminUsers,
+            passwords: adminPins, // Geriye dönük uyumluluk
             updated_at: firebase.firestore.FieldValue.serverTimestamp()
           });
-          console.log('✅ Varsayılan şifreler Firebase\'e kaydedildi');
+          console.log('✅ Varsayılan kullanıcı/yetkiler Firebase\'e kaydedildi');
         }
       } catch (error) {
         console.error('❌ Şifre yükleme hatası:', error);
@@ -260,15 +389,17 @@
     async function saveAdminPin(currentPin, newPin) {
       try {
         // Mevcut şifreyi bul ve değiştir
-        const pinIndex = adminPins.indexOf(currentPin);
-        if (pinIndex === -1) {
+        const userIndex = adminUsers.findIndex(u => u.pin === currentPin);
+        if (userIndex === -1) {
           console.error('❌ Mevcut şifre bulunamadı');
           return false;
         }
         
-        adminPins[pinIndex] = newPin;
+        adminUsers[userIndex].pin = newPin;
+        adminPins = adminUsers.map(u => u.pin);
         
         await db.collection('admin').doc('pin').set({
+          users: adminUsers,
           passwords: adminPins,
           updated_at: firebase.firestore.FieldValue.serverTimestamp()
         });
@@ -296,6 +427,7 @@
       const dashboard = document.getElementById('dashboard');
       if (loginSection) loginSection.style.display = 'none';
       if (dashboard) dashboard.style.display = 'block';
+      updateDashboardHeaderTitle();
       // İlk yüklemede sadece satışları yükle, listener'lar renderCurrentView'da başlatılacak
       loadSales();
       loadCancels(); // Cache'den yüklemeyi dene
@@ -312,19 +444,37 @@
       const rememberMe = document.getElementById('rememberMe');
       const shouldRemember = rememberMe && rememberMe.checked;
       
-      // Şifrelerden herhangi biri ile eşleşiyor mu kontrol et
-      if (adminPins.includes(pin)) {
+      // Şifreyle kullanıcıyı bul
+      const matchedUser = adminUsers.find(u => u.pin === pin);
+      if (matchedUser) {
+        const forcedBranches = getForcedBranchesByUser(matchedUser.username) || getForcedBranchesByPin(pin);
+        const effectiveBranches = forcedBranches || matchedUser.allowedBranches || ['makara'];
         isAuthenticated = true;
+        currentAdminUser = {
+          username: matchedUser.username,
+          allowedBranches: effectiveBranches
+        };
         sessionStorage.setItem('adminAuthenticated', 'true');
+        sessionStorage.setItem('adminUser', JSON.stringify(currentAdminUser));
+
+        // Kullanıcının yetkisi yoksa aktif şubeyi otomatik uygun olana al
+        if (!hasBranchAccess(activeBranchKey)) {
+          const fallbackBranch = matchedUser.allowedBranches && matchedUser.allowedBranches.length > 0
+            ? matchedUser.allowedBranches[0]
+            : 'makara';
+          initFirebaseForBranch(fallbackBranch);
+        }
         
         // Beni Hatırla seçiliyse localStorage'a kaydet
         if (shouldRemember) {
           localStorage.setItem('adminRememberMe', 'true');
           localStorage.setItem('adminAuthenticated', 'true');
+          localStorage.setItem('adminUser', JSON.stringify(currentAdminUser));
         } else {
           // Seçili değilse localStorage'ı temizle
           localStorage.removeItem('adminRememberMe');
           localStorage.removeItem('adminAuthenticated');
+          localStorage.removeItem('adminUser');
         }
         
         showDashboard();
@@ -365,10 +515,25 @@
             
             // Önce localStorage'ı kontrol et (Beni Hatırla aktifse)
             if (localStorage.getItem('adminRememberMe') === 'true' && localStorage.getItem('adminAuthenticated') === 'true') {
+              try {
+                const userJson = localStorage.getItem('adminUser');
+                if (userJson) currentAdminUser = normalizeStoredUserPolicy(JSON.parse(userJson));
+              } catch (_) {}
               isAuthenticated = true;
               sessionStorage.setItem('adminAuthenticated', 'true');
+              if (currentAdminUser) {
+                sessionStorage.setItem('adminUser', JSON.stringify(currentAdminUser));
+                if (!hasBranchAccess(activeBranchKey)) {
+                  const fallbackBranch = currentAdminUser.allowedBranches?.[0] || 'makara';
+                  initFirebaseForBranch(fallbackBranch);
+                }
+              }
               showDashboard();
             } else if (sessionStorage.getItem('adminAuthenticated') === 'true') {
+              try {
+                const userJson = sessionStorage.getItem('adminUser');
+                if (userJson) currentAdminUser = normalizeStoredUserPolicy(JSON.parse(userJson));
+              } catch (_) {}
               showDashboard();
             } else {
               showLogin();
@@ -945,7 +1110,7 @@
 
       // Tarih filtresi değiştiğinde sayacı sıfırla
       if (resetCount) {
-        salesDisplayedCount = 10;
+        salesDisplayedCount = 150;
       }
 
       // Tarih filtresine göre filtrele
@@ -1275,8 +1440,8 @@
         loadMoreBtn.innerHTML = '<div style="padding: 12px; color: #6b7280;">Yükleniyor...</div>';
       }
       
-      // 10'ar 10'ar artır
-      salesDisplayedCount += 10;
+      // 150'şer 150'şer artır
+      salesDisplayedCount += 150;
       
       // Kısa bir gecikme sonra render et (smooth loading için)
       setTimeout(() => {
@@ -1510,6 +1675,19 @@
       return activeCount;
     }
 
+    // Firebase'den gelen table_id/doc.id değerlerini normalize et
+    // Not: Bazı ortamlarda dışarı masalar "outside-1..30" şeklinde gelebiliyor.
+    // Dashboard tarafında dışarı masalar 61..90 olarak gösteriliyor.
+    function normalizeTableId(rawTableId) {
+      const id = String(rawTableId || '').trim();
+      const m = id.match(/^outside-(\d+)$/);
+      if (m) {
+        const n = parseInt(m[1], 10);
+        if (n >= 1 && n <= 30) return `outside-${60 + n}`; // 1->61 ... 30->90
+      }
+      return id;
+    }
+
     // Masaları yükle (render etmeden, sadece aktif masa sayısı için)
     function loadTablesForStats() {
       if (!tablesDb) {
@@ -1527,8 +1705,9 @@
             items: []
           };
         }
-        // Masalar 61-88 (69,70,79,80 hariç)
-        [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
+        // Dışarı masalar (61-90)
+        for (let i = 1; i <= 30; i++) {
+          const tableNumber = 60 + i; // 61-90
           const tableId = `outside-${tableNumber}`;
           allStaticTables[tableId] = {
             table_id: tableId,
@@ -1539,7 +1718,7 @@
             total_amount: 0,
             items: []
           };
-        });
+        }
         for (let i = 1; i <= 5; i++) {
           allStaticTables[`package-inside-${i}`] = {
             table_id: `package-inside-${i}`,
@@ -1590,8 +1769,9 @@
         };
       }
       
-      // Masalar 61-88 (69,70,79,80 hariç)
-      [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
+      // Dışarı masalar (61-90)
+      for (let i = 1; i <= 30; i++) {
+        const tableNumber = 60 + i; // 61-90
         const tableId = `outside-${tableNumber}`;
         allStaticTables[tableId] = {
           table_id: tableId,
@@ -1602,7 +1782,7 @@
           total_amount: 0,
           items: []
         };
-      });
+      }
       
       // Paket masaları - İçeri (1-5)
       for (let i = 1; i <= 5; i++) {
@@ -1654,7 +1834,7 @@
           // Firebase'den gelen verileri statik masalarla birleştir
           snapshot.forEach((doc) => {
             const firebaseData = doc.data();
-            const tableId = doc.id;
+            const tableId = normalizeTableId(doc.id);
             
             if (allStaticTables[tableId]) {
               const previousIsOccupied = previousTableStates[tableId] !== undefined ? previousTableStates[tableId] : (allStaticTables[tableId].is_occupied || false);
@@ -3385,8 +3565,9 @@
             items: []
           };
         }
-        // Masalar 61-88 (69,70,79,80 hariç)
-        [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
+        // Dışarı masalar (61-90)
+        for (let i = 1; i <= 30; i++) {
+          const tableNumber = 60 + i; // 61-90
           const tableId = `outside-${tableNumber}`;
           allStaticTables[tableId] = {
             table_id: tableId,
@@ -3397,7 +3578,7 @@
             total_amount: 0,
             items: []
           };
-        });
+        }
         for (let i = 1; i <= 5; i++) {
           allStaticTables[`package-inside-${i}`] = {
             table_id: `package-inside-${i}`,
@@ -3452,8 +3633,9 @@
         };
       }
       
-      // Masalar 61-88 (69,70,79,80 hariç)
-      [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88].forEach(tableNumber => {
+      // Dışarı masalar (61-90)
+      for (let i = 1; i <= 30; i++) {
+        const tableNumber = 60 + i; // 61-90
         const tableId = `outside-${tableNumber}`;
         allStaticTables[tableId] = {
           table_id: tableId,
@@ -3464,7 +3646,7 @@
           total_amount: 0,
           items: []
         };
-      });
+      }
       
       // Paket masaları - İçeri (1-5)
       for (let i = 1; i <= 5; i++) {
@@ -3515,7 +3697,7 @@
         // Firebase'den gelen verileri statik masalarla birleştir
         snapshot.forEach((doc) => {
           const firebaseData = doc.data();
-          const tableId = firebaseData.table_id || doc.id;
+          const tableId = normalizeTableId(firebaseData.table_id || doc.id);
           
           if (allStaticTables[tableId]) {
             const previousIsOccupied = previousTableStates[tableId] !== undefined ? previousTableStates[tableId] : (allStaticTables[tableId].is_occupied || false);
@@ -7117,6 +7299,12 @@
       }
     };
     function confirmResetAllData() {
+      if (!canResetAllData()) {
+        if (typeof showToast === 'function') {
+          showToast('error', 'Yetki Yok', 'Bu kullanıcı için "Tüm verileri temizle" yetkisi kapalı.');
+        }
+        return;
+      }
       showResetDataModal();
     }
 
@@ -7135,7 +7323,322 @@
       resetAllFirebaseData();
     }
 
+    // Ürün & Kategori Yönetimi
+    function openProductManagementModal() {
+      const modal = document.getElementById('productManagementModal');
+      if (!modal) return;
+      modal.style.display = 'flex';
+      loadProductManagementData();
+    }
+
+    function closeProductManagementModal() {
+      const modal = document.getElementById('productManagementModal');
+      if (!modal) return;
+      modal.style.display = 'none';
+    }
+
+    async function loadProductManagementData() {
+      const body = document.getElementById('productManagementBody');
+      if (!body) return;
+
+      if (!db || typeof db.collection !== 'function') {
+        body.innerHTML = '<div style="padding:20px; color:#b91c1c; font-weight:600;">Firebase bağlantısı kurulamadı.</div>';
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Firebase bağlantısı kurulamadı.');
+        return;
+      }
+
+      body.innerHTML = `
+        <div style="padding: 12px 4px 20px;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; gap:8px;">
+            <div>
+              <p style="margin:0; font-size:13px; color:#6b7280;">Tüm ürün ve kategoriler Firestore üzerinden canlı olarak yönetilir.</p>
+            </div>
+            <button type="button" onclick="loadProductManagementData()" style="display:inline-flex; align-items:center; gap:6px; background:#f3f4f6; border:1px solid #e5e7eb; color:#374151; padding:6px 10px; border-radius:999px; font-size:11px; font-weight:600; cursor:pointer;">
+              <svg width="14" height="14" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+              Yeniden Yükle
+            </button>
+          </div>
+          <div style="padding:16px 0; text-align:center; color:#6b7280; font-size:13px;">
+            Veriler yükleniyor, lütfen bekleyin...
+          </div>
+        </div>
+      `;
+
+      try {
+        const [catSnap, prodSnap] = await Promise.all([
+          db.collection('categories').orderBy('order_index').get(),
+          db.collection('products').orderBy('name').get()
+        ]);
+
+        productAdminCategories = [];
+        productAdminProducts = [];
+
+        catSnap.forEach(doc => {
+          const data = doc.data() || {};
+          productAdminCategories.push({
+            docId: doc.id,
+            id: data.id !== undefined ? data.id : doc.id,
+            name: data.name || '',
+            order_index: data.order_index || 0
+          });
+        });
+
+        prodSnap.forEach(doc => {
+          const data = doc.data() || {};
+          productAdminProducts.push({
+            docId: doc.id,
+            id: data.id !== undefined ? data.id : doc.id,
+            name: data.name || '',
+            price: parseFloat(data.price) || 0,
+            category_id: data.category_id || null
+          });
+        });
+
+        renderProductManagement();
+      } catch (error) {
+        console.error('Ürün/kategori yönetimi verileri yüklenemedi:', error);
+        body.innerHTML = '<div style="padding:20px; color:#b91c1c; font-weight:600;">Veriler yüklenirken hata oluştu.</div>';
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Ürün/kategori verileri yüklenemedi.');
+      }
+    }
+
+    function renderProductManagement() {
+      const body = document.getElementById('productManagementBody');
+      if (!body) return;
+
+      const escapeHtml = (str) => String(str || '').replace(/[&<>"']/g, function (m) {
+        return ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;'
+        })[m];
+      });
+
+      const categoryOptions = productAdminCategories.map(cat => {
+        const idStr = String(cat.id);
+        const isSelected = String(productAdminCategoryFilter) === idStr;
+        return `<option value="${escapeHtml(idStr)}"${isSelected ? ' selected' : ''}>${escapeHtml(cat.name || 'İsimsiz')}</option>`;
+      }).join('');
+
+      const filteredProducts = productAdminCategoryFilter === 'all'
+        ? productAdminProducts
+        : productAdminProducts.filter(p => String(p.category_id || '') === String(productAdminCategoryFilter));
+
+      const productRows = filteredProducts.map((p, index) => {
+        return `
+          <tr>
+            <td>
+              <input type="text"
+                     value="${escapeHtml(p.name)}"
+                     data-index="${index}"
+                     onchange="onProductFieldChange(${index}, 'name', this.value)"
+                     style="width:100%; padding:10px 12px; border-radius:12px; border:1px solid #e5e7eb; font-size:13px; font-weight:500;"/>
+            </td>
+            <td style="width:1%; white-space:nowrap; text-align:center;">
+              <input type="number"
+                     step="1"
+                     value="${Math.round(p.price || 0)}"
+                     data-index="${index}"
+                     onchange="onProductFieldChange(${index}, 'price', this.value)"
+                     style="display:inline-block; min-width:60px; max-width:90px; padding:4px 8px; border-radius:999px; border:1px solid #e5e7eb; font-size:12px; text-align:right;"/>
+            </td>
+            <td style="width:110px; text-align:right;">
+              <button type="button"
+                      onclick="saveProductRow(${index})"
+                      style="background:#dc2626; color:#fef2f2; border:none; padding:6px 10px; border-radius:999px; font-size:11px; font-weight:600; cursor:pointer;">
+                Kaydet
+              </button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+
+      body.innerHTML = `
+        <div style="display:flex; flex-direction:column; gap:14px; padding:4px 2px 18px;">
+          <section style="background:#fff; border-radius:18px; border:1px solid #e5e7eb; padding:12px 16px;">
+            <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;">
+              <div>
+                <h3 style="margin:0; font-size:14px; font-weight:700; color:#111827;">Ürünler</h3>
+                <p style="margin:2px 0 0; font-size:11px; color:#6b7280;">Sadece ürün adı ve fiyatlarını düzenleyebilirsiniz.</p>
+              </div>
+              <div style="display:flex; align-items:center; gap:8px;">
+                <label style="font-size:11px; color:#4b5563;">Kategori filtresi:</label>
+                <select onchange="changeProductCategoryFilter(this.value)"
+                        style="min-width:150px; padding:6px 10px; border-radius:999px; border:1px solid #e5e7eb; font-size:12px; background-color:#fff;">
+                  <option value="all"${productAdminCategoryFilter === 'all' ? ' selected' : ''}>Tüm Kategoriler</option>
+                  ${categoryOptions}
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <section style="background:#fff; border-radius:18px; border:1px solid #e5e7eb; padding:14px 16px;">
+            <div style="overflow:auto; margin-top:4px;">
+              <table style="width:100%; border-collapse:separate; border-spacing:0 6px; font-size:12px;">
+                <thead>
+                  <tr style="text-align:left; color:#6b7280; font-size:11px;">
+                    <th style="padding:4px 6px;">Ürün Adı</th>
+                    <th style="padding:4px 6px; width:120px;">Fiyat (₺)</th>
+                    <th style="padding:4px 6px; width:110px; text-align:right;"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${productRows || '<tr><td colspan="3" style="padding:10px 4px; font-size:12px; color:#9ca3af;">Ürün bulunamadı.</td></tr>'}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      `;
+    }
+
+    function onProductFieldChange(index, field, value) {
+      if (!productAdminProducts[index]) return;
+      if (field === 'price') {
+        productAdminProducts[index][field] = parseFloat(value) || 0;
+      } else {
+        productAdminProducts[index][field] = value;
+      }
+    }
+    function changeProductCategoryFilter(value) {
+      productAdminCategoryFilter = value || 'all';
+      renderProductManagement();
+    }
+
+    async function saveProductRow(index) {
+      const p = productAdminProducts[index];
+      if (!p || !db) return;
+      try {
+        await db.collection('products').doc(p.docId).update({
+          name: p.name || '',
+          price: parseFloat(p.price) || 0
+        });
+        if (typeof showToast === 'function') showToast('success', 'Ürün Güncellendi', `"${p.name || 'Ürün'}" başarıyla kaydedildi.`);
+      } catch (error) {
+        console.error('Ürün güncellenemedi:', error);
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Ürün güncellenirken bir hata oluştu.');
+      }
+    }
+
+    function toggleAdminMenuDrawer(forceState) {
+      const drawer = document.getElementById('adminMenuDrawer');
+      if (!drawer) return;
+      const shouldOpen = typeof forceState === 'boolean'
+        ? forceState
+        : !drawer.classList.contains('open');
+      if (shouldOpen) {
+        pendingBranchSelection = activeBranchKey || 'makara';
+        renderAdminBranchPicker();
+        drawer.classList.add('open');
+      } else {
+        drawer.classList.remove('open');
+      }
+    }
+
+    function getAllowedBranchesForCurrentUser() {
+      return (currentAdminUser && Array.isArray(currentAdminUser.allowedBranches))
+        ? currentAdminUser.allowedBranches
+        : ['makara', 'makarasur'];
+    }
+
+    function renderAdminBranchPicker() {
+      const picker = document.getElementById('adminBranchPicker');
+      if (!picker) return;
+
+      const allowed = getAllowedBranchesForCurrentUser();
+      if (!allowed.includes(pendingBranchSelection)) {
+        pendingBranchSelection = allowed[0] || 'makara';
+      }
+
+      picker.innerHTML = allowed.map((branchKey) => {
+        const branch = BRANCH_CONFIGS[branchKey] || { key: branchKey, label: branchKey };
+        const isActive = branchKey === activeBranchKey;
+        const isPending = branchKey === pendingBranchSelection;
+        const classes = [
+          'branch-pill',
+          isPending ? 'selected pending' : '',
+          isActive ? 'active' : ''
+        ].filter(Boolean).join(' ');
+        return `
+          <button type="button" class="${classes}" onclick="selectBranchFromDrawer('${branchKey}')">
+            <div class="branch-pill-left">
+              <span class="branch-dot"></span>
+              <span class="branch-pill-name">${branch.label || branch.key}</span>
+            </div>
+            <span class="branch-pill-badge"></span>
+          </button>
+        `;
+      }).join('');
+    }
+
+    async function selectBranchFromDrawer(branchKey) {
+      pendingBranchSelection = branchKey;
+      renderAdminBranchPicker();
+      if (branchKey === activeBranchKey) return;
+      toggleAdminMenuDrawer(false);
+      await switchAdminBranch(branchKey);
+    }
+
+    async function switchAdminBranch(branchKey) {
+      const nextBranch = BRANCH_CONFIGS[branchKey] ? branchKey : 'makara';
+      if (!hasBranchAccess(nextBranch)) {
+        if (typeof showToast === 'function') showToast('error', 'Yetki Yok', 'Bu şubeyi görüntüleme yetkiniz yok.');
+        return;
+      }
+      if (nextBranch === activeBranchKey) {
+        if (typeof showToast === 'function') showToast('info', 'Şube', 'Zaten bu şubedesiniz.');
+        return;
+      }
+
+      // Mevcut realtime listenerları kapat
+      try { realtimeUnsubscribe && realtimeUnsubscribe(); } catch (_) {}
+      try { tablesUnsubscribe && tablesUnsubscribe(); } catch (_) {}
+      try { activeTablesUnsubscribe && activeTablesUnsubscribe(); } catch (_) {}
+      try { cancelsUnsubscribe && cancelsUnsubscribe(); } catch (_) {}
+      try { onlineOrdersUnsubscribe && onlineOrdersUnsubscribe(); } catch (_) {}
+      try { onlineStatusUnsubscribe && onlineStatusUnsubscribe(); } catch (_) {}
+      realtimeUnsubscribe = null;
+      tablesUnsubscribe = null;
+      activeTablesUnsubscribe = null;
+      cancelsUnsubscribe = null;
+      onlineOrdersUnsubscribe = null;
+      onlineStatusUnsubscribe = null;
+      allStaticTables = {};
+      previousTableStates = {};
+      isFirstTablesLoad = true;
+
+      const ok = initFirebaseForBranch(nextBranch);
+      if (!ok) {
+        if (typeof showToast === 'function') showToast('error', 'Hata', 'Şube bağlantısı kurulamadı.');
+        return;
+      }
+
+      try { await loadAdminPins(); } catch (_) {}
+      await loadSales();
+      renderCurrentView();
+      if (typeof showToast === 'function') {
+        const label = (BRANCH_CONFIGS[nextBranch] && BRANCH_CONFIGS[nextBranch].label) || nextBranch;
+        showToast('success', 'Şube Değişti', `${label} veritabanına geçildi.`);
+      }
+    }
+
+    async function switchAdminBranchFromDrawer() {
+      const selected = pendingBranchSelection || activeBranchKey || 'makara';
+      toggleAdminMenuDrawer(false);
+      await switchAdminBranch(selected);
+    }
+
     async function resetAllFirebaseData() {
+      if (!canResetAllData()) {
+        if (typeof showToast === 'function') {
+          showToast('error', 'Yetki Yok', 'Bu kullanıcı tüm verileri temizleyemez.');
+        }
+        return;
+      }
       if (!db) {
         if (typeof showToast === 'function') showToast('error', 'Hata', 'Firebase bağlantısı yok.');
         return;
@@ -7177,9 +7680,12 @@
 
     window.logout = function() {
       sessionStorage.removeItem('adminAuthenticated');
+      sessionStorage.removeItem('adminUser');
       localStorage.removeItem('adminAuthenticated');
       localStorage.removeItem('adminRememberMe');
+      localStorage.removeItem('adminUser');
       isAuthenticated = false;
+      currentAdminUser = null;
       if (realtimeUnsubscribe) {
         realtimeUnsubscribe();
         realtimeUnsubscribe = null;
@@ -7839,8 +8345,16 @@
     .navbar-brand {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 12px;
       flex: 1;
+    }
+
+    .navbar-brand-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
     }
 
     .navbar-logo {
@@ -7870,6 +8384,348 @@
       flex-direction: column;
       gap: 2px;
     }
+
+    .navbar-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      min-width: 56px;
+    }
+
+    .hamburger-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 999px;
+      border: none;
+      background: rgba(15, 23, 42, 0.06);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column; /* çizgileri alt alta yerleştir */
+      cursor: pointer;
+      padding: 0;
+      gap: 4px;
+      transition: all 0.18s ease-out;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
+    }
+
+    .hamburger-btn span {
+      display: block;
+      width: 18px;
+      height: 2px;
+      border-radius: 999px;
+      background: #0f172a;
+      transition: all 0.16s ease-out;
+      margin: 2px 0;
+    }
+
+    .hamburger-btn:hover {
+      background: linear-gradient(135deg, #111827, #1e293b);
+      transform: translateY(-1px);
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.3);
+    }
+
+    .hamburger-btn:hover span {
+      background: #f9fafb;
+      opacity: 1;
+    }
+
+    .hamburger-btn:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+    }
+
+    /* Admin Drawer */
+    .admin-menu-drawer {
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.35);
+      backdrop-filter: blur(6px);
+      z-index: 120;
+      display: none;
+      align-items: stretch;
+      justify-content: flex-end;
+    }
+
+    .admin-menu-drawer.open {
+      display: flex;
+    }
+
+    .admin-menu-panel {
+      width: 320px;
+      max-width: 86vw;
+      background: radial-gradient(circle at top, #fef2f2 0, #ffffff 38%, #f9fafb 100%);
+      box-shadow: -16px 0 40px rgba(15, 23, 42, 0.35);
+      border-left: 1px solid rgba(248, 113, 113, 0.45);
+      padding: 16px 16px 18px;
+      display: flex;
+      flex-direction: column;
+      transform: translateX(100%);
+      transition: transform 0.22s cubic-bezier(0.22, 0.61, 0.36, 1);
+    }
+
+    .admin-menu-drawer.open .admin-menu-panel {
+      transform: translateX(0);
+    }
+
+    .admin-menu-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+
+    .admin-menu-title-group {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .admin-menu-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #111827;
+    }
+
+    .admin-menu-subtitle {
+      margin: 0;
+      font-size: 11px;
+      color: #6b7280;
+    }
+
+    .admin-menu-close {
+      width: 32px;
+      height: 32px;
+      border-radius: 999px;
+      border: none;
+      background: rgba(15, 23, 42, 0.05);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 700;
+      color: #111827;
+      cursor: pointer;
+      transition: all 0.18s ease-out;
+    }
+
+    .admin-menu-close:hover {
+      background: rgba(15, 23, 42, 0.12);
+      transform: translateY(-1px);
+    }
+
+    .admin-menu-items {
+      margin-top: 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .admin-menu-item {
+      width: 100%;
+      border-radius: 16px;
+      border: 1px solid rgba(148, 163, 184, 0.45);
+      background: rgba(255, 255, 255, 0.9);
+      padding: 9px 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      transition: all 0.18s ease-out;
+    }
+
+    .admin-menu-item:hover {
+      border-color: rgba(248, 113, 113, 0.85);
+      background: linear-gradient(135deg, #fef2f2, #ffffff);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 18px rgba(248, 113, 113, 0.3);
+    }
+
+    .admin-menu-item.danger {
+      border-color: rgba(239, 68, 68, 0.75);
+      background: rgba(248, 113, 113, 0.06);
+    }
+
+    .admin-menu-item.danger:hover {
+      background: linear-gradient(135deg, #fee2e2, #ffffff);
+    }
+
+    .admin-menu-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      color: #111827;
+    }
+
+    .admin-menu-icon.refresh {
+      background: linear-gradient(135deg, #eef2ff, #e0f2fe);
+      color: #1d4ed8;
+    }
+
+    .admin-menu-icon.reset {
+      background: linear-gradient(135deg, #fef3c7, #fee2e2);
+      color: #b45309;
+    }
+
+    .admin-menu-icon.manage {
+      background: linear-gradient(135deg, #ecfeff, #e0f2fe);
+      color: #0369a1;
+    }
+
+    .admin-menu-icon.logout {
+      background: linear-gradient(135deg, #fee2e2, #fecaca);
+      color: #b91c1c;
+    }
+
+    .admin-menu-text {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 1px;
+    }
+
+    .admin-menu-text span {
+      font-size: 13px;
+      font-weight: 600;
+      color: #111827;
+    }
+
+    .admin-menu-text small {
+      font-size: 11px;
+      color: #6b7280;
+    }
+
+    .branch-switch-card {
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      padding: 12px;
+      margin-bottom: 10px;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.06);
+    }
+
+    .branch-switch-head {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      margin-bottom: 10px;
+    }
+
+    .branch-switch-title {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 700;
+      color: #111827;
+      letter-spacing: 0.02em;
+    }
+
+    .branch-switch-subtitle {
+      font-size: 11px;
+      color: #6b7280;
+    }
+
+    .branch-picker-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .branch-pill {
+      width: 100%;
+      border-radius: 12px;
+      border: 1px solid #e5e7eb;
+      background: #fff;
+      padding: 10px 11px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+      transition: all 0.18s ease-out;
+      text-align: left;
+    }
+
+    .branch-pill-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .branch-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: #d1d5db;
+      box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.1);
+      flex-shrink: 0;
+    }
+
+    .branch-pill-name {
+      font-size: 12px;
+      font-weight: 600;
+      color: #111827;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .branch-pill-badge {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #6b7280;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 999px;
+      padding: 3px 7px;
+      flex-shrink: 0;
+    }
+
+    .branch-pill:hover {
+      border-color: #d1d5db;
+      transform: translateY(-1px);
+      box-shadow: 0 6px 14px rgba(17, 24, 39, 0.08);
+    }
+
+    .branch-pill.selected {
+      border-color: #111827;
+      background: #f9fafb;
+      box-shadow: 0 4px 12px rgba(17, 24, 39, 0.12);
+    }
+
+    .branch-pill.selected .branch-dot {
+      background: #111827;
+    }
+
+    .branch-pill.selected .branch-pill-name {
+      color: #111827;
+    }
+
+    .branch-pill.selected .branch-pill-badge {
+      color: #111827;
+      background: #e5e7eb;
+      border-color: #d1d5db;
+    }
+
+    .branch-pill.active .branch-pill-badge::before {
+      content: 'Aktif';
+    }
+
+    .branch-pill.pending .branch-pill-badge::before {
+      content: 'Seçili';
+    }
+
+    /* apply button kaldırıldı: tıklamada anında geçiş */
 
     .navbar-title {
       font-size: 18px;
@@ -8365,6 +9221,16 @@
       align-items: center;
       gap: 12px;
       flex-wrap: wrap;
+    }
+
+    /* Satış geçmişi tarih filtresi sağda dursun */
+    #salesHeader .date-filter-wrapper {
+      margin-left: auto;
+    }
+
+    #salesHeader .date-filter-modal {
+      left: auto;
+      right: 0;
     }
 
     .sales-discounted-toggle {
@@ -13559,35 +14425,93 @@
       <nav class="admin-navbar">
         <div class="navbar-content">
           <div class="navbar-brand">
-            <img src="logo.png" alt="MAKARA Logo" class="navbar-logo-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-            <div class="navbar-logo" style="display: none;">M</div>
-            <div class="navbar-title-group">
-              <h1 class="navbar-title">MAKARA Admin Dashboard</h1>
-              <p class="navbar-subtitle">Anlık Satış Detayları ve İstatistikler</p>
+            <div class="navbar-brand-left">
+              <img src="logo.png" alt="MAKARA Logo" class="navbar-logo-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+              <div class="navbar-logo" style="display: none;">M</div>
+              <div class="navbar-title-group">
+                <h1 class="navbar-title">MAKARA Admin Dashboard</h1>
+                <p class="navbar-subtitle">Anlık Satış Detayları ve İstatistikler</p>
+              </div>
             </div>
+            <button type="button" class="hamburger-btn" onclick="toggleAdminMenuDrawer()" aria-label="Menü">
+              <span></span>
+              <span></span>
+              <span></span>
+            </button>
           </div>
           <div class="navbar-actions">
-            <button onclick="loadSales()" class="refresh-btn">
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
-              </svg>
-              <span>Yenile</span>
-            </button>
-            <button onclick="confirmResetAllData()" class="reset-btn" title="Tüm verileri sıfırla">
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
-              </svg>
-              <span>Sıfırla</span>
-            </button>
-            <button onclick="logout()" class="logout-btn">
-              <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/>
-              </svg>
-              <span>Çıkış</span>
-            </button>
           </div>
         </div>
       </nav>
+
+      <!-- Sağdan Açılan Admin Menü Drawer -->
+      <div id="adminMenuDrawer" class="admin-menu-drawer" onclick="if (event.target === this) toggleAdminMenuDrawer(false)">
+        <div class="admin-menu-panel">
+          <div class="admin-menu-header">
+            <div class="admin-menu-title-group">
+              <p class="admin-menu-title">Hızlı İşlemler</p>
+              <p class="admin-menu-subtitle">Dashboard için temel aksiyonlar</p>
+            </div>
+            <button type="button" class="admin-menu-close" onclick="toggleAdminMenuDrawer(false)" aria-label="Kapat">
+              ×
+            </button>
+          </div>
+          <div class="branch-switch-card">
+            <div class="branch-switch-head">
+              <p class="branch-switch-title">Şube Seçimi</p>
+              <span class="branch-switch-subtitle">Aktif veritabanı kaynağını belirleyin</span>
+            </div>
+            <div id="adminBranchPicker" class="branch-picker-list"></div>
+          </div>
+          <div class="admin-menu-items">
+            <button type="button" class="admin-menu-item" onclick="toggleAdminMenuDrawer(false); loadSales();">
+              <div class="admin-menu-icon refresh">
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </div>
+              <div class="admin-menu-text">
+                <span>Yenile</span>
+                <small>Satış ve istatistikleri yeniden yükle</small>
+              </div>
+            </button>
+            <button type="button" class="admin-menu-item" onclick="toggleAdminMenuDrawer(false); confirmResetAllData();">
+              <div class="admin-menu-icon reset">
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/>
+                </svg>
+              </div>
+              <div class="admin-menu-text">
+                <span>Sıfırla</span>
+                <small>Tüm verileri temizle (dikkatli kullanın)</small>
+              </div>
+            </button>
+            <button type="button" class="admin-menu-item" onclick="toggleAdminMenuDrawer(false); openProductManagementModal();">
+              <div class="admin-menu-icon manage">
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317a1 1 0 011.35-.447l8 4a1 1 0 010 1.79l-8 4a1 1 0 01-.894 0l-8-4a1 1 0 010-1.79l8-4z" />
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M3.5 9.75L12 14l8.5-4.25M6 12.5l6 3 6-3" />
+                </svg>
+              </div>
+              <div class="admin-menu-text">
+                <span>Ürün Yönetimi</span>
+                <small>Ürün adlarını ve fiyatları düzenle</small>
+              </div>
+            </button>
+            <button type="button" class="admin-menu-item danger" onclick="toggleAdminMenuDrawer(false); logout();">
+              <div class="admin-menu-icon logout">
+                <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6A2.25 2.25 0 005.25 5.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75"/>
+                </svg>
+              </div>
+              <div class="admin-menu-text">
+                <span>Çıkış Yap</span>
+                <small>Admin oturumunu sonlandır</small>
+              </div>
+            </button>
+          </div>
+        </div>
+      </div>
       
       <!-- Online Siparişler Modal -->
       <div id="onlineOrdersModal" class="notifications-modal" onclick="if(event.target === this) hideOnlineOrdersModal()" style="display: none;">
@@ -13603,6 +14527,32 @@
           </div>
           <div id="onlineOrdersList" class="notifications-list" style="max-height: calc(90vh - 100px); overflow-y: auto;">
             <!-- Online siparişler buraya eklenecek -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Ürün & Kategori Yönetimi Modal -->
+      <div id="productManagementModal" class="notifications-modal" onclick="if (event.target === this) closeProductManagementModal()" style="display: none;">
+        <div class="notifications-modal-content" style="max-width: 1100px; max-height: 90vh; display: flex; flex-direction: column;">
+          <div class="notifications-modal-header" style="border-bottom: 1px solid #e5e7eb; padding-bottom: 14px; margin-bottom: 14px;">
+            <div style="display: flex; align-items: center; gap: 10px;">
+              <div style="width: 40px; height: 40px; border-radius: 999px; background: linear-gradient(135deg,#dc2626,#f97316); display:flex; align-items:center; justify-content:center; color:#fff; font-weight:700; box-shadow:0 10px 25px rgba(220,38,38,0.35);">
+                <span>Y</span>
+              </div>
+              <div>
+                <h2 style="margin: 0; font-size: 20px; font-weight: 800; color: #111827;">Ürün &amp; Kategori Yönetimi</h2>
+                <p style="margin: 4px 0 0; font-size: 12px; color: #6b7280;">Tüm ürün ve kategorileri tek ekran üzerinden yönetin.</p>
+              </div>
+            </div>
+            <button onclick="closeProductManagementModal()" style="background:#f3f4f6; border:none; color:#6b7280; width:36px; height:36px; border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:20px; font-weight:bold; transition:all .2s;"
+                    onmouseover="this.style.background='#e5e7eb'; this.style.color='#374151';"
+                    onmouseout="this.style.background='#f3f4f6'; this.style.color='#6b7280';">
+              ×
+            </button>
+          </div>
+
+          <div id="productManagementBody" style="flex:1; overflow:auto; padding-right:4px;">
+            <!-- JS ile doldurulacak -->
           </div>
         </div>
       </div>

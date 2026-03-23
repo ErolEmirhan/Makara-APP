@@ -3,7 +3,7 @@ import Toast from './Toast';
 
 const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
-const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems }) => {
+const TableOrderModal = ({ order, items, customerMode = false, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems }) => {
   const [sessionDuration, setSessionDuration] = useState('');
   const [selectedItemDetail, setSelectedItemDetail] = useState(null);
   const [cancellingItemId, setCancellingItemId] = useState(null);
@@ -38,6 +38,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
   };
 
   if (!order) return null;
+  const singularLabel = customerMode ? 'Müşteri' : 'Masa';
 
   // Aynı ürünleri grupla ve toplam miktarı göster
   const groupedItems = useMemo(() => {
@@ -525,7 +526,19 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                 <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
                   Sipariş Detayları
                 </h2>
-                <p className="text-sm text-gray-500 mt-0.5">Masa: {order.table_name}</p>
+                <div className="mt-2">
+                  <p
+                    className="text-3xl md:text-4xl font-black tracking-tight"
+                    style={{
+                      background: 'linear-gradient(135deg, #ec4899 0%, #a855f7 50%, #6366f1 100%)',
+                      WebkitBackgroundClip: 'text',
+                      WebkitTextFillColor: 'transparent',
+                      textShadow: '0 8px 28px rgba(168,85,247,0.28)'
+                    }}
+                  >
+                    {order.table_name}
+                  </p>
+                </div>
               </div>
             </div>
             <button
@@ -540,17 +553,17 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
         </div>
 
         <div className="space-y-6">
-          {/* Masa Bilgileri - Corporate Card */}
+          {/* Bilgiler - Corporate Card */}
           <div className="bg-gray-50/50 rounded-lg p-5 border border-gray-200">
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-5">
               <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Masa</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{singularLabel}</p>
                 <p className="text-base font-bold text-gray-900">{order.table_name}</p>
               </div>
               <div>
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tip</p>
                 <p className="text-base font-bold text-gray-900">
-                  Masa
+                  {singularLabel}
                 </p>
               </div>
               <div>
@@ -851,7 +864,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
-                <span>Tüm Masayı İptal Et</span>
+                <span>{customerMode ? 'Tüm Müşteriyi İptal Et' : 'Tüm Masayı İptal Et'}</span>
               </button>
             </div>
           )}
@@ -1251,17 +1264,17 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
             {/* Content */}
             <div className="text-center mb-8">
               <h3 className="text-2xl font-bold text-gray-900 mb-3 tracking-tight">
-                Tüm Masayı İptal Et
+                {customerMode ? 'Tüm Müşteriyi İptal Et' : 'Tüm Masayı İptal Et'}
               </h3>
               <p className="text-sm text-gray-600 leading-relaxed mb-6">
                 Bu işlem geri alınamaz. Sipariş, sanki hiç açılmamış gibi tamamen silinecektir.
               </p>
               
-              {/* Masa Bilgisi */}
+              {/* Müşteri/Masa Bilgisi */}
               <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 mb-6">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">İptal Edilecek Masa</p>
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">İptal Edilecek {singularLabel}</p>
                 <p className="text-lg font-bold text-gray-900">{order.table_name}</p>
-                <p className="text-xs text-gray-500 mt-1">Masa</p>
+                <p className="text-xs text-gray-500 mt-1">{singularLabel}</p>
               </div>
 
               {/* İptal Açıklaması */}
@@ -1321,13 +1334,13 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                       if (result.requiresReason) {
                         showToast('Lütfen iptal açıklaması yazın', 'error');
                       } else {
-                        showToast(result.error || 'Masayı iptal ederken bir hata oluştu', 'error');
+                        showToast(result.error || `${singularLabel} iptal edilirken bir hata oluştu`, 'error');
                       }
                       setCancellingEntireTable(false);
                     }
                   } catch (error) {
-                    console.error('Masayı iptal etme hatası:', error);
-                    showToast('Masayı iptal ederken bir hata oluştu', 'error');
+                    console.error(`${singularLabel} iptal etme hatası:`, error);
+                    showToast(`${singularLabel} iptal edilirken bir hata oluştu`, 'error');
                     setCancellingEntireTable(false);
                   }
                 }}
@@ -1355,14 +1368,14 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
         </div>
       )}
 
-      {/* Ürün aktar - 1: Ürün/adet seç, 2: Hedef masa seç */}
+      {/* Ürün aktar - 1: Ürün/adet seç, 2: Hedef seç */}
       {showTransferItemsModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]" onClick={(e) => e.target === e.currentTarget && !transferring && (setTransferStep(1), setShowTransferItemsModal(false))}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
             <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4">
               <h3 className="text-lg font-bold text-white">Ürünleri aktar</h3>
               <p className="text-sm text-white/90 mt-0.5">
-                {transferStep === 1 ? 'Aktarılacak ürünleri ve adetleri seçin (yalnızca ödenmemiş adetler).' : 'Hedef masayı seçin, ardından aktar ve yazdır.'}
+                {transferStep === 1 ? 'Aktarılacak ürünleri ve adetleri seçin (yalnızca ödenmemiş adetler).' : `Hedef ${customerMode ? 'müşteriyi' : 'masayı'} seçin, ardından aktar ve yazdır.`}
               </p>
             </div>
             {transferStep === 1 ? (
@@ -1413,7 +1426,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
                       disabled={selectedTransferTotal <= 0}
                       className="px-6 py-2 rounded-xl font-bold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50"
                     >
-                      Hedef masa seç
+                      Hedef {customerMode ? 'müşteri' : 'masa'} seç
                     </button>
                   </div>
                 </div>
@@ -1421,7 +1434,7 @@ const TableOrderModal = ({ order, items, onClose, onCompleteTable, onPartialPaym
             ) : (
               <>
                 <div className="p-4 overflow-y-auto flex-1">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Hedef masa (mevcut masa hariç)</p>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-3">Hedef {customerMode ? 'müşteri' : 'masa'} (mevcut {customerMode ? 'müşteri' : 'masa'} hariç)</p>
                   <div className="grid grid-cols-4 gap-2">
                     {allTablesForTransfer.map((table) => (
                       <button

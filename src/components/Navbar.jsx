@@ -5,7 +5,7 @@ import SettingsSplash from './SettingsSplash';
 import DateTimeDisplay from './DateTimeDisplay';
 import Toast from './Toast';
 
-const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit, onOpenSettings }) => {
+const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit, onLogout, onOpenSettings, systemTitle = 'Makara Satış Sistemi', isSuriciBranch = false }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showHamburgerMenu, setShowHamburgerMenu] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -323,7 +323,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           />
         </div>
         <div>
-          <h1 className="text-lg font-bold text-pink-500">Makara Satış Sistemi</h1>
+          <h1 className="text-lg font-bold text-pink-500">{systemTitle}</h1>
           <p className="text-xs text-gray-500 font-medium">v13.0.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300">
@@ -355,7 +355,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
             </svg>
-            <span>Masalar</span>
+            <span>{isSuriciBranch ? 'Müşteriler' : 'Masalar'}</span>
           </div>
         </button>
         <button
@@ -647,7 +647,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                 </svg>
               </div>
               <h3 className="text-2xl font-bold text-gray-800 mb-2">Çıkış Yap</h3>
-              <p className="text-gray-600">Uygulamayı kapatmak istediğinize emin misiniz?</p>
+                  <p className="text-gray-600">Çıkış yapıp giriş ekranına dönmek istediğinize emin misiniz?</p>
             </div>
             
             <div className="flex space-x-4">
@@ -660,13 +660,15 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               <button
                 onClick={() => {
                   setShowExitConfirm(false);
-                  if (onExit) {
+                  if (onLogout) {
+                    onLogout();
+                  } else if (onExit) {
                     onExit();
                   }
                 }}
-                className="flex-1 py-4 bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
+                className="flex-1 py-4 bg-gradient-to-r from-pink-500 to-fuchsia-500 hover:from-pink-600 hover:to-fuchsia-600 rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95"
               >
-                Evet, Çık
+                Evet, Çıkış Yap
               </button>
             </div>
           </div>

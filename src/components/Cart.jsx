@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
-const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, onSaveToTable, isSavingToTable = false, totalAmount, selectedTable, orderNote, onOrderNoteChange, onToggleGift, onRequestAdisyon }) => {
+const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, onSaveToTable, isSavingToTable = false, totalAmount, selectedTable, isSuriciBranch = false, orderNote, onOrderNoteChange, onToggleGift, onRequestAdisyon }) => {
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteText, setNoteText] = useState(orderNote || '');
   const textareaRef = useRef(null);
@@ -222,7 +222,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                     <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                     </svg>
-                    <span>Masaya Kaydet</span>
+                    <span>{isSuriciBranch ? 'Müşteriye Kaydet' : 'Masaya Kaydet'}</span>
                   </>
                 )}
               </div>

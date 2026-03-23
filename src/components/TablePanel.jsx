@@ -14,7 +14,7 @@ import orderSound from '../sound/order.mp3';
 // Masalar 61-88 (69, 70, 79, 80 hariç)
 const OUTSIDE_TABLE_NUMBERS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
 
-const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
+const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId, autoOpenTableId, onAutoOpenConsumed, onShowReceipt }) => {
   const [selectedType, setSelectedType] = useState('inside'); // 'inside', 'outside', or 'online'
   const [tableOrders, setTableOrders] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
@@ -89,6 +89,9 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   const OVERLAY_MIN_MS = 2000;
   const SUCCESS_OVERLAY_MS = 2200;
   const [orderTimeTick, setOrderTimeTick] = useState(0);
+  const isSuriciBranch = branchKey === 'makarasur';
+  const singularLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
+  const pluralLabel = isSuriciBranch ? 'Müşteriler' : 'Masalar';
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -292,6 +295,10 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
     name: `Paket ${i + 6}` // Paket 6-10
   })), []);
   const packageTables = useMemo(() => [...packageTablesInside, ...packageTablesOutside], [packageTablesInside, packageTablesOutside]);
+  const suriciUnifiedTables = useMemo(
+    () => [...insideTables, ...outsideTables, ...packageTables],
+    [insideTables, outsideTables, packageTables]
+  );
 
   // Masa siparişlerini yükle
   useEffect(() => {
@@ -330,6 +337,37 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
       };
     }
   }, [showModal, selectedOrder]);
+
+  useEffect(() => {
+    if (!autoOpenOrderId && !autoOpenTableId) return;
+    const targetOrder = tableOrders.find((o) => {
+      const matchByOrderId = autoOpenOrderId && String(o.id) === String(autoOpenOrderId);
+      const matchByTableId = autoOpenTableId && String(o.table_id) === String(autoOpenTableId);
+      return o.status === 'pending' && (matchByOrderId || matchByTableId);
+    });
+    if (!targetOrder) return;
+
+    setSelectedType('inside');
+    setSelectedOrder(targetOrder);
+    if (window.electronAPI?.getTableOrderItems) {
+      window.electronAPI.getTableOrderItems(targetOrder.id)
+        .then((items) => {
+          setOrderItems(items || []);
+          setShowModal(true);
+        })
+        .catch(() => {
+          setOrderItems([]);
+          setShowModal(true);
+        })
+        .finally(() => {
+          if (typeof onAutoOpenConsumed === 'function') onAutoOpenConsumed();
+        });
+    } else {
+      setOrderItems([]);
+      setShowModal(true);
+      if (typeof onAutoOpenConsumed === 'function') onAutoOpenConsumed();
+    }
+  }, [autoOpenOrderId, autoOpenTableId, tableOrders, onAutoOpenConsumed]);
 
   // Online Firebase bağlantısı — sadece "bu cihazda online sipariş al" açıksa
   useEffect(() => {
@@ -723,7 +761,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           id: tableId,
           number: number,
           type: 'inside',
-          name: `Masa ${number}`
+          name: selectedOrder.table_name || `Masa ${number}`
         };
       } else if (tableId.startsWith('outside-')) {
         const num = parseInt(tableId.replace('outside-', ''), 10);
@@ -732,7 +770,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           id: tableId,
           number,
           type: 'outside',
-          name: `Masa ${number}`
+          name: selectedOrder.table_name || `Masa ${number}`
         };
       } else if (tableId.startsWith('package-')) {
         const parts = tableId.split('-');
@@ -742,7 +780,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           id: tableId,
           number: number,
           type: type,
-          name: `Paket ${number}`
+          name: selectedOrder.table_name || `Paket ${number}`
         };
       }
       
@@ -1590,7 +1628,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
   return (
     <div className="mb-4">
       <div className="text-center mb-4">
-        <h2 className="text-4xl font-black tracking-tight heading-display">Masalar</h2>
+        <h2 className="text-4xl font-black tracking-tight heading-display">{pluralLabel}</h2>
       </div>
       <div className="flex justify-end gap-3 mb-4">
         <div className="flex items-center gap-3">
@@ -1622,7 +1660,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
             </svg>
-            <span>Masa Aktar</span>
+            <span>{isSuriciBranch ? 'Müşteri Aktar' : 'Masa Aktar'}</span>
           </button>
           <button
             onClick={() => setShowMergeModal(true)}
@@ -1631,7 +1669,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
-            <span>Masa Birleştir</span>
+            <span>{isSuriciBranch ? 'Müşteri Birleştir' : 'Masa Birleştir'}</span>
           </button>
         </div>
       </div>
@@ -1649,7 +1687,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
           <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
           </svg>
-          <span>Masalar</span>
+          <span>{pluralLabel}</span>
         </button>
         <button
           onClick={() => setSelectedType('online')}
@@ -2102,138 +2140,173 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         </div>
       ) : (
         <>
-          {/* Masalar: 1-20, boşluk, 61-88 (69,70,79,80 hariç) */}
-          <div className="grid grid-cols-10 gap-1 mb-2">
-            {insideTables.map((table) => {
-              const hasOrder = getTableOrder(table.id);
-              return (
-            <button
-              key={table.id}
-              onClick={() => handleTableClick(table)}
-              className={`table-btn group relative overflow-hidden rounded-md p-1 border transition-all duration-300 hover:shadow-sm hover:scale-105 active:scale-95 aspect-square ${
-                hasOrder
-                  ? 'bg-gradient-to-br from-red-700 to-red-900 border-red-800 hover:border-red-900'
-                  : 'bg-gradient-to-br from-pink-50 to-pink-100 border-pink-200 hover:border-pink-300'
-              }`}
-            >
-              <div className="flex flex-col items-center justify-center space-y-1 h-full">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow ${
-                  hasOrder ? 'bg-gradient-to-br from-red-600 to-red-900' : 'bg-gradient-to-br from-pink-200 to-pink-300'
-                }`}>
-                  {hasOrder ? (
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                    </svg>
-                  )}
-                </div>
-                <span className={`font-bold text-sm leading-tight ${hasOrder ? 'text-red-50' : 'text-pink-900'}`}>{table.name}</span>
-                <div className={`text-[10px] font-semibold mt-1 px-2 py-0.5 rounded-md ${hasOrder ? 'bg-red-900 text-red-100' : 'bg-pink-100 text-pink-800'}`}>
-                  {hasOrder ? 'Dolu' : 'Boş'}
-                </div>
-                {hasOrder && (
-                  <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
-                )}
-              </div>
-            </button>
-              );
-            })}
-          </div>
-          {/* 1-20 ile 61-88 arası ayırıcı çizgi */}
-          <div className="w-full py-5 flex items-center justify-center">
-            <div className="relative w-full flex items-center justify-center">
-              <div className="absolute inset-0 h-0.5 w-full bg-gradient-to-r from-slate-200 via-slate-400 to-slate-200 shadow-sm" />
-              <div className="relative z-10 w-3 h-3 rounded-full bg-white border-2 border-slate-400 shadow-lg shadow-slate-300/50 ring-2 ring-slate-200/80" />
-            </div>
-          </div>
-          <div className="grid grid-cols-10 gap-1 mb-6">
-            {outsideTables.map((table) => {
-              const hasOrder = getTableOrder(table.id);
-              return (
-            <button
-              key={table.id}
-              onClick={() => handleTableClick(table)}
-              className={`table-btn group relative overflow-hidden rounded-md p-1 border transition-all duration-300 hover:shadow-sm hover:scale-105 active:scale-95 aspect-square ${
-                hasOrder
-                  ? 'bg-gradient-to-br from-red-700 to-red-900 border-red-800 hover:border-red-900'
-                  : 'bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200 hover:border-amber-300'
-              }`}
-            >
-              <div className="flex flex-col items-center justify-center space-y-1 h-full">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow ${
-                  hasOrder ? 'bg-gradient-to-br from-red-600 to-red-900' : 'bg-gradient-to-br from-amber-200 to-amber-300'
-                }`}>
-                  {hasOrder ? (
-                    <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                    </svg>
-                  )}
-                </div>
-                <span className={`font-bold text-sm leading-tight ${hasOrder ? 'text-red-50' : 'text-amber-900'}`}>{table.name}</span>
-                <div className={`text-[10px] font-semibold mt-1 px-2 py-0.5 rounded-md ${hasOrder ? 'bg-red-900 text-red-100' : 'bg-amber-100 text-amber-800'}`}>
-                  {hasOrder ? 'Dolu' : 'Boş'}
-                </div>
-                {hasOrder && (
-                  <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
-                )}
-              </div>
-            </button>
-              );
-            })}
-          </div>
-
-          {/* Paket Masaları - Kurumsal */}
-          <div className="mb-6 mt-10">
-            <h3 className="text-center text-sm font-semibold uppercase tracking-widest text-slate-400 mb-4">Paket Masaları</h3>
-            <div className="grid grid-cols-5 gap-3">
-              {packageTables.map((table) => {
+          {isSuriciBranch ? (
+            <div className="grid grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-2 mb-6">
+              {suriciUnifiedTables.map((table) => {
                 const hasOrder = getTableOrder(table.id);
+                const displayName = hasOrder?.table_name || hasOrder?.tableName || 'BOŞ';
                 return (
                   <button
                     key={table.id}
                     onClick={() => handleTableClick(table)}
-                    className={`table-btn group relative overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-md active:scale-[0.98] ${
+                    className={`table-btn group relative overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-md active:scale-[0.98] aspect-square ${
                       hasOrder
-                        ? 'bg-slate-100 border-slate-300 hover:border-slate-400'
-                        : 'bg-white border-slate-200 hover:border-slate-300'
+                        ? 'border-red-400 bg-gradient-to-br from-red-700 to-red-900'
+                        : 'border-slate-200 bg-white hover:bg-slate-50'
                     }`}
                   >
-                    <div className="flex flex-col items-center justify-center p-4 space-y-3 h-full min-h-[100px]">
-                      <div className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
-                        hasOrder ? 'bg-slate-600 text-white' : 'bg-slate-100 text-slate-500'
-                      }`}>
-                        {hasOrder ? (
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                          </svg>
-                        ) : (
-                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                            <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                          </svg>
-                        )}
-                      </div>
-                      <span className={`text-sm font-medium leading-tight ${hasOrder ? 'text-slate-700' : 'text-slate-500'}`}>
-                        {table.name}
-                      </span>
-                      <span className={`text-xs font-medium ${hasOrder ? 'text-slate-500' : 'text-slate-400'}`}>
-                        {hasOrder ? 'Dolu' : 'Boş'}
+                    <div className="flex items-center justify-center h-full px-2 text-center">
+                      <span
+                        className={`font-black tracking-wide break-words leading-tight ${
+                          hasOrder ? 'text-white text-sm md:text-base' : 'text-slate-400 text-xl md:text-2xl group-hover:text-slate-500'
+                        }`}
+                      >
+                        {displayName}
                       </span>
                     </div>
+                    {hasOrder && (
+                      <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-300 rounded-full animate-pulse" />
+                    )}
                   </button>
                 );
               })}
             </div>
-          </div>
+          ) : (
+            <>
+              {/* Masalar: 1-20, boşluk, 61-88 (69,70,79,80 hariç) */}
+              <div className="grid grid-cols-10 gap-1 mb-2">
+                {insideTables.map((table) => {
+                  const hasOrder = getTableOrder(table.id);
+                  return (
+                <button
+                  key={table.id}
+                  onClick={() => handleTableClick(table)}
+                  className={`table-btn group relative overflow-hidden rounded-md p-1 border transition-all duration-300 hover:shadow-sm hover:scale-105 active:scale-95 aspect-square ${
+                    hasOrder
+                      ? 'bg-gradient-to-br from-red-700 to-red-900 border-red-800 hover:border-red-900'
+                      : 'bg-gradient-to-br from-pink-50 to-pink-100 border-pink-200 hover:border-pink-300'
+                  }`}
+                >
+                  <div className="flex flex-col items-center justify-center space-y-1 h-full">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow ${
+                      hasOrder ? 'bg-gradient-to-br from-red-600 to-red-900' : 'bg-gradient-to-br from-pink-200 to-pink-300'
+                    }`}>
+                      {hasOrder ? (
+                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-5 h-5 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                        </svg>
+                      )}
+                    </div>
+                    <span className={`font-bold text-sm leading-tight ${hasOrder ? 'text-red-50' : 'text-pink-900'}`}>{table.name}</span>
+                    <div className={`text-[10px] font-semibold mt-1 px-2 py-0.5 rounded-md ${hasOrder ? 'bg-red-900 text-red-100' : 'bg-pink-100 text-pink-800'}`}>
+                      {hasOrder ? 'Dolu' : 'Boş'}
+                    </div>
+                    {hasOrder && (
+                      <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
+                    )}
+                  </div>
+                </button>
+                  );
+                })}
+              </div>
+              {/* 1-20 ile 61-88 arası ayırıcı çizgi */}
+              <div className="w-full py-5 flex items-center justify-center">
+                <div className="relative w-full flex items-center justify-center">
+                  <div className="absolute inset-0 h-0.5 w-full bg-gradient-to-r from-slate-200 via-slate-400 to-slate-200 shadow-sm" />
+                  <div className="relative z-10 w-3 h-3 rounded-full bg-white border-2 border-slate-400 shadow-lg shadow-slate-300/50 ring-2 ring-slate-200/80" />
+                </div>
+              </div>
+              <div className="grid grid-cols-10 gap-1 mb-6">
+                {outsideTables.map((table) => {
+                  const hasOrder = getTableOrder(table.id);
+                  return (
+                <button
+                  key={table.id}
+                  onClick={() => handleTableClick(table)}
+                  className={`table-btn group relative overflow-hidden rounded-md p-1 border transition-all duration-300 hover:shadow-sm hover:scale-105 active:scale-95 aspect-square ${
+                    hasOrder
+                      ? 'bg-gradient-to-br from-red-700 to-red-900 border-red-800 hover:border-red-900'
+                      : 'bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200 hover:border-amber-300'
+                  }`}
+                >
+                  <div className="flex flex-col items-center justify-center space-y-1 h-full">
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow ${
+                      hasOrder ? 'bg-gradient-to-br from-red-600 to-red-900' : 'bg-gradient-to-br from-amber-200 to-amber-300'
+                    }`}>
+                      {hasOrder ? (
+                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                        </svg>
+                      ) : (
+                        <svg className="w-5 h-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                        </svg>
+                      )}
+                    </div>
+                    <span className={`font-bold text-sm leading-tight ${hasOrder ? 'text-red-50' : 'text-amber-900'}`}>{table.name}</span>
+                    <div className={`text-[10px] font-semibold mt-1 px-2 py-0.5 rounded-md ${hasOrder ? 'bg-red-900 text-red-100' : 'bg-amber-100 text-amber-800'}`}>
+                      {hasOrder ? 'Dolu' : 'Boş'}
+                    </div>
+                    {hasOrder && (
+                      <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
+                    )}
+                  </div>
+                </button>
+                  );
+                })}
+              </div>
+
+              {/* Paket Masaları - Kurumsal */}
+              <div className="mb-6 mt-10">
+                <h3 className="text-center text-sm font-semibold uppercase tracking-widest text-slate-400 mb-4">Paket Masaları</h3>
+                <div className="grid grid-cols-5 gap-3">
+                  {packageTables.map((table) => {
+                    const hasOrder = getTableOrder(table.id);
+                    return (
+                      <button
+                        key={table.id}
+                        onClick={() => handleTableClick(table)}
+                        className={`table-btn group relative overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-md active:scale-[0.98] ${
+                          hasOrder
+                            ? 'bg-slate-100 border-slate-300 hover:border-slate-400'
+                            : 'bg-white border-slate-200 hover:border-slate-300'
+                        }`}
+                      >
+                        <div className="flex flex-col items-center justify-center p-4 space-y-3 h-full min-h-[100px]">
+                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+                            hasOrder ? 'bg-slate-600 text-white' : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            {hasOrder ? (
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                              </svg>
+                            ) : (
+                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                              </svg>
+                            )}
+                          </div>
+                          <span className={`text-sm font-medium leading-tight ${hasOrder ? 'text-slate-700' : 'text-slate-500'}`}>
+                            {table.name}
+                          </span>
+                          <span className={`text-xs font-medium ${hasOrder ? 'text-slate-500' : 'text-slate-400'}`}>
+                            {hasOrder ? 'Dolu' : 'Boş'}
+                          </span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </>
+          )}
         </>
       )}
 
@@ -2258,6 +2331,7 @@ const TablePanel = ({ onSelectTable, refreshTrigger, onShowReceipt }) => {
         <TableOrderModal
           order={selectedOrder}
           items={orderItems}
+          customerMode={isSuriciBranch}
           onClose={() => {
             setShowModal(false);
             setSelectedOrder(null);

@@ -22,6 +22,11 @@ import Toast from './components/Toast';
 import SettingsModal from './components/SettingsModal';
 function App() {
   const [showSplash, setShowSplash] = useState(true);
+  const [selectedBranchKey, setSelectedBranchKey] = useState('');
+  const [activeBranch, setActiveBranch] = useState(null);
+  const [isActivatingBranch, setIsActivatingBranch] = useState(false);
+  const [branchError, setBranchError] = useState('');
+  const [isBranchReady, setIsBranchReady] = useState(false);
   const [currentView, setCurrentView] = useState('pos'); // 'pos', 'sales', or 'tables'
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
@@ -44,7 +49,10 @@ function App() {
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateDownloadProgress, setUpdateDownloadProgress] = useState(null);
   const [tableRefreshTrigger, setTableRefreshTrigger] = useState(0);
+  const [autoOpenOrderId, setAutoOpenOrderId] = useState(null);
+  const [autoOpenTableId, setAutoOpenTableId] = useState(null);
   const [showExitSplash, setShowExitSplash] = useState(false);
+  const [exitAction, setExitAction] = useState('quit'); // 'quit' | 'logout'
   const [searchQuery, setSearchQuery] = useState('');
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
@@ -52,6 +60,9 @@ function App() {
   const [isCompletingSplitPayment, setIsCompletingSplitPayment] = useState(false);
   const [isSubmittingTableOrder, setIsSubmittingTableOrder] = useState(false);
   const [isSavingExpense, setIsSavingExpense] = useState(false);
+  const [showSuriciNameModal, setShowSuriciNameModal] = useState(false);
+  const [suriciGuestName, setSuriciGuestName] = useState('');
+  const suriciNameResolverRef = useRef(null);
   const searchInputRef = useRef(null);
   const preparedReceiptsRef = useRef({}); // Sepetteyken hazırlanan fişler (metin)
   const preparedPrintJobIdRef = useRef(null); // Sepetteyken hazırlanan fiş job id — Adisyon Yazdır / Masaya Kaydet anında yazdırılır
@@ -68,10 +79,37 @@ function App() {
   };
 
   const [broadcastMessage, setBroadcastMessage] = useState(null);
+  const BRANCH_OPTIONS = useMemo(() => ([
+    {
+      key: 'makara',
+      label: 'MAKARA HAVZAN',
+      subtitle: 'Ana sube'
+    },
+    {
+      key: 'makarasur',
+      label: 'MAKARA SURİÇİ',
+      subtitle: 'Suriçi şube'
+    }
+  ]), []);
+  const systemTitle = useMemo(() => {
+    const key = activeBranch?.key || selectedBranchKey;
+    if (key === 'makarasur') return 'Makara Suriçi Satış Sistemi';
+    return 'Makara Havzan Satış Sistemi';
+  }, [activeBranch, selectedBranchKey]);
+  const isSuriciBranch = (activeBranch?.key || selectedBranchKey) === 'makarasur';
 
   useEffect(() => {
-    loadCategories();
-    
+    if (window.electronAPI?.getActiveBranch) {
+      window.electronAPI.getActiveBranch()
+        .then((branch) => {
+          if (branch?.key) {
+            setActiveBranch(branch);
+            setSelectedBranchKey(branch.key);
+          }
+        })
+        .catch(() => {});
+    }
+
     // Update event listeners
     if (window.electronAPI) {
       window.electronAPI.onUpdateAvailable((info) => {
@@ -105,15 +143,27 @@ function App() {
   // Online sipariş düştüğünde ses çal (sadece bu cihaz online sipariş alıyorsa)
   useEffect(() => {
     if (localStorage.getItem('receiveOnlineOrdersOnThisDevice') === 'false') return;
-    const onlineFirebaseConfig = {
-      apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
-      authDomain: "makaraonline-5464e.firebaseapp.com",
-      projectId: "makaraonline-5464e",
-      storageBucket: "makaraonline-5464e.firebasestorage.app",
-      messagingSenderId: "1041589485836",
-      appId: "1:1041589485836:web:06119973a19da0a14f0929",
-      measurementId: "G-MKPPB635ZZ"
-    };
+    if (!isBranchReady) return;
+    const branchKey = activeBranch?.key || 'makara';
+    const onlineFirebaseConfig = branchKey === 'makarasur'
+      ? {
+          apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+          authDomain: "makarasurici.firebaseapp.com",
+          projectId: "makarasurici",
+          storageBucket: "makarasurici.firebasestorage.app",
+          messagingSenderId: "237735301273",
+          appId: "1:237735301273:web:bf62c8f145434df0292808",
+          measurementId: "G-WXWWQT92L6"
+        }
+      : {
+          apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
+          authDomain: "makaraonline-5464e.firebaseapp.com",
+          projectId: "makaraonline-5464e",
+          storageBucket: "makaraonline-5464e.firebasestorage.app",
+          messagingSenderId: "1041589485836",
+          appId: "1:1041589485836:web:06119973a19da0a14f0929",
+          measurementId: "G-MKPPB635ZZ"
+        };
     let unsubscribe;
     try {
       let app;
@@ -146,19 +196,31 @@ function App() {
       console.error('Online sipariş sesi listener başlatılamadı:', e);
     }
     return () => { if (unsubscribe) unsubscribe(); };
-  }, []);
+  }, [isBranchReady, activeBranch]);
 
   // Online sipariş: her gün 12:30 aktif, 23:30 pasif (otomatik)
   useEffect(() => {
-    const onlineFirebaseConfig = {
-      apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
-      authDomain: "makaraonline-5464e.firebaseapp.com",
-      projectId: "makaraonline-5464e",
-      storageBucket: "makaraonline-5464e.firebasestorage.app",
-      messagingSenderId: "1041589485836",
-      appId: "1:1041589485836:web:06119973a19da0a14f0929",
-      measurementId: "G-MKPPB635ZZ"
-    };
+    if (!isBranchReady) return;
+    const branchKey = activeBranch?.key || 'makara';
+    const onlineFirebaseConfig = branchKey === 'makarasur'
+      ? {
+          apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+          authDomain: "makarasurici.firebaseapp.com",
+          projectId: "makarasurici",
+          storageBucket: "makarasurici.firebasestorage.app",
+          messagingSenderId: "237735301273",
+          appId: "1:237735301273:web:bf62c8f145434df0292808",
+          measurementId: "G-WXWWQT92L6"
+        }
+      : {
+          apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
+          authDomain: "makaraonline-5464e.firebaseapp.com",
+          projectId: "makaraonline-5464e",
+          storageBucket: "makaraonline-5464e.firebasestorage.app",
+          messagingSenderId: "1041589485836",
+          appId: "1:1041589485836:web:06119973a19da0a14f0929",
+          measurementId: "G-MKPPB635ZZ"
+        };
     let activeRef;
     try {
       let app;
@@ -188,7 +250,7 @@ function App() {
     run();
     const id = setInterval(run, 60 * 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [isBranchReady, activeBranch]);
 
   // PERFORMANS: useCallback ile fonksiyonları memoize et
   const loadCategories = useCallback(async () => {
@@ -212,6 +274,11 @@ function App() {
       setSelectedCategory(cats[0]);
     }
   }, []);
+
+  useEffect(() => {
+    if (!isBranchReady) return;
+    loadCategories();
+  }, [isBranchReady, loadCategories]);
 
   const loadProducts = useCallback(async (categoryId) => {
     // Yan Ürünler kategorisi seçildiyse
@@ -468,11 +535,37 @@ function App() {
       return sum + (item.price * item.quantity);
     }, 0);
     
+    let effectiveTableName = selectedTable.name;
+    const hasExistingOrderForSelected = Boolean(window.electronAPI?.getTableOrders);
+    if (isSuriciBranch && hasExistingOrderForSelected) {
+      try {
+        const tableOrders = await window.electronAPI.getTableOrders();
+        const existing = (tableOrders || []).find(
+          (o) => o.table_id === selectedTable.id && o.status === 'pending'
+        );
+        if (!existing) {
+          const enteredName = await new Promise((resolve) => {
+            suriciNameResolverRef.current = resolve;
+            setSuriciGuestName('');
+            setShowSuriciNameModal(true);
+          });
+          const normalizedName = String(enteredName || '').trim();
+          if (!normalizedName) {
+            showToast('İsim soyisim girilmeden masaya kayıt yapılamaz.', 'warning');
+            return;
+          }
+          effectiveTableName = normalizedName;
+        } else if (existing.table_name) {
+          effectiveTableName = existing.table_name;
+        }
+      } catch (_) {}
+    }
+
     const orderData = {
       items: cart,
       totalAmount,
       tableId: selectedTable.id,
-      tableName: selectedTable.name,
+      tableName: effectiveTableName,
       tableType: selectedTable.type,
       orderNote: orderNote || null
     };
@@ -487,7 +580,42 @@ function App() {
         } else {
           console.log('✨ Yeni sipariş oluşturuldu:', result.orderId);
         }
-        // Masaya Kaydet: Adisyon otomatik yazdırılmaz (kullanıcı isterse Adisyon Yazdır ile yazdırabilir)
+        // Suriçi şubesi: masaya kaydeder etmez kategori bazlı adisyonu otomatik yazdır
+        if (isSuriciBranch && window.electronAPI?.printAdisyon) {
+          const now = new Date();
+          const currentDate = now.toLocaleDateString('tr-TR');
+          const currentTime = now.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          const itemsWithTime = cart.map(item => ({
+            ...item,
+            staff_name: null,
+            added_date: currentDate,
+            added_time: currentTime
+          }));
+          const adisyonData = {
+            items: itemsWithTime,
+            tableName: effectiveTableName,
+            tableType: selectedTable.type,
+            orderNote: orderNote || null,
+            sale_date: currentDate,
+            sale_time: currentTime,
+            cashierOnly: true
+          };
+          setPrintToast({ status: 'printing', message: 'Kategori fişleri yazdırılıyor...' });
+          window.electronAPI.printAdisyon(adisyonData)
+            .then((printResult) => {
+              if (printResult?.success) {
+                setPrintToast({ status: 'success', message: 'Kategori fişleri yazdırıldı' });
+              } else {
+                setPrintToast({ status: 'error', message: printResult?.error || 'Kategori fişleri yazdırılamadı' });
+              }
+            })
+            .catch((printError) => {
+              console.error('Suriçi otomatik adisyon yazdırma hatası:', printError);
+              setPrintToast({ status: 'error', message: 'Kategori fişleri yazdırılamadı' });
+            });
+        }
+
+        // Diğer şubeler: adisyon otomatik yazdırılmaz (kullanıcı isterse Adisyon Yazdır ile yazdırabilir)
         preparedPrintJobIdRef.current = null;
         
         // Sepeti temizle
@@ -498,12 +626,15 @@ function App() {
         if (result.isNewOrder) {
           setSelectedTable(null);
         }
+        setAutoOpenOrderId(result.orderId || null);
+        setAutoOpenTableId(result.tableId || selectedTable.id || null);
+        setCurrentView('tables');
         // Mevcut siparişe eklendiyse masa seçili kalır, böylece tekrar ürün eklenebilir
         
         setSaleSuccessInfo({ 
           totalAmount, 
           paymentMethod: 'Masaya Kaydedildi',
-          tableName: selectedTable.name
+          tableName: effectiveTableName
         });
         // Masalar görünümünü yenile
         setTableRefreshTrigger(Date.now());
@@ -711,10 +842,28 @@ function App() {
   };
 
   const handleExit = () => {
+    setExitAction('quit');
+    setShowExitSplash(true);
+  };
+
+  const handleLogout = () => {
+    setExitAction('logout');
     setShowExitSplash(true);
   };
 
   const handleExitComplete = async () => {
+    if (exitAction === 'logout') {
+      setShowExitSplash(false);
+      setIsBranchReady(false);
+      setActiveBranch(null);
+      setSelectedBranchKey('');
+      setCurrentView('pos');
+      setSelectedTable(null);
+      setCart([]);
+      setOrderNote('');
+      return;
+    }
+
     // Veritabanını kaydet ve uygulamayı kapat
     if (window.electronAPI && window.electronAPI.quitApp) {
       await window.electronAPI.quitApp();
@@ -756,6 +905,179 @@ function App() {
     }
   };
 
+  const handleBranchLogin = async () => {
+    const normalized = (selectedBranchKey || '').trim().toLowerCase();
+    if (!normalized) {
+      setBranchError('Lutfen bir sube secin.');
+      return;
+    }
+    if (normalized !== 'makara' && normalized !== 'makarasur') {
+      setBranchError('Gecersiz sube secimi.');
+      return;
+    }
+
+    if (!window.electronAPI?.activateBranch) {
+      setBranchError('Sistem baglantisi bulunamadi.');
+      return;
+    }
+
+    setBranchError('');
+    setIsActivatingBranch(true);
+    try {
+      const minLoadingMs = 2000;
+      const delayPromise = new Promise((resolve) => setTimeout(resolve, minLoadingMs));
+      const activatePromise = window.electronAPI.activateBranch(normalized);
+      const [result] = await Promise.all([activatePromise, delayPromise]);
+      if (!result?.success) {
+        setBranchError(result?.error || 'Sube baglantisi kurulamadi.');
+        return;
+      }
+      setActiveBranch(result.branch || { key: normalized, label: normalized });
+      setIsBranchReady(true);
+      setCurrentView(normalized === 'makarasur' ? 'tables' : 'pos');
+    } catch (error) {
+      setBranchError(error?.message || 'Sube aktivasyonunda hata olustu.');
+    } finally {
+      setIsActivatingBranch(false);
+    }
+  };
+
+  if (!showSplash && !isBranchReady) {
+    return (
+      <>
+        {showExitSplash && (
+          <ExitSplash onComplete={handleExitComplete} />
+        )}
+        <div className="min-h-screen w-full bg-gradient-to-br from-slate-100 via-white to-rose-50 flex items-center justify-center p-4 md:p-8 relative overflow-hidden">
+          <div className="absolute -top-20 -left-20 w-80 h-80 bg-red-200/25 rounded-full blur-3xl" />
+          <div className="absolute -bottom-28 -right-16 w-96 h-96 bg-slate-200/35 rounded-full blur-3xl" />
+
+          <div className="relative w-full max-w-7xl min-h-[88vh] bg-white/95 backdrop-blur-xl rounded-[36px] border border-slate-200 shadow-[0_28px_80px_rgba(15,23,42,0.16)] px-7 py-8 md:px-14 md:py-12 flex flex-col justify-center">
+            <div className="mb-10 text-center">
+              <div className="mx-auto mb-5 h-24 w-24 md:h-28 md:w-28 rounded-3xl bg-white shadow-[0_12px_34px_rgba(0,0,0,0.14)] border border-slate-100 flex items-center justify-center overflow-hidden">
+                <img
+                  src="/logo.png"
+                  alt="Makara Logo"
+                  className="h-full w-full object-contain p-2"
+                />
+              </div>
+              <h1 className="text-5xl md:text-6xl font-black tracking-tight text-slate-900">MAKARA</h1>
+              <p className="text-base md:text-lg text-slate-500 mt-3">Sube secimi</p>
+            </div>
+
+            <div className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {BRANCH_OPTIONS.map((branch) => {
+                  const isSelected = selectedBranchKey === branch.key;
+                  const branchBgImage = branch.key === 'makara'
+                    ? '/L_height.webp'
+                    : '/meramin-yeni-merkezi-surici-carsisi-003.jpg';
+                  return (
+                    <button
+                      key={branch.key}
+                      type="button"
+                      onClick={() => {
+                        setSelectedBranchKey(branch.key);
+                        setBranchError('');
+                      }}
+                      className={`relative overflow-hidden text-left rounded-3xl border p-6 md:p-8 transition-all duration-200 aspect-square min-h-[280px] md:min-h-[360px] flex ${
+                        isSelected
+                          ? 'border-pink-300 shadow-[0_20px_45px_rgba(236,72,153,0.35)] ring-4 ring-pink-200/90 scale-[1.02]'
+                          : 'border-slate-200 hover:border-slate-300 hover:shadow-md'
+                      }`}
+                      style={{
+                        backgroundImage: `url(${branchBgImage})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center'
+                      }}
+                    >
+                      <div className="absolute inset-0 bg-black/80" />
+                      {isSelected && (
+                        <>
+                          <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-pink-400/80 via-pink-300/55 to-transparent" />
+                          <div className="absolute inset-0 ring-2 ring-white/45 rounded-3xl" />
+                        </>
+                      )}
+                      <div className="relative z-10 w-full h-full flex items-center justify-center text-center">
+                        {isSelected && (
+                          <span className="absolute top-5 left-5 px-3 py-1 rounded-full bg-pink-400/90 text-white text-xs md:text-sm font-bold tracking-wide shadow-lg">
+                            Seçili
+                          </span>
+                        )}
+                        <div className="flex flex-col items-center">
+                          <p className="text-3xl md:text-4xl font-extrabold tracking-tight text-white drop-shadow-[0_2px_10px_rgba(0,0,0,0.65)]">
+                            {branch.label}
+                          </p>
+                          <p className="text-base md:text-lg mt-3 text-white/95 drop-shadow-[0_2px_8px_rgba(0,0,0,0.55)]">
+                            {branch.subtitle}
+                          </p>
+                        </div>
+                        <span
+                          className={`absolute top-5 right-5 inline-flex h-7 w-7 items-center justify-center rounded-full border ${
+                            isSelected ? 'border-pink-400 bg-pink-400 shadow-sm' : 'border-white/80 bg-white/15 backdrop-blur'
+                          }`}
+                        >
+                          {isSelected ? (
+                            <span className="h-3 w-3 rounded-full bg-white" />
+                          ) : null}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {branchError && (
+                <p className="text-sm text-red-600 font-medium">{branchError}</p>
+              )}
+              <button
+                onClick={handleBranchLogin}
+                disabled={isActivatingBranch || !selectedBranchKey}
+                className="w-full mt-2 py-4 rounded-2xl bg-gradient-to-r from-pink-400 to-pink-500 hover:from-pink-500 hover:to-pink-600 disabled:opacity-60 text-white text-lg font-extrabold tracking-wide transition-all"
+              >
+                {isActivatingBranch ? 'Baglaniyor...' : 'Devam Et'}
+              </button>
+              <p className="text-sm text-slate-500 mt-2 text-center">
+                Sube secimi yapip devam ederek POS oturumunu baslatin.
+              </p>
+            </div>
+          </div>
+
+          {isActivatingBranch && (
+            <div className="absolute inset-0 z-40 bg-white flex items-center justify-center">
+              <div className="flex flex-col items-center gap-10">
+                <p
+                  className="text-slate-900 text-4xl md:text-6xl font-black tracking-tight"
+                  style={{ animation: 'softReveal 420ms ease-out forwards' }}
+                >
+                  {BRANCH_OPTIONS.find((b) => b.key === selectedBranchKey)?.label || 'ŞUBE YÜKLENİYOR'}
+                </p>
+
+                <div
+                  className="relative h-[360px] w-[360px] md:h-[420px] md:w-[420px]"
+                  style={{ animation: 'softReveal 560ms ease-out forwards' }}
+                >
+                  <div className="absolute inset-0 rounded-full border-[16px] border-pink-100" />
+                  <div className="absolute inset-0 rounded-full border-[16px] border-transparent border-t-pink-400 border-r-pink-300 animate-spin" />
+                  <div className="absolute inset-[34px] rounded-full bg-white shadow-inner flex items-center justify-center">
+                    <span className="text-pink-500 text-xl md:text-2xl font-extrabold tracking-wide">Yükleniyor</span>
+                  </div>
+                </div>
+              </div>
+
+              <style>{`
+                @keyframes softReveal {
+                  0% { opacity: 0; transform: translateY(10px) scale(0.985); filter: brightness(0.92); }
+                  100% { opacity: 1; transform: translateY(0) scale(1); filter: brightness(1); }
+                }
+              `}</style>
+            </div>
+          )}
+        </div>
+      </>
+    );
+  };
+
   return (
     <>
       {showSplash && (
@@ -782,7 +1104,10 @@ function App() {
         onRoleSplash={triggerRoleSplash}
         onProductsUpdated={refreshProducts}
         onExit={handleExit}
+        onLogout={handleLogout}
         onOpenSettings={() => setCurrentView('settings')}
+        systemTitle={systemTitle}
+        isSuriciBranch={isSuriciBranch}
       />
       
       {currentView === 'settings' ? (
@@ -797,7 +1122,14 @@ function App() {
         <div className="p-6">
           <TablePanel 
             onSelectTable={handleTableSelect}
+            branchKey={activeBranch?.key || selectedBranchKey}
             refreshTrigger={tableRefreshTrigger}
+            autoOpenOrderId={autoOpenOrderId}
+            autoOpenTableId={autoOpenTableId}
+            onAutoOpenConsumed={() => {
+              setAutoOpenOrderId(null);
+              setAutoOpenTableId(null);
+            }}
             onShowReceipt={(receiptData) => {
               setReceiptData(receiptData);
               setShowReceiptModal(true);
@@ -811,7 +1143,7 @@ function App() {
             {selectedTable && (
               <div className="mb-3 p-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl shadow-lg flex items-center justify-between">
                 <p className="text-base font-semibold">
-                  Masa: {selectedTable.name} için sipariş oluşturuyorsunuz
+                  {isSuriciBranch ? 'Müşteri' : 'Masa'}: {selectedTable.name} için sipariş oluşturuyorsunuz
                 </p>
                 <button
                   onClick={() => {
@@ -923,6 +1255,7 @@ function App() {
               onRequestAdisyon={requestAdisyon}
               totalAmount={getTotalAmount()}
               selectedTable={selectedTable}
+              isSuriciBranch={isSuriciBranch}
               orderNote={orderNote}
               onOrderNoteChange={setOrderNote}
               onToggleGift={toggleGift}
@@ -1129,6 +1462,62 @@ function App() {
           type={toast.type}
           onClose={() => setToast({ message: '', type: 'info', show: false })}
         />
+      )}
+
+      {showSuriciNameModal && (
+        <div className="fixed inset-0 z-[120] bg-black/55 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="w-full max-w-lg bg-white rounded-3xl border border-pink-100 shadow-2xl p-7">
+            <div className="mb-5">
+              <h3 className="text-2xl font-extrabold text-slate-900">İsim Soyisim</h3>
+              <p className="text-sm text-slate-500 mt-1">
+                Masaya kaydetmeden önce müşteri adını girin.
+              </p>
+            </div>
+            <input
+              type="text"
+              value={suriciGuestName}
+              onChange={(e) => setSuriciGuestName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  const val = suriciGuestName.trim();
+                  if (!val) return;
+                  setShowSuriciNameModal(false);
+                  suriciNameResolverRef.current?.(val);
+                  suriciNameResolverRef.current = null;
+                }
+              }}
+              placeholder="Örn: Ahmet Yılmaz"
+              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-pink-400"
+              autoFocus
+            />
+            <div className="mt-6 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSuriciNameModal(false);
+                  suriciNameResolverRef.current?.('');
+                  suriciNameResolverRef.current = null;
+                }}
+                className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 font-semibold hover:bg-slate-50"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const val = suriciGuestName.trim();
+                  if (!val) return;
+                  setShowSuriciNameModal(false);
+                  suriciNameResolverRef.current?.(val);
+                  suriciNameResolverRef.current = null;
+                }}
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-fuchsia-500 text-white font-bold hover:from-pink-600 hover:to-fuchsia-600"
+              >
+                Kaydet
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
     </>

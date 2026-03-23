@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.34">
+  <link rel="manifest" href="/manifest.json?v=2.4.36">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.34';
+      const APP_VERSION = '2.4.36';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -432,8 +432,6 @@
       loadSales();
       loadCancels(); // Cache'den yüklemeyi dene
       renderCurrentView(); // Listener'ları başlat
-      // 00:00'dan sonra ilk girişte açık masaları sil (masalar yüklendikten sonra çalışsın diye gecikmeli)
-      setTimeout(runMidnightClearIfNeeded, 5000);
     }
 
     function verifyPin() {
@@ -4021,7 +4019,8 @@
       }
     }
 
-    // Dolu masayı veritabanından sil (onay istemeden - gece otomatik temizlik için)
+    // Otomatik masa silme akışları tamamen kaldırıldı.
+    // Bu yardımcı sadece mevcut bellekteki masa durumunu sıfırlar (otomatik tetiklenmez).
     function resetTableInDb(tableId) {
       if (!allStaticTables[tableId]) return;
       allStaticTables[tableId].is_occupied = false;
@@ -4032,42 +4031,6 @@
       allStaticTables[tableId].order_time = null;
       allStaticTables[tableId].order_note = null;
       if (previousTableStates[tableId] !== undefined) previousTableStates[tableId] = false;
-    }
-
-    // Her gece 00:00'da açık kalan tüm masaları veritabanından kalıcı sil (otomatik)
-    async function clearAllOpenTablesAtMidnight() {
-      if (!tablesDb) return;
-      const occupiedIds = Object.keys(allStaticTables).filter(id => {
-        const t = allStaticTables[id];
-        const occupied = t.is_occupied === true || t.is_occupied === 'true' || t.is_occupied === 1 ||
-          (t.status && (t.status === 'occupied' || t.status === 'dolu')) ||
-          (t.items && Array.isArray(t.items) && t.items.length > 0);
-        return occupied && (t.total_amount > 0 || (t.items && t.items.length > 0));
-      });
-      if (occupiedIds.length === 0) return;
-      try {
-        for (const tableId of occupiedIds) {
-          const tableRef = tablesDb.collection('tables').doc(tableId);
-          await tableRef.delete();
-          resetTableInDb(tableId);
-        }
-        if (typeof renderAllTables === 'function') renderAllTables(allStaticTables);
-        if (typeof showToast === 'function') showToast('success', 'Gece temizliği', occupiedIds.length + ' açık masa veritabanından silindi.');
-        console.log('🕐 Gece 00:00 temizliği: ' + occupiedIds.length + ' masa silindi.');
-      } catch (err) {
-        console.error('Gece masa temizliği hatası:', err);
-        if (typeof showToast === 'function') showToast('error', 'Gece temizliği', 'Masalar silinirken hata: ' + (err.message || 'Bilinmeyen'));
-      }
-    }
-
-    // 00:00'dan sonra ilk girişte açık masaları temizle (günde bir kez)
-    function runMidnightClearIfNeeded() {
-      var key = 'lastMidnightTablesClear';
-      var now = new Date();
-      var today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
-      if (localStorage.getItem(key) === today) return;
-      localStorage.setItem(key, today);
-      clearAllOpenTablesAtMidnight();
     }
 
     var gorselEkleCurrentProductId = null;

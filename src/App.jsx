@@ -20,6 +20,9 @@ import ExpenseModal from './components/ExpenseModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
 import SettingsModal from './components/SettingsModal';
+
+const BRANCH_ONBOARDING_KEY = 'makara_pos_branch_onboarded';
+
 function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [selectedBranchKey, setSelectedBranchKey] = useState('');
@@ -27,6 +30,15 @@ function App() {
   const [isActivatingBranch, setIsActivatingBranch] = useState(false);
   const [branchError, setBranchError] = useState('');
   const [isBranchReady, setIsBranchReady] = useState(false);
+  /** Kayıtlı şube ile otomatik bağlanırken; seçim ekranı flicker olmasın */
+  const [branchGateResolved, setBranchGateResolved] = useState(() => {
+    try {
+      return localStorage.getItem(BRANCH_ONBOARDING_KEY) !== '1';
+    } catch {
+      return true;
+    }
+  });
+  const [branchBootstrapKey, setBranchBootstrapKey] = useState(0);
   const [currentView, setCurrentView] = useState('pos'); // 'pos', 'sales', or 'tables'
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
@@ -98,18 +110,53 @@ function App() {
   }, [activeBranch, selectedBranchKey]);
   const isSuriciBranch = (activeBranch?.key || selectedBranchKey) === 'makarasur';
 
+  // Kayıtlı şube: bu cihazda bir kez seçildiyse her açılışta otomatik bağlan
   useEffect(() => {
-    if (window.electronAPI?.getActiveBranch) {
-      window.electronAPI.getActiveBranch()
-        .then((branch) => {
-          if (branch?.key) {
-            setActiveBranch(branch);
-            setSelectedBranchKey(branch.key);
-          }
-        })
-        .catch(() => {});
-    }
+    if (showSplash) return;
+    let cancelled = false;
+    (async () => {
+      let onboarded = false;
+      try {
+        onboarded = localStorage.getItem(BRANCH_ONBOARDING_KEY) === '1';
+      } catch {
+        onboarded = false;
+      }
+      if (!onboarded) {
+        if (!cancelled) setBranchGateResolved(true);
+        return;
+      }
+      if (!cancelled) setBranchGateResolved(false);
+      try {
+        if (!window.electronAPI?.getActiveBranch || !window.electronAPI?.activateBranch) {
+          if (!cancelled) setBranchGateResolved(true);
+          return;
+        }
+        const branch = await window.electronAPI.getActiveBranch();
+        const key = (branch?.key || '').trim().toLowerCase();
+        if (key !== 'makara' && key !== 'makarasur') {
+          if (!cancelled) setBranchGateResolved(true);
+          return;
+        }
+        const result = await window.electronAPI.activateBranch(key);
+        if (cancelled) return;
+        if (result?.success) {
+          setActiveBranch(result.branch || branch);
+          setSelectedBranchKey(key);
+          setIsBranchReady(true);
+          setCurrentView(key === 'makarasur' ? 'tables' : 'pos');
+        }
+      } catch (e) {
+        console.error('Otomatik şube bağlantısı:', e);
+      } finally {
+        if (!cancelled) setBranchGateResolved(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showSplash, branchBootstrapKey]);
 
+  useEffect(() => {
     // Update event listeners
     if (window.electronAPI) {
       window.electronAPI.onUpdateAvailable((info) => {
@@ -278,7 +325,22 @@ function App() {
 
   useEffect(() => {
     if (!isBranchReady) return;
-    loadCategories();
+    let cancelled = false;
+    // Ana süreçte şube katalogu kademeli dolduğu için ilk çağrıda [] gelebilir; kısa aralıklarla tekrar dene.
+    (async () => {
+      let attempts = 0;
+      const maxAttempts = 90;
+      while (!cancelled && attempts < maxAttempts) {
+        const cats = await window.electronAPI.getCategories();
+        if (cats.length > 0) break;
+        attempts += 1;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (!cancelled) await loadCategories();
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [isBranchReady, loadCategories]);
 
   const loadProducts = useCallback(async (categoryId) => {
@@ -856,12 +918,17 @@ function App() {
     if (exitAction === 'logout') {
       setShowExitSplash(false);
       setIsBranchReady(false);
-      setActiveBranch(null);
-      setSelectedBranchKey('');
       setCurrentView('pos');
       setSelectedTable(null);
       setCart([]);
       setOrderNote('');
+      let onboarded = false;
+      try {
+        onboarded = localStorage.getItem(BRANCH_ONBOARDING_KEY) === '1';
+      } catch (_) {}
+      // Kayıtlı şube: seçim ekranı yerine "bağlanıyor" + otomatik activate
+      setBranchGateResolved(!onboarded);
+      setBranchBootstrapKey((k) => k + 1);
       return;
     }
 
@@ -931,8 +998,12 @@ function App() {
         return;
       }
       setActiveBranch(result.branch || { key: normalized, label: normalized });
+      setSelectedBranchKey(normalized);
       setIsBranchReady(true);
       setCurrentView(normalized === 'makarasur' ? 'tables' : 'pos');
+      try {
+        localStorage.setItem(BRANCH_ONBOARDING_KEY, '1');
+      } catch (_) {}
     } catch (error) {
       setBranchError(error?.message || 'Sube aktivasyonunda hata olustu.');
     } finally {
@@ -940,7 +1011,55 @@ function App() {
     }
   };
 
-  if (!showSplash && !isBranchReady) {
+  const handleBranchChangeFromSettings = async (newKey) => {
+    const normalized = String(newKey || '').trim().toLowerCase();
+    if (normalized !== 'makara' && normalized !== 'makarasur') return;
+    const cur = (activeBranch?.key || selectedBranchKey || '').toLowerCase();
+    if (cur === normalized) {
+      showToast('Zaten bu şubedesiniz.', 'info');
+      return;
+    }
+    if (!window.electronAPI?.activateBranch) {
+      showToast('Şube bağlantısı kullanılamıyor.', 'error');
+      return;
+    }
+    try {
+      const result = await window.electronAPI.activateBranch(normalized);
+      if (!result?.success) {
+        showToast(result?.error || 'Şube değiştirilemedi', 'error');
+        return;
+      }
+      try {
+        localStorage.setItem(BRANCH_ONBOARDING_KEY, '1');
+      } catch (_) {}
+      setActiveBranch(result.branch || { key: normalized });
+      setSelectedBranchKey(normalized);
+      setCurrentView(normalized === 'makarasur' ? 'tables' : 'pos');
+      setSelectedTable(null);
+      setCart([]);
+      setOrderNote('');
+      await refreshProducts();
+      showToast('Şube güncellendi.', 'success');
+    } catch (e) {
+      showToast(e?.message || 'Şube değiştirilemedi', 'error');
+    }
+  };
+
+  if (!showSplash && !isBranchReady && !branchGateResolved) {
+    return (
+      <>
+        {showExitSplash && (
+          <ExitSplash onComplete={handleExitComplete} />
+        )}
+        <div className="min-h-screen w-full bg-white flex flex-col items-center justify-center gap-4 p-6">
+          <div className="h-12 w-12 rounded-full border-4 border-pink-200 border-t-pink-500 animate-spin" />
+          <p className="text-slate-600 font-medium text-center">Şube bağlanıyor…</p>
+        </div>
+      </>
+    );
+  }
+
+  if (!showSplash && !isBranchReady && branchGateResolved) {
     return (
       <>
         {showExitSplash && (
@@ -1036,7 +1155,7 @@ function App() {
                 {isActivatingBranch ? 'Baglaniyor...' : 'Devam Et'}
               </button>
               <p className="text-sm text-slate-500 mt-2 text-center">
-                Sube secimi yapip devam ederek POS oturumunu baslatin.
+                İlk kurulumda bir kez şube seçin; bu cihazda hatırlanır. Değiştirmek için Ayarlar → Şube.
               </p>
             </div>
           </div>
@@ -1084,6 +1203,9 @@ function App() {
             variant="page"
             onClose={() => setCurrentView('pos')}
             onProductsUpdated={refreshProducts}
+            currentBranchKey={activeBranch?.key || selectedBranchKey}
+            branchOptions={BRANCH_OPTIONS}
+            onBranchChange={handleBranchChangeFromSettings}
           />
         </div>
       ) : currentView === 'tables' ? (

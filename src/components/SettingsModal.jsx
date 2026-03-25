@@ -2,9 +2,18 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Toast from './Toast';
 
-const SettingsModal = ({ onClose, onProductsUpdated, variant = 'modal' }) => {
+const SettingsModal = ({
+  onClose,
+  onProductsUpdated,
+  variant = 'modal',
+  currentBranchKey,
+  branchOptions = [],
+  onBranchChange,
+}) => {
   const isPage = variant === 'page';
-  const [activeTab, setActiveTab] = useState('password'); // 'password', 'products', 'printers', 'stock', or 'integration'
+  const [activeTab, setActiveTab] = useState('password'); // 'password', 'branch', 'products', ...
+  const [branchDraft, setBranchDraft] = useState(currentBranchKey || '');
+  const [branchChanging, setBranchChanging] = useState(false);
   const [printerSubTab, setPrinterSubTab] = useState('usb'); // 'usb' or 'network'
   
   // Stock management state
@@ -100,6 +109,12 @@ const SettingsModal = ({ onClose, onProductsUpdated, variant = 'modal' }) => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [showCategoryDropdown]);
+
+  useEffect(() => {
+    if (activeTab === 'branch') {
+      setBranchDraft((currentBranchKey || '').trim().toLowerCase() || '');
+    }
+  }, [activeTab, currentBranchKey]);
 
   useEffect(() => {
     loadCategories();
@@ -922,6 +937,25 @@ const SettingsModal = ({ onClose, onProductsUpdated, variant = 'modal' }) => {
               </svg>
               <span>Parola Değiştirme</span>
             </button>
+            {onBranchChange && branchOptions.length > 0 && (
+              <>
+                <div className="w-px bg-gray-200 my-2"></div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('branch')}
+                  className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
+                    activeTab === 'branch'
+                      ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                      : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`}
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                  </svg>
+                  <span>Şube</span>
+                </button>
+              </>
+            )}
             <div className="w-px bg-gray-200 my-2"></div>
             <button
               onClick={() => setActiveTab('products')}
@@ -983,6 +1017,62 @@ const SettingsModal = ({ onClose, onProductsUpdated, variant = 'modal' }) => {
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto scrollbar-custom">
+          {activeTab === 'branch' && onBranchChange && branchOptions.length > 0 && (
+            <div className="max-w-lg mx-auto space-y-6">
+              <p className="text-sm text-gray-600 text-center">
+                Bu cihazda kullanılan şube burada saklanır; uygulama her açılışta aynı şubeye bağlanır. Değiştirmek için seçip uygulayın.
+              </p>
+              <div className="space-y-3">
+                {branchOptions.map((opt) => {
+                  const key = (opt.key || '').trim().toLowerCase();
+                  return (
+                    <label
+                      key={key}
+                      className={`flex items-center gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        branchDraft === key
+                          ? 'border-pink-400 bg-pink-50/80 shadow-sm'
+                          : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="settings-branch"
+                        className="w-4 h-4 text-pink-600"
+                        checked={branchDraft === key}
+                        onChange={() => setBranchDraft(key)}
+                      />
+                      <div className="flex-1 text-left">
+                        <div className="font-semibold text-gray-900">{opt.label}</div>
+                        {opt.subtitle && (
+                          <div className="text-xs text-gray-500 mt-0.5">{opt.subtitle}</div>
+                        )}
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                disabled={
+                  branchChanging ||
+                  !branchDraft ||
+                  (currentBranchKey || '').trim().toLowerCase() === branchDraft
+                }
+                onClick={async () => {
+                  setBranchChanging(true);
+                  try {
+                    await onBranchChange(branchDraft);
+                  } finally {
+                    setBranchChanging(false);
+                  }
+                }}
+                className="w-full px-6 py-3 bg-pink-500 hover:bg-pink-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-semibold transition-all shadow-sm"
+              >
+                {branchChanging ? 'Uygulanıyor…' : 'Şubeyi uygula'}
+              </button>
+            </div>
+          )}
+
           {activeTab === 'password' && (
             <div className="max-w-md mx-auto">
               <div className="space-y-4">

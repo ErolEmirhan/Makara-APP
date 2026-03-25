@@ -37,61 +37,63 @@ const firebaseAppModule = require('firebase/app');
 const firebaseFirestoreModule = require('firebase/firestore');
 const firebaseStorageModule = require('firebase/storage');
 
+// Havzan ile ortak: kategori/ürün/görsel/broadcast (makara-16344) + masalar/stok (makaramasalar)
+const FIREBASE_MAKARA_MAIN = {
+  apiKey: "AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA",
+  authDomain: "makara-16344.firebaseapp.com",
+  projectId: "makara-16344",
+  storageBucket: "makara-16344.firebasestorage.app",
+  messagingSenderId: "216769654742",
+  appId: "1:216769654742:web:16792742d4613f4269be77",
+  measurementId: "G-K4XZHP11MM"
+};
+const FIREBASE_MAKARA_TABLES = {
+  apiKey: "AIzaSyDu_NUrgas4wZ_wdfAYE-DgxqTpb7vKxyo",
+  authDomain: "makaramasalar.firebaseapp.com",
+  projectId: "makaramasalar",
+  storageBucket: "makaramasalar.firebasestorage.app",
+  messagingSenderId: "840151572206",
+  appId: "1:840151572206:web:0afaf93deea636309e5dff",
+  measurementId: "G-2S0J3566ZY"
+};
+// Suriçi: sadece POS satışları + iptal kayıtları bu projede; katalog Havzan ile aynı store
+const FIREBASE_SURICI_SALES = {
+  apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
+  authDomain: "makarasurici.firebaseapp.com",
+  projectId: "makarasurici",
+  storageBucket: "makarasurici.firebasestorage.app",
+  messagingSenderId: "237735301273",
+  appId: "1:237735301273:web:bf62c8f145434df0292808",
+  measurementId: "G-WXWWQT92L6"
+};
+
 // Çoklu şube yapılandırması
 const BRANCH_CONFIGS = {
   makara: {
     key: 'makara',
     label: 'Makara',
-    mainFirebase: {
-      apiKey: "AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA",
-      authDomain: "makara-16344.firebaseapp.com",
-      projectId: "makara-16344",
-      storageBucket: "makara-16344.firebasestorage.app",
-      messagingSenderId: "216769654742",
-      appId: "1:216769654742:web:16792742d4613f4269be77",
-      measurementId: "G-K4XZHP11MM"
-    },
-    tablesFirebase: {
-      apiKey: "AIzaSyDu_NUrgas4wZ_wdfAYE-DgxqTpb7vKxyo",
-      authDomain: "makaramasalar.firebaseapp.com",
-      projectId: "makaramasalar",
-      storageBucket: "makaramasalar.firebasestorage.app",
-      messagingSenderId: "840151572206",
-      appId: "1:840151572206:web:0afaf93deea636309e5dff",
-      measurementId: "G-2S0J3566ZY"
-    }
+    mainFirebase: FIREBASE_MAKARA_MAIN,
+    tablesFirebase: FIREBASE_MAKARA_TABLES
   },
   makarasur: {
     key: 'makarasur',
     label: 'Makara Sur',
-    mainFirebase: {
-      apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
-      authDomain: "makarasurici.firebaseapp.com",
-      projectId: "makarasurici",
-      storageBucket: "makarasurici.firebasestorage.app",
-      messagingSenderId: "237735301273",
-      appId: "1:237735301273:web:bf62c8f145434df0292808",
-      measurementId: "G-WXWWQT92L6"
-    },
-    // Sur şubede tek veritabanı kullanılacağı için tables da aynı projeye bağlanır
-    tablesFirebase: {
-      apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
-      authDomain: "makarasurici.firebaseapp.com",
-      projectId: "makarasurici",
-      storageBucket: "makarasurici.firebasestorage.app",
-      messagingSenderId: "237735301273",
-      appId: "1:237735301273:web:bf62c8f145434df0292808",
-      measurementId: "G-WXWWQT92L6"
-    }
+    mainFirebase: FIREBASE_MAKARA_MAIN,
+    tablesFirebase: FIREBASE_MAKARA_TABLES,
+    salesFirebase: FIREBASE_SURICI_SALES
   }
 };
 
 let activeBranchKey = 'makara';
+/** activate-branch IPC çağrılarını sıraya al (paralel iki activate şubeyi ve katalogu bozabiliyor) */
+let activateBranchChain = Promise.resolve();
 let branchSettingsPath = null;
 let categoriesRealtimeUnsubscribe = null;
 let productsRealtimeUnsubscribe = null;
 let broadcastsRealtimeUnsubscribe = null;
-let branchWarmupInProgress = false;
+/** Şube değişince eski arka plan warmup iptal etmek için */
+let branchWarmupGeneration = 0;
+let saveDatabaseTimer = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -137,6 +139,14 @@ let tablesFirestore = null;
 let tablesFirebaseCollection = null;
 let tablesFirebaseDoc = null;
 let tablesFirebaseSetDoc = null;
+
+/** Suriçi: satış/iptal Firestore; Havzan'da main ile aynı (null iken firestore kullanılır) */
+let salesFirebaseApp = null;
+let salesFirestore = null;
+
+function getSalesFirestore() {
+  return salesFirestore || firestore;
+}
 
 let mainWindow;
 let dbPath;
@@ -190,7 +200,7 @@ async function initializeFirebaseForBranch(branchKey) {
 
   // Aynı isimli app'ler varsa temizle
   const { getApps, getApp, initializeApp, deleteApp } = firebaseAppModule;
-  for (const appName of ['main-tenant', 'tables-tenant']) {
+  for (const appName of ['main-tenant', 'tables-tenant', 'sales-tenant']) {
     try {
       const existing = getApp(appName);
       await deleteApp(existing);
@@ -217,12 +227,36 @@ async function initializeFirebaseForBranch(branchKey) {
     storageGetDownloadURL = firebaseStorageModule.getDownloadURL;
     storageDeleteObject = firebaseStorageModule.deleteObject;
 
-    // Tables firebase
-    tablesFirebaseApp = initializeApp(branch.tablesFirebase, 'tables-tenant');
-    tablesFirestore = firebaseFirestoreModule.getFirestore(tablesFirebaseApp);
+    // Masalar Firebase: Havzan'da ürün/katalog (makara-16344) ile masalar (makaramasalar) ayrı projede.
+    // Suriçi'de ikisi de makarasurici — aynı projeyi iki kez initializeApp ile açmak Firestore okumalarını
+    // bozabiliyor; tek app + tek Firestore kullan.
+    const tablesSameProject =
+      branch.tablesFirebase?.projectId &&
+      branch.mainFirebase?.projectId &&
+      branch.tablesFirebase.projectId === branch.mainFirebase.projectId;
+    if (tablesSameProject) {
+      tablesFirebaseApp = firebaseApp;
+      tablesFirestore = firestore;
+    } else {
+      tablesFirebaseApp = initializeApp(branch.tablesFirebase, 'tables-tenant');
+      tablesFirestore = firebaseFirestoreModule.getFirestore(tablesFirebaseApp);
+    }
     tablesFirebaseCollection = firebaseFirestoreModule.collection;
     tablesFirebaseDoc = firebaseFirestoreModule.doc;
     tablesFirebaseSetDoc = firebaseFirestoreModule.setDoc;
+
+    const salesCfg = branch.salesFirebase;
+    if (
+      salesCfg?.projectId &&
+      branch.mainFirebase?.projectId &&
+      salesCfg.projectId !== branch.mainFirebase.projectId
+    ) {
+      salesFirebaseApp = initializeApp(salesCfg, 'sales-tenant');
+      salesFirestore = firebaseFirestoreModule.getFirestore(salesFirebaseApp);
+    } else {
+      salesFirebaseApp = null;
+      salesFirestore = firestore;
+    }
 
     console.log(`✅ Firebase branch aktif: ${branch.key}`);
     return true;
@@ -231,6 +265,8 @@ async function initializeFirebaseForBranch(branchKey) {
     firestore = null;
     storage = null;
     tablesFirestore = null;
+    salesFirestore = null;
+    salesFirebaseApp = null;
     return false;
   }
 }
@@ -243,36 +279,51 @@ async function activateBranch(branchKey) {
   const ok = await initializeFirebaseForBranch(branchKey);
   if (!ok) return { success: false, error: 'Firebase bağlantısı kurulamadı' };
 
+  // Eski şube katalogunu göstermemek için bellek temizliği (disk yazımı senkron bitince)
+  db.categories = [];
+  db.products = [];
+
   saveBranchSettings();
 
-  // Realtime listener'ları hemen başlat, UI beklemesin.
-  categoriesRealtimeUnsubscribe = setupCategoriesRealtimeListener();
-  productsRealtimeUnsubscribe = setupProductsRealtimeListener();
-  broadcastsRealtimeUnsubscribe = setupBroadcastsRealtimeListener();
+  // Önce kademeli tam çekim (getDocs), sonra realtime dinleyiciler — aynı anda çift yük + ana iş parçacığında dev JSON yazımı donmasını önler.
+  branchWarmupGeneration += 1;
+  const warmupGen = branchWarmupGeneration;
+  const warmupBranchKey = activeBranchKey;
 
-  // Ağır işlemleri lazy/background çalıştır: şube girişini bloklamasın.
-  if (!branchWarmupInProgress) {
-    branchWarmupInProgress = true;
-    const warmupBranchKey = activeBranchKey;
-    setTimeout(async () => {
+  // Kategoriler: renderer isBranchReady olunca hemen getCategories çağırıyor; arka plana bırakılırsa yarışta
+  // anket boş kalıp sadece "Yan Ürünler" görünebiliyor. İlk kategori çekimini burada bitir.
+  try {
+    await syncCategoriesFromFirebase();
+  } catch (error) {
+    console.error('Kategori senkronu (activateBranch):', error);
+  }
+  if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) {
+    return { success: false, error: 'Şube eşzamanlı değişti, tekrar deneyin.' };
+  }
+
+  setImmediate(() => {
+    (async () => {
       try {
-        // Kullanıcı bu sırada başka şubeye geçtiyse eski warmup'ı atla.
-        if (activeBranchKey !== warmupBranchKey) return;
-        // Kademeli (lazy) warmup: eski cihazlarda yük bir anda binmesin.
-        await syncCategoriesFromFirebase();
-        await sleep(180);
-        if (activeBranchKey !== warmupBranchKey) return;
+        if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) return;
+        await sleep(220);
         await syncProductsFromFirebase();
-        await sleep(260);
-        if (activeBranchKey !== warmupBranchKey) return;
-        await migrateLocalImagesToFirebase();
+        if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) return;
+
+        categoriesRealtimeUnsubscribe = setupCategoriesRealtimeListener();
+        productsRealtimeUnsubscribe = setupProductsRealtimeListener();
+        broadcastsRealtimeUnsubscribe = setupBroadcastsRealtimeListener();
+
+        // Görsel migration çok ağır; şube girişinden dakikalar sonra, tek tek nefes alarak.
+        if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) return;
+        setTimeout(() => {
+          if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) return;
+          migrateLocalImagesToFirebase().catch((e) => console.error('Görsel migration:', e));
+        }, 120_000);
       } catch (error) {
         console.error('Arka plan branch warmup hatası:', error);
-      } finally {
-        branchWarmupInProgress = false;
       }
-    }, 0);
-  }
+    })();
+  });
 
   return {
     success: true,
@@ -430,6 +481,26 @@ function initDefaultData() {
 }
 
 function saveDatabase() {
+  if (saveDatabaseTimer) clearTimeout(saveDatabaseTimer);
+  saveDatabaseTimer = setTimeout(() => {
+    saveDatabaseTimer = null;
+    try {
+      const payload = JSON.stringify(db, null, 2);
+      fs.writeFile(dbPath, payload, 'utf8', (err) => {
+        if (err) console.error('Veritabanı kaydedilemedi:', err);
+      });
+    } catch (error) {
+      console.error('Veritabanı serileştirilemedi:', error);
+    }
+  }, 900);
+}
+
+/** Kapatmadan önce bekleyen yazımı hemen diske yaz (senkron) */
+function flushSaveDatabaseSync() {
+  if (saveDatabaseTimer) {
+    clearTimeout(saveDatabaseTimer);
+    saveDatabaseTimer = null;
+  }
   try {
     fs.writeFileSync(dbPath, JSON.stringify(db, null, 2), 'utf8');
   } catch (error) {
@@ -644,12 +715,18 @@ async function migrateLocalImagesToFirebase() {
   }
 
   try {
-    console.log('🔄 Local görseller Firebase Storage\'a yükleniyor...');
+    console.log('🔄 Local görseller Firebase Storage\'a yükleniyor (düşük öncelik, kademeli)...');
     let migratedCount = 0;
     let skippedCount = 0;
     let errorCount = 0;
 
-    for (const product of db.products) {
+    const products = db.products || [];
+    for (let idx = 0; idx < products.length; idx++) {
+      const product = products[idx];
+      if (idx > 0 && idx % 12 === 0) {
+        await sleep(30);
+      }
+
       // Eğer görsel yoksa veya zaten Firebase Storage URL'si ise atla
       if (!product.image) {
         skippedCount++;
@@ -714,10 +791,13 @@ async function migrateLocalImagesToFirebase() {
     if (migratedCount > 0) {
       saveDatabase();
       
-      // Firebase'e de güncelle
+      // Firebase'e de güncelle (sırayla, UI donmasın)
+      let fbIdx = 0;
       for (const product of db.products) {
         if (product.image && (product.image.includes('firebasestorage.googleapis.com') || product.image.includes('r2.cloudflarestorage.com') || product.image.includes('r2.dev'))) {
           await saveProductToFirebase(product);
+          fbIdx += 1;
+          if (fbIdx % 8 === 0) await sleep(40);
         }
       }
     }
@@ -1162,7 +1242,9 @@ ipcMain.handle('get-active-branch', () => {
 
 ipcMain.handle('activate-branch', async (event, branchKey) => {
   try {
-    return await activateBranch(branchKey);
+    const next = activateBranchChain.then(() => activateBranch(branchKey));
+    activateBranchChain = next.then(() => {}).catch(() => {});
+    return await next;
   } catch (error) {
     console.error('activate-branch hatası:', error);
     return { success: false, error: error.message || 'Şube aktifleştirilemedi' };
@@ -1526,7 +1608,7 @@ ipcMain.handle('create-sale', async (event, saleData) => {
   // Firebase'e kaydet
   if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
     try {
-      const salesRef = firebaseCollection(firestore, 'sales');
+      const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
       
       // Items'ı string formatına çevir
       const itemsText = items.map(item => {
@@ -1704,7 +1786,7 @@ ipcMain.handle('delete-sale', async (event, saleId) => {
     // Firebase'den de satışı sil
     if (firestore && firebaseCollection && firebaseGetDocs && firebaseDeleteDoc && firebaseWhere && firebaseQuery) {
       try {
-        const salesRef = firebaseCollection(firestore, 'sales');
+        const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
         // sale_id'ye göre sorgula
         const q = firebaseQuery(salesRef, firebaseWhere('sale_id', '==', saleId));
         const snapshot = await firebaseGetDocs(q);
@@ -1755,7 +1837,7 @@ ipcMain.handle('delete-all-sales', async (event) => {
     // Firebase'den de tüm satışları sil
     if (firestore && firebaseCollection && firebaseGetDocs && firebaseDeleteDoc) {
       try {
-        const salesRef = firebaseCollection(firestore, 'sales');
+        const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
         const snapshot = await firebaseGetDocs(salesRef);
         
         let deletedCount = 0;
@@ -1943,6 +2025,31 @@ ipcMain.handle('get-table-order-items', (event, orderId) => {
   return db.tableOrderItems.filter(oi => oi.order_id === orderId);
 });
 
+/** İptal fişi: kategori yazıcısı → kasa yazıcısı → varsayılan (null). Atama zorunlu değil. */
+function resolveCancelPrinterNameType(categoryId, isYanUrun) {
+  if (isYanUrun) {
+    const cp = db.settings.cashierPrinter;
+    if (cp && cp.printerName) {
+      return { printerName: cp.printerName, printerType: cp.printerType || 'usb' };
+    }
+    return { printerName: null, printerType: null };
+  }
+  if (categoryId != null && categoryId !== undefined) {
+    const assignment = db.printerAssignments.find((a) => {
+      const ac = typeof a.category_id === 'string' ? parseInt(a.category_id, 10) : a.category_id;
+      return ac === categoryId;
+    });
+    if (assignment && assignment.printerName) {
+      return { printerName: assignment.printerName, printerType: assignment.printerType || 'usb' };
+    }
+  }
+  const cp = db.settings.cashierPrinter;
+  if (cp && cp.printerName) {
+    return { printerName: cp.printerName, printerType: cp.printerType || 'usb' };
+  }
+  return { printerName: null, printerType: null };
+}
+
 // Masa siparişinden ürün iptal etme
 ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, cancelReason = null, staffId = null) => {
   const item = db.tableOrderItems.find(oi => oi.id === itemId);
@@ -1984,14 +2091,10 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
   let printerType = null;
 
   if (isYanUrun) {
-    // Yan ürünler için kasa yazıcısından yazdır
-    const cashierPrinter = db.settings.cashierPrinter;
-    if (!cashierPrinter || !cashierPrinter.printerName) {
-      return { success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen ayarlardan kasa yazıcısı seçin.' };
-    }
-    printerName = cashierPrinter.printerName;
-    printerType = cashierPrinter.printerType;
     categoryName = 'Yan Ürünler';
+    const pr = resolveCancelPrinterNameType(null, true);
+    printerName = pr.printerName;
+    printerType = pr.printerType;
   } else {
     // Normal ürünler için stok iadesi (ikram edilen ürünler hariç)
     if (!item.isGift) {
@@ -2008,18 +2111,9 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     const category = db.categories.find(c => c.id === product.category_id);
     categoryName = category ? category.name : 'Diğer';
 
-    // Bu kategoriye atanmış yazıcıyı bul
-    const assignment = db.printerAssignments.find(a => {
-      const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
-      return assignmentCategoryId === product.category_id;
-    });
-
-    if (!assignment) {
-      return { success: false, error: 'Bu ürünün kategorisine yazıcı atanmamış' };
-    }
-
-    printerName = assignment.printerName;
-    printerType = assignment.printerType;
+    const pr = resolveCancelPrinterNameType(product.category_id, false);
+    printerName = pr.printerName;
+    printerType = pr.printerType;
   }
 
       // İptal açıklaması kontrolü - açıklama yoksa fiş yazdırma, sadece açıklama iste
@@ -2087,7 +2181,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
     const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
     
-    const cancelRef = firebaseCollection(firestore, 'cancels');
+    const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
     // Firebase kaydetme işlemini arka planda yap (await kullanmadan)
     firebaseAddDoc(cancelRef, {
       item_id: itemId,
@@ -2196,18 +2290,12 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
     
     if (isYanUrun) {
       // Yan ürünler için stok iadesi yapma (yan ürünler stok takibi yapmaz)
-      // Yan ürünler için kasa yazıcısından yazdır
-      const cashierPrinter = db.settings.cashierPrinter;
-      if (!cashierPrinter || !cashierPrinter.printerName) {
-        continue; // Kasa yazıcısı yoksa atla
-      }
-
-      // Yan ürünler için özel grup oluştur
       if (!categoryGroups.has(YAN_URUNLER_CATEGORY_ID)) {
+        const pr = resolveCancelPrinterNameType(null, true);
         categoryGroups.set(YAN_URUNLER_CATEGORY_ID, {
           categoryName: 'Yan Ürünler',
-          printerName: cashierPrinter.printerName,
-          printerType: cashierPrinter.printerType,
+          printerName: pr.printerName,
+          printerType: pr.printerType,
           items: [],
           totalQuantity: 0,
           totalAmount: 0
@@ -2235,19 +2323,13 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
       const category = db.categories.find(c => c.id === product.category_id);
       const categoryName = category ? category.name : 'Diğer';
 
-      // Kategoriye göre grupla
+      // Kategoriye göre grupla (yazıcı ataması zorunlu değil)
       if (!categoryGroups.has(product.category_id)) {
-        const assignment = db.printerAssignments.find(a => {
-          const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
-          return assignmentCategoryId === product.category_id;
-        });
-
-        if (!assignment) continue; // Yazıcı ataması yoksa atla
-
+        const pr = resolveCancelPrinterNameType(product.category_id, false);
         categoryGroups.set(product.category_id, {
           categoryName,
-          printerName: assignment.printerName,
-          printerType: assignment.printerType,
+          printerName: pr.printerName,
+          printerType: pr.printerType,
           items: [],
           totalQuantity: 0,
           totalAmount: 0
@@ -2329,7 +2411,7 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
       const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
       const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
 
-      const cancelRef = firebaseCollection(firestore, 'cancels');
+      const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
       
       for (const cancelItem of cancelItems) {
         await firebaseAddDoc(cancelRef, {
@@ -2755,7 +2837,7 @@ ipcMain.handle('cancel-entire-table-order', async (event, orderId, cancelReason 
         isGift: oi.isGift || false
       }));
       const total_amount = orderItems.reduce((s, oi) => s + (oi.isGift ? 0 : oi.price * oi.quantity), 0);
-      const cancelRef = firebaseCollection(firestore, 'cancels');
+      const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
       await firebaseAddDoc(cancelRef, {
         is_group: true,
         order_id: order.id,
@@ -2917,7 +2999,7 @@ ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'N
   // Firebase'e kaydet
   if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
     try {
-      const salesRef = firebaseCollection(firestore, 'sales');
+      const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
       
       // Items'ı string formatına çevir
       const itemsText = orderItems.map(item => {
@@ -3108,7 +3190,7 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
   // Firebase'e kaydet
   if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
     try {
-      const salesRef = firebaseCollection(firestore, 'sales');
+      const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
       
       // Items'ı string formatına çevir
       const itemsText = orderItems.map(item => {
@@ -3270,7 +3352,7 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
   // Firebase'e kaydet
   if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
     try {
-      const salesRef = firebaseCollection(firestore, 'sales');
+      const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
       
       const itemsText = `${item.product_name} x${quantityToPay}${item.isGift ? ' (İKRAM)' : ''}`;
 
@@ -5459,13 +5541,13 @@ if (!gotTheLock) {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    saveDatabase();
+    flushSaveDatabaseSync();
     app.quit();
   }
 });
 
 app.on('before-quit', () => {
-  saveDatabase();
+  flushSaveDatabaseSync();
 });
 
 // Uygulamayı kapat
@@ -8593,7 +8675,7 @@ function generateMobileHTML(serverURL) {
         </div>
         <div style="background: #fef2f2; border: 2px solid #fecaca; border-radius: 12px; padding: 16px; margin-bottom: 24px;">
           <p style="margin: 0; font-size: 13px; color: #991b1b; font-weight: 600; line-height: 1.6;">
-            ⚠️ İptal edildiğinde bu ürünün kategorisine atanan yazıcıdan iptal fişi yazdırılacaktır.
+            ⚠️ İptal fişi: önce kategori yazıcısı, yoksa kasa veya varsayılan yazıcı kullanılır. Kategori yazıcısı atanmamış olsa bile iptal yapılabilir.
           </p>
         </div>
       </div>
@@ -12446,14 +12528,10 @@ function startAPIServer() {
       let printerType = null;
 
       if (isYanUrun) {
-        // Yan ürünler için kasa yazıcısından yazdır
-        const cashierPrinter = db.settings.cashierPrinter;
-        if (!cashierPrinter || !cashierPrinter.printerName) {
-          return res.status(400).json({ success: false, error: 'Kasa yazıcısı ayarlanmamış. Lütfen ayarlardan kasa yazıcısı seçin.' });
-        }
-        printerName = cashierPrinter.printerName;
-        printerType = cashierPrinter.printerType;
         categoryName = 'Yan Ürünler';
+        const pr = resolveCancelPrinterNameType(null, true);
+        printerName = pr.printerName;
+        printerType = pr.printerType;
       } else {
         // Normal ürünler için ürün bilgilerini al (kategori ve yazıcı için)
         const product = db.products.find(p => p.id === item.product_id);
@@ -12465,18 +12543,9 @@ function startAPIServer() {
         const category = db.categories.find(c => c.id === product.category_id);
         categoryName = category ? category.name : 'Diğer';
 
-        // Bu kategoriye atanmış yazıcıyı bul
-        const assignment = db.printerAssignments.find(a => {
-          const assignmentCategoryId = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
-          return assignmentCategoryId === product.category_id;
-        });
-
-        if (!assignment) {
-          return res.status(400).json({ success: false, error: 'Bu ürünün kategorisine yazıcı atanmamış' });
-        }
-
-        printerName = assignment.printerName;
-        printerType = assignment.printerType;
+        const pr = resolveCancelPrinterNameType(product.category_id, false);
+        printerName = pr.printerName;
+        printerType = pr.printerType;
       }
 
       // İptal açıklaması kontrolü - açıklama yoksa fiş yazdırma, sadece açıklama iste
@@ -12564,7 +12633,7 @@ function startAPIServer() {
         const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
         const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
         
-        const cancelRef = firebaseCollection(firestore, 'cancels');
+        const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
         // Firebase kaydetme işlemini arka planda yap (await kullanmadan)
         firebaseAddDoc(cancelRef, {
           item_id: itemId,
@@ -13109,7 +13178,7 @@ function startAPIServer() {
 }
 
 ipcMain.handle('quit-app', () => {
-  saveDatabase();
+  flushSaveDatabaseSync();
   if (apiServer) {
     apiServer.close();
   }

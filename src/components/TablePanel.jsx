@@ -10,6 +10,11 @@ import OnlineProductManagementModal from './OnlineProductManagementModal';
 import Toast from './Toast';
 import Spinner from './Spinner';
 import orderSound from '../sound/order.mp3';
+import {
+  SULTAN_TABLE_SECTIONS,
+  buildSultanTablesFlat,
+  parseSultanTableId,
+} from '../constants/sultanTables';
 
 // Masalar 61-88 (69, 70, 79, 80 hariç)
 const OUTSIDE_TABLE_NUMBERS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
@@ -90,6 +95,14 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   const SUCCESS_OVERLAY_MS = 2200;
   const [orderTimeTick, setOrderTimeTick] = useState(0);
   const isSuriciBranch = branchKey === 'makarasur';
+  const isSultanBranch = branchKey === 'sultansomati';
+  const [sultanSectionKey, setSultanSectionKey] = useState(SULTAN_TABLE_SECTIONS[0].key);
+
+  useEffect(() => {
+    if (isSultanBranch && selectedType === 'online') {
+      setSelectedType('inside');
+    }
+  }, [isSultanBranch, selectedType]);
   const singularLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
   const pluralLabel = isSuriciBranch ? 'Müşteriler' : 'Masalar';
 
@@ -300,6 +313,13 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     [insideTables, outsideTables, packageTables]
   );
 
+  const sultanTablesFlat = useMemo(() => buildSultanTablesFlat(), []);
+
+  const sultanTablesInSection = useMemo(
+    () => sultanTablesFlat.filter((t) => t.sectionKey === sultanSectionKey),
+    [sultanTablesFlat, sultanSectionKey]
+  );
+
   // Masa siparişlerini yükle
   useEffect(() => {
     loadTableOrders();
@@ -348,6 +368,10 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     if (!targetOrder) return;
 
     setSelectedType('inside');
+    const sultanParsed = parseSultanTableId(targetOrder.table_id);
+    if (sultanParsed) {
+      setSultanSectionKey(sultanParsed.sectionKey);
+    }
     setSelectedOrder(targetOrder);
     if (window.electronAPI?.getTableOrderItems) {
       window.electronAPI.getTableOrderItems(targetOrder.id)
@@ -369,8 +393,17 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     }
   }, [autoOpenOrderId, autoOpenTableId, tableOrders, onAutoOpenConsumed]);
 
-  // Online Firebase bağlantısı — sadece "bu cihazda online sipariş al" açıksa
+  // Online Firebase bağlantısı — sadece "bu cihazda online sipariş al" açıksa (Sultan Somatı'nda online yok)
   useEffect(() => {
+    if (isSultanBranch) {
+      setOnlineOrders([]);
+      setUnseenOnlineOrdersCount(0);
+      setOnlineFirebaseApp(null);
+      setOnlineFirestore(null);
+      onlineOrdersUnsubRef.current?.();
+      onlineOrdersUnsubRef.current = null;
+      return;
+    }
     if (!receiveOnlineOrders) {
       setOnlineOrders([]);
       setUnseenOnlineOrdersCount(0);
@@ -411,7 +444,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
       console.error('Online Firebase başlatılamadı:', error);
       showToast('Online siparişler yüklenemedi', 'error');
     }
-  }, [receiveOnlineOrders]);
+  }, [receiveOnlineOrders, isSultanBranch]);
 
   // Ses ayarları modalı açıldığında localStorage'dan yükle
   useEffect(() => {
@@ -738,10 +771,10 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   const handleAddItems = () => {
     if (!selectedOrder) return;
     
-    // Tüm masaları birleştir
-    const allTables = [...insideTables, ...outsideTables, ...packageTables];
-    
-    // Masayı bul
+    const allTables = isSultanBranch
+      ? sultanTablesFlat
+      : [...insideTables, ...outsideTables, ...packageTables];
+
     const table = allTables.find(t => t.id === selectedOrder.table_id);
     if (table) {
       // Modal'ı kapat
@@ -782,8 +815,20 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           type: type,
           name: selectedOrder.table_name || `Paket ${number}`
         };
+      } else {
+        const st = parseSultanTableId(tableId);
+        if (st) {
+          table = {
+            id: st.id,
+            number: st.number,
+            type: st.type,
+            name: selectedOrder.table_name || st.name,
+            sectionKey: st.sectionKey,
+            sectionLabel: SULTAN_TABLE_SECTIONS.find((s) => s.key === st.sectionKey)?.label,
+          };
+        }
       }
-      
+
       if (table) {
         // Modal'ı kapat
         setShowModal(false);
@@ -836,7 +881,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
             <p class="text-xl font-semibold text-gray-400 line-through">₺${originalAmount.toFixed(2)}</p>
             <p class="text-sm text-amber-700 font-semibold">Kampanya: %${selectedCampaign} İndirim</p>
             <p class="text-3xl font-bold text-gray-800">₺${finalAmount.toFixed(2)}</p>
-            <p class="text-sm text-green-600 font-semibold">İndirim: -₺${discount.toFixed(2)}</p>
+            <p class="text-sm text-fuchsia-600 theme-sultan:text-green-600 font-semibold">İndirim: -₺${discount.toFixed(2)}</p>
           </div>
         ` : `
           <p class="text-lg font-semibold text-gray-800 mb-6">Toplam: ₺${originalAmount.toFixed(2)}</p>
@@ -848,7 +893,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
             <p class="text-sm text-gray-600 mb-4">Masa: ${selectedOrder.table_name}</p>
             ${amountDisplay}
             <div class="grid grid-cols-2 gap-3 mb-3">
-              <button id="cashBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
+              <button id="cashBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
                 <div class="flex flex-col items-center space-y-2">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -1627,9 +1672,11 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
 
   return (
     <div className="mb-4">
-      <div className="text-center mb-4">
-        <h2 className="text-4xl font-black tracking-tight heading-display">{pluralLabel}</h2>
-      </div>
+      {!isSultanBranch && (
+        <div className="text-center mb-4">
+          <h2 className="text-4xl font-black tracking-tight heading-display">{pluralLabel}</h2>
+        </div>
+      )}
       <div className="flex justify-end gap-3 mb-4">
         <div className="flex items-center gap-3">
           <button
@@ -1646,7 +1693,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                 setLoadingRecentSales(false);
               }
             }}
-            className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1655,7 +1702,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           </button>
           <button
             onClick={() => setShowTransferModal(true)}
-            className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-indigo-600 hover:to-blue-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-pink-700 theme-sultan:hover:from-pink-700 theme-sultan:from-emerald-700 hover:to-blue-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
@@ -1664,7 +1711,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           </button>
           <button
             onClick={() => setShowMergeModal(true)}
-            className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+            className="px-6 py-3 bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-indigo-500 theme-sultan:to-teal-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-indigo-600 theme-sultan:hover:to-indigo-600 theme-sultan:to-teal-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -1674,43 +1721,45 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         </div>
       </div>
 
-      {/* Masa Tipi Seçimi: Masalar / Online (içeri-dışarı ayrımı yok) */}
-      <div className="flex justify-center gap-4 mb-4">
-        <button
-          onClick={() => setSelectedType('inside')}
-          className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
-            selectedType === 'inside'
-              ? 'bg-gradient-to-r from-pink-500 to-rose-500 border-pink-400 text-white shadow-md'
-              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
-          }`}
-        >
-          <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-          </svg>
-          <span>{pluralLabel}</span>
-        </button>
-        <button
-          onClick={() => setSelectedType('online')}
-          className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
-            selectedType === 'online'
-              ? 'bg-gradient-to-r from-pink-500 to-rose-500 border-pink-400 text-white shadow-md'
-              : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
-          }`}
-        >
-          <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
-          </svg>
-          <span>Online</span>
-          {unseenOnlineOrdersCount > 0 && (
-            <span className="absolute -top-2 -right-2 min-w-[26px] h-[26px] px-1.5 bg-red-600 text-white text-sm font-medium rounded-full flex items-center justify-center">
-              {unseenOnlineOrdersCount > 99 ? '99+' : unseenOnlineOrdersCount}
-            </span>
-          )}
-        </button>
-      </div>
+      {/* Masa Tipi Seçimi: Masalar / Online — Sultan Somatı'nda yalnızca masalar (online yok) */}
+      {!isSultanBranch && (
+        <div className="flex justify-center gap-4 mb-4">
+          <button
+            onClick={() => setSelectedType('inside')}
+            className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
+              selectedType === 'inside'
+                ? 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-500 theme-sultan:to-emerald-500 border-pink-400 theme-sultan:border-emerald-400 text-white shadow-md'
+                : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
+            }`}
+          >
+            <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+            </svg>
+            <span>{pluralLabel}</span>
+          </button>
+          <button
+            onClick={() => setSelectedType('online')}
+            className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
+              selectedType === 'online'
+                ? 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-500 theme-sultan:to-emerald-500 border-pink-400 theme-sultan:border-emerald-400 text-white shadow-md'
+                : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
+            }`}
+          >
+            <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+            </svg>
+            <span>Online</span>
+            {unseenOnlineOrdersCount > 0 && (
+              <span className="absolute -top-2 -right-2 min-w-[26px] h-[26px] px-1.5 bg-red-600 text-white text-sm font-medium rounded-full flex items-center justify-center">
+                {unseenOnlineOrdersCount > 99 ? '99+' : unseenOnlineOrdersCount}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* Online Siparişler - Kart Görünümü */}
-      {selectedType === 'online' ? (
+      {selectedType === 'online' && !isSultanBranch ? (
         <div className="space-y-4">
           {/* Cihaz bazlı: Online sipariş verilerini bu cihaza alma */}
           <div className="bg-slate-100 border border-slate-300 rounded-xl p-4 flex items-center justify-between gap-4">
@@ -1731,7 +1780,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                   if (!dontReceive) showToast('Online siparişler bu cihazda açıldı', 'success');
                   else showToast('Bu cihazda online sipariş verileri kapatıldı', 'info');
                 }}
-                className="w-5 h-5 rounded border-slate-400 text-rose-500 focus:ring-rose-400"
+                className="w-5 h-5 rounded border-slate-400 text-pink-500 theme-sultan:text-pink-50 theme-sultan:text-emerald-500 focus:ring-pink-400 theme-sultan:focus:ring-pink-400 theme-sultan:ring-emerald-400"
               />
               <span className="text-sm font-medium text-slate-700">Alma (cihazı yormasın)</span>
             </label>
@@ -1748,7 +1797,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                   try { localStorage.setItem('receiveOnlineOrdersOnThisDevice', 'true'); } catch (e) {}
                   showToast('Online siparişler bu cihazda açıldı', 'success');
                 }}
-                className="px-6 py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white rounded-xl font-semibold hover:from-pink-600 hover:to-rose-600 transition-all"
+                className="px-6 py-3 bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-500 theme-sultan:to-emerald-500 text-white rounded-xl font-semibold hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 transition-all"
               >
                 Online siparişleri bu cihazda aç
               </button>
@@ -1759,7 +1808,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           <div className="flex justify-end mb-4 gap-3">
             <button
               onClick={() => setShowOnlineProductManagement(true)}
-              className="px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
+              className="px-6 py-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-indigo-600 hover:from-pink-800 theme-sultan:hover:from-emerald-800 hover:to-indigo-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
@@ -1816,7 +1865,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                   }
                 }
               }}
-              className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
+              className="px-6 py-3 bg-gradient-to-r from-fuchsia-600 theme-sultan:from-green-600 to-pink-600 theme-sultan:to-emerald-600 hover:from-fuchsia-700 theme-sultan:hover:from-fuchsia-700 theme-sultan:from-green-700 hover:to-pink-700 theme-sultan:hover:to-pink-700 theme-sultan:to-emerald-700 text-white rounded-xl font-semibold hover:shadow-lg transition-all duration-200 flex items-center space-x-2 shadow-md"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -1836,12 +1885,12 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           </div>
 
           {/* Online Sipariş Aktif/Pasif Switch - Üstte */}
-          <div className="bg-gradient-to-r from-purple-50 via-indigo-50 to-purple-50 rounded-2xl p-6 border-2 border-purple-200 shadow-lg">
+          <div className="bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 via-indigo-50 to-pink-50 theme-sultan:to-emerald-50 rounded-2xl p-6 border-2 border-pink-200 theme-sultan:border-emerald-200 shadow-lg">
             <div className="flex items-center justify-between">
               <div className="flex items-center space-x-4">
                 <div className={`w-16 h-16 rounded-2xl flex items-center justify-center shadow-lg ${
                   isOnlineActive 
-                    ? 'bg-gradient-to-br from-green-500 to-emerald-600' 
+                    ? 'bg-gradient-to-br from-fuchsia-500 theme-sultan:from-green-500 to-pink-600 theme-sultan:to-emerald-600' 
                     : 'bg-gradient-to-br from-gray-400 to-gray-500'
                 }`}>
                   <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1863,9 +1912,9 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               <button
                 onClick={handleToggleOnlineActive}
                 disabled={loadingOnlineStatus}
-                className={`relative inline-flex h-16 w-32 items-center rounded-full transition-colors duration-300 focus:outline-none focus:ring-4 focus:ring-purple-300 focus:ring-offset-2 shadow-xl ${
+                className={`relative inline-flex h-16 w-32 items-center rounded-full transition-colors duration-300 focus:outline-none focus:ring-4 focus:ring-pink-400 theme-sultan:focus:ring-pink-400 theme-sultan:ring-emerald-400 focus:ring-offset-2 shadow-xl ${
                   isOnlineActive
-                    ? 'bg-gradient-to-r from-green-500 to-emerald-600'
+                    ? 'bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-600 theme-sultan:to-emerald-600'
                     : 'bg-gradient-to-r from-gray-400 to-gray-500'
                 } ${loadingOnlineStatus ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               >
@@ -1925,12 +1974,12 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                       backgroundColor: '#312e81'
                     }}
                   >
-                    <div className="absolute inset-0 bg-gradient-to-br from-purple-900/85 via-indigo-900/80 to-purple-800/85" />
+                    <div className="absolute inset-0 bg-gradient-to-br from-pink-900 theme-sultan:from-emerald-900/85 via-fuchsia-900 theme-sultan:via-green-900/80 to-indigo-900 theme-sultan:to-teal-900/85" />
                     
                     {/* Sipariş süresi - üst orta, belirgin renkler, profesyonel */}
                     <div className={`absolute top-4 left-1/2 -translate-x-1/2 z-10 px-5 py-2.5 rounded-2xl border-2 shadow-xl ${
                       timeColor === 'green'
-                        ? 'bg-emerald-500/95 border-emerald-300 text-white'
+                        ? 'bg-pink-500 theme-sultan:bg-emerald-500/95 border-pink-300 theme-sultan:border-emerald-300 text-white'
                         : timeColor === 'yellow'
                         ? 'bg-amber-500/95 border-amber-300 text-white'
                         : 'bg-red-500/95 border-red-300 text-white'
@@ -1945,7 +1994,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                       <div className="absolute inset-0 z-20 rounded-3xl bg-black/70 backdrop-blur-md flex flex-col items-center justify-center gap-4 animate-fade-in">
                         {adisyonSuccessOrderId === order.id || prepareSuccessOrderId === order.id ? (
                           <>
-                            <div className="w-20 h-20 rounded-full bg-emerald-500/90 flex items-center justify-center shadow-2xl animate-success-pop">
+                            <div className="w-20 h-20 rounded-full bg-pink-500 theme-sultan:bg-emerald-500/90 flex items-center justify-center shadow-2xl animate-success-pop">
                               <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                               </svg>
@@ -1976,7 +2025,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                             {order.formattedDate} · {order.formattedTime}
                           </p>
                           <div className="mt-2 inline-flex items-center gap-2 px-3 py-2 rounded-xl bg-white/10 backdrop-blur-sm border border-white/20">
-                            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-emerald-500/20 text-emerald-400 shrink-0">
+                            <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-pink-500 theme-sultan:bg-emerald-500/20 text-pink-400 theme-sultan:text-emerald-400 shrink-0">
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
                               </svg>
@@ -1987,7 +2036,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                         <div className="flex flex-col items-end gap-2 shrink-0">
                           <span className={`px-3 py-1.5 rounded-xl text-xs font-semibold ${
                             order.status === 'pending' ? 'bg-amber-500/90 text-white' :
-                            order.status === 'completed' ? 'bg-emerald-500/90 text-white' :
+                            order.status === 'completed' ? 'bg-pink-500 theme-sultan:bg-emerald-500/90 text-white' :
                             order.isPreparing ? 'bg-orange-500/90 text-white' : 'bg-slate-500/90 text-white'
                           }`}>
                             {order.status === 'pending' && !order.isPreparing && 'Beklemede'}
@@ -2003,7 +2052,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                         <div className="flex gap-3 mt-2" onClick={(e) => e.stopPropagation()}>
                           <button
                             onClick={() => handleMarkAsPaid(order)}
-                            className="flex-1 px-4 py-2.5 bg-white/95 hover:bg-white text-purple-800 font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm"
+                            className="flex-1 px-4 py-2.5 bg-white/95 hover:bg-white text-pink-800 theme-sultan:text-emerald-800 font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 text-sm"
                           >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
@@ -2035,16 +2084,16 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                           <div className="pt-4 border-t border-white/20 space-y-4" onClick={(e) => e.stopPropagation()}>
                             {/* Müşteri bilgileri - koyu slate cam, başlıklar yeşil gradient */}
                             <div className="bg-slate-800/50 backdrop-blur-xl rounded-2xl p-4 border border-slate-600/20">
-                              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] mb-3 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Müşteri</p>
+                              <p className="text-[10px] font-semibold uppercase tracking-[0.2em] mb-3 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-fuchsia-500 theme-sultan:to-green-500 bg-clip-text text-transparent">Müşteri</p>
                               <div className="grid grid-cols-2 gap-3 text-sm">
-                                <div><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">İsim</span><p className="font-medium text-slate-100 truncate">{order.customer_name || order.name || '-'}</p></div>
-                                <div><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Telefon</span><p className="font-medium text-slate-100 truncate">{order.customer_phone || order.phone || '-'}</p></div>
-                                <div className="col-span-2"><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Ödeme</span><p className="font-medium text-slate-100">{order.paymentMethod === 'card' ? 'Kart' : order.paymentMethod === 'cash' ? 'Nakit' : order.paymentMethod || '-'}</p></div>
-                                <div className="col-span-2"><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Adres</span><p className="font-medium text-slate-200 line-clamp-2">{order.customer_address || order.address || '-'}</p></div>
+                                <div><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-fuchsia-500 theme-sultan:to-green-500 bg-clip-text text-transparent">İsim</span><p className="font-medium text-slate-100 truncate">{order.customer_name || order.name || '-'}</p></div>
+                                <div><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-fuchsia-500 theme-sultan:to-green-500 bg-clip-text text-transparent">Telefon</span><p className="font-medium text-slate-100 truncate">{order.customer_phone || order.phone || '-'}</p></div>
+                                <div className="col-span-2"><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-fuchsia-500 theme-sultan:to-green-500 bg-clip-text text-transparent">Ödeme</span><p className="font-medium text-slate-100">{order.paymentMethod === 'card' ? 'Kart' : order.paymentMethod === 'cash' ? 'Nakit' : order.paymentMethod || '-'}</p></div>
+                                <div className="col-span-2"><span className="block text-[10px] font-medium uppercase tracking-wider mb-0.5 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-fuchsia-500 theme-sultan:to-green-500 bg-clip-text text-transparent">Adres</span><p className="font-medium text-slate-200 line-clamp-2">{order.customer_address || order.address || '-'}</p></div>
                               </div>
                               {(order.note || order.orderNote || order.order_note) && (
                                 <div className="mt-3 pt-3 border-t border-slate-600/30">
-                                  <span className="text-[10px] font-medium uppercase tracking-wider bg-gradient-to-r from-emerald-400 to-green-500 bg-clip-text text-transparent">Not</span>
+                                  <span className="text-[10px] font-medium uppercase tracking-wider bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-fuchsia-500 theme-sultan:to-green-500 bg-clip-text text-transparent">Not</span>
                                   <p className="text-sm text-slate-200 line-clamp-2 mt-0.5">{order.note || order.orderNote || order.order_note}</p>
                                 </div>
                               )}
@@ -2062,11 +2111,11 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                                   const qty = item.quantity || 1;
                                   const total = price * qty;
                                   return (
-                                    <div key={idx} className="rounded-xl p-[2px] bg-gradient-to-br from-purple-500 to-indigo-500">
+                                    <div key={idx} className="rounded-xl p-[2px] bg-gradient-to-br from-pink-600 theme-sultan:from-emerald-600 to-indigo-500">
                                       <div className="rounded-[10px] bg-slate-700/30 p-2.5 h-full">
                                         <p className="text-xs font-medium text-slate-100 truncate">{name}</p>
                                         <div className="flex justify-between items-end mt-2 gap-2">
-                                          <span className="text-emerald-400 font-semibold text-base">{qty}x ₺{price.toFixed(2)}</span>
+                                          <span className="text-pink-400 theme-sultan:text-emerald-400 font-semibold text-base">{qty}x ₺{price.toFixed(2)}</span>
                                           <span className="text-2xl font-bold text-white tabular-nums">₺{total.toFixed(2)}</span>
                                         </div>
                                       </div>
@@ -2080,7 +2129,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                               <button
                                 onClick={() => { setSelectedOrder(order); setOrderItems(order.items || []); handleRequestAdisyon(); }}
                                 disabled={adisyonLoadingOrderId === order.id}
-                                className="w-full px-4 py-3 bg-white hover:bg-gray-50 font-medium rounded-xl flex items-center justify-center gap-2 text-sm border border-gray-200 transition-all disabled:opacity-70 disabled:cursor-not-allowed [&>span]:bg-gradient-to-r [&>span]:from-purple-600 [&>span]:to-indigo-600 [&>span]:bg-clip-text [&>span]:text-transparent"
+                                className="w-full px-4 py-3 bg-white hover:bg-gray-50 font-medium rounded-xl flex items-center justify-center gap-2 text-sm border border-gray-200 transition-all disabled:opacity-70 disabled:cursor-not-allowed [&>span]:bg-gradient-to-r [&>span]:from-pink-600 theme-sultan:from-emerald-600 [&>span]:to-indigo-600 [&>span]:bg-clip-text [&>span]:text-transparent"
                               >
                                 {adisyonLoadingOrderId === order.id ? (
                                   <Spinner size="sm" className="text-indigo-600 shrink-0" />
@@ -2094,7 +2143,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                               <button
                                 onClick={() => { setSelectedOrder(order); setOrderItems(order.items || []); handlePrepareProducts(); }}
                                 disabled={prepareLoadingOrderId === order.id}
-                                className="w-full px-4 py-3 bg-white hover:bg-gray-50 font-medium rounded-xl flex items-center justify-center gap-2 text-sm border border-gray-200 transition-all disabled:opacity-70 disabled:cursor-not-allowed [&>span]:bg-gradient-to-r [&>span]:from-purple-600 [&>span]:to-indigo-600 [&>span]:bg-clip-text [&>span]:text-transparent"
+                                className="w-full px-4 py-3 bg-white hover:bg-gray-50 font-medium rounded-xl flex items-center justify-center gap-2 text-sm border border-gray-200 transition-all disabled:opacity-70 disabled:cursor-not-allowed [&>span]:bg-gradient-to-r [&>span]:from-pink-600 theme-sultan:from-emerald-600 [&>span]:to-indigo-600 [&>span]:bg-clip-text [&>span]:text-transparent"
                               >
                                 {prepareLoadingOrderId === order.id ? (
                                   <Spinner size="sm" className="text-indigo-600 shrink-0" />
@@ -2140,32 +2189,106 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         </div>
       ) : (
         <>
-          {isSuriciBranch ? (
+          {isSultanBranch ? (
+            <div className="space-y-6 mb-6">
+              <div>
+                <div className="flex flex-wrap justify-center gap-3">
+                  {SULTAN_TABLE_SECTIONS.map((sec) => (
+                    <button
+                      key={sec.key}
+                      type="button"
+                      onClick={() => setSultanSectionKey(sec.key)}
+                      className={`px-5 py-3.5 md:px-6 md:py-4 rounded-2xl text-base md:text-lg font-extrabold border-2 transition-all duration-200 ${
+                        sultanSectionKey === sec.key
+                          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-lg scale-[1.02]'
+                          : 'bg-white border-slate-200 text-slate-800 hover:border-emerald-400 hover:bg-emerald-50/90 shadow-sm'
+                      }`}
+                    >
+                      {sec.label}
+                      <span className="ml-1.5 opacity-90 font-bold text-[0.92em]">({sec.count})</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-center text-lg md:text-xl font-extrabold text-slate-800 mb-4 tracking-tight">
+                  {SULTAN_TABLE_SECTIONS.find((s) => s.key === sultanSectionKey)?.label} — Masa seçin
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                  {sultanTablesInSection.map((table) => {
+                    const hasOrder = getTableOrder(table.id);
+                    return (
+                      <button
+                        key={table.id}
+                        type="button"
+                        onClick={() => handleTableClick(table)}
+                        className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-2xl border-2 transition-all duration-200 hover:shadow-lg active:scale-[0.98] p-3 ${
+                          hasOrder
+                            ? 'border-red-700 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
+                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
+                        }`}
+                      >
+                        {hasOrder ? (
+                          <>
+                            <span className="text-2xl md:text-3xl font-black text-white tabular-nums leading-none">
+                              {table.number}
+                            </span>
+                            <span className="font-bold text-[11px] md:text-xs text-center leading-tight line-clamp-2 text-red-100 mt-2 px-1">
+                              {table.name}
+                            </span>
+                            <span className="mt-2 text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-md bg-red-950/40 text-red-100 border border-red-800/50">
+                              Dolu
+                            </span>
+                            <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-amber-300 rounded-full animate-pulse shadow-[0_0_8px_rgba(252,211,77,0.9)]" />
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-3xl md:text-4xl font-black text-slate-500 tabular-nums leading-none">
+                              {table.number}
+                            </span>
+                            <span className="mt-3 text-[11px] font-bold text-slate-400 uppercase tracking-wide px-2.5 py-1 rounded-md bg-slate-100 border border-slate-200">
+                              Boş
+                            </span>
+                          </>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : isSuriciBranch ? (
             <div className="grid grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-2 mb-6">
               {suriciUnifiedTables.map((table) => {
                 const hasOrder = getTableOrder(table.id);
-                const displayName = hasOrder?.table_name || hasOrder?.tableName || 'BOŞ';
+                const displayName = hasOrder?.table_name || hasOrder?.tableName || '';
                 return (
                   <button
                     key={table.id}
                     onClick={() => handleTableClick(table)}
-                    className={`table-btn group relative overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-md active:scale-[0.98] aspect-square ${
+                    className={`table-btn group relative flex flex-col items-center justify-center rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] aspect-square p-2 ${
                       hasOrder
-                        ? 'border-red-400 bg-gradient-to-br from-red-700 to-red-900'
-                        : 'border-slate-200 bg-white hover:bg-slate-50'
+                        ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
+                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
                     }`}
                   >
-                    <div className="flex items-center justify-center h-full px-2 text-center">
-                      <span
-                        className={`font-black tracking-wide break-words leading-tight ${
-                          hasOrder ? 'text-white text-sm md:text-base' : 'text-slate-400 text-xl md:text-2xl group-hover:text-slate-500'
-                        }`}
-                      >
-                        {displayName}
-                      </span>
-                    </div>
-                    {hasOrder && (
-                      <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-red-300 rounded-full animate-pulse" />
+                    {hasOrder ? (
+                      <>
+                        <span className="text-xs md:text-sm font-black text-white text-center leading-tight line-clamp-3 px-0.5 break-words w-full">
+                          {displayName}
+                        </span>
+                        <span className="mt-2 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">
+                          Dolu
+                        </span>
+                        <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-amber-300 rounded-full animate-pulse" />
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
+                        <span className="mt-2 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">
+                          Boş
+                        </span>
+                      </>
                     )}
                   </button>
                 );
@@ -2174,42 +2297,32 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           ) : (
             <>
               {/* Masalar: 1-20, boşluk, 61-88 (69,70,79,80 hariç) */}
-              <div className="grid grid-cols-10 gap-1 mb-2">
+              <div className="grid grid-cols-10 gap-2 mb-2">
                 {insideTables.map((table) => {
                   const hasOrder = getTableOrder(table.id);
                   return (
                 <button
                   key={table.id}
                   onClick={() => handleTableClick(table)}
-                  className={`table-btn group relative overflow-hidden rounded-md p-1 border transition-all duration-300 hover:shadow-sm hover:scale-105 active:scale-95 aspect-square ${
+                  className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] p-1.5 ${
                     hasOrder
-                      ? 'bg-gradient-to-br from-red-700 to-red-900 border-red-800 hover:border-red-900'
-                      : 'bg-gradient-to-br from-pink-50 to-pink-100 border-pink-200 hover:border-pink-300'
+                      ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
                   }`}
                 >
-                  <div className="flex flex-col items-center justify-center space-y-1 h-full">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow ${
-                      hasOrder ? 'bg-gradient-to-br from-red-600 to-red-900' : 'bg-gradient-to-br from-pink-200 to-pink-300'
-                    }`}>
-                      {hasOrder ? (
-                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                        </svg>
-                      ) : (
-                        <svg className="w-5 h-5 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                        </svg>
-                      )}
-                    </div>
-                    <span className={`font-bold text-sm leading-tight ${hasOrder ? 'text-red-50' : 'text-pink-900'}`}>{table.name}</span>
-                    <div className={`text-[10px] font-semibold mt-1 px-2 py-0.5 rounded-md ${hasOrder ? 'bg-red-900 text-red-100' : 'bg-pink-100 text-pink-800'}`}>
-                      {hasOrder ? 'Dolu' : 'Boş'}
-                    </div>
-                    {hasOrder && (
-                      <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
-                    )}
-                  </div>
+                  {hasOrder ? (
+                    <>
+                      <span className="text-lg md:text-xl font-black text-white tabular-nums leading-none">{table.number}</span>
+                      <span className="text-[9px] md:text-[10px] font-bold text-red-100 text-center leading-tight mt-1 line-clamp-2 px-0.5">{table.name}</span>
+                      <span className="mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">Dolu</span>
+                      <span className="absolute top-1 right-1 w-2 h-2 bg-amber-300 rounded-full animate-pulse" />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
+                      <span className="mt-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">Boş</span>
+                    </>
+                  )}
                 </button>
                   );
                 })}
@@ -2221,42 +2334,32 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                   <div className="relative z-10 w-3 h-3 rounded-full bg-white border-2 border-slate-400 shadow-lg shadow-slate-300/50 ring-2 ring-slate-200/80" />
                 </div>
               </div>
-              <div className="grid grid-cols-10 gap-1 mb-6">
+              <div className="grid grid-cols-10 gap-2 mb-6">
                 {outsideTables.map((table) => {
                   const hasOrder = getTableOrder(table.id);
                   return (
                 <button
                   key={table.id}
                   onClick={() => handleTableClick(table)}
-                  className={`table-btn group relative overflow-hidden rounded-md p-1 border transition-all duration-300 hover:shadow-sm hover:scale-105 active:scale-95 aspect-square ${
+                  className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] p-1.5 ${
                     hasOrder
-                      ? 'bg-gradient-to-br from-red-700 to-red-900 border-red-800 hover:border-red-900'
-                      : 'bg-gradient-to-br from-amber-50 to-amber-100 border-amber-200 hover:border-amber-300'
+                      ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
+                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
                   }`}
                 >
-                  <div className="flex flex-col items-center justify-center space-y-1 h-full">
-                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow ${
-                      hasOrder ? 'bg-gradient-to-br from-red-600 to-red-900' : 'bg-gradient-to-br from-amber-200 to-amber-300'
-                    }`}>
-                      {hasOrder ? (
-                        <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                        </svg>
-                      ) : (
-                        <svg className="w-5 h-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                        </svg>
-                      )}
-                    </div>
-                    <span className={`font-bold text-sm leading-tight ${hasOrder ? 'text-red-50' : 'text-amber-900'}`}>{table.name}</span>
-                    <div className={`text-[10px] font-semibold mt-1 px-2 py-0.5 rounded-md ${hasOrder ? 'bg-red-900 text-red-100' : 'bg-amber-100 text-amber-800'}`}>
-                      {hasOrder ? 'Dolu' : 'Boş'}
-                    </div>
-                    {hasOrder && (
-                      <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full animate-pulse"></span>
-                    )}
-                  </div>
+                  {hasOrder ? (
+                    <>
+                      <span className="text-lg md:text-xl font-black text-white tabular-nums leading-none">{table.number}</span>
+                      <span className="text-[9px] md:text-[10px] font-bold text-red-100 text-center leading-tight mt-1 line-clamp-2 px-0.5">{table.name}</span>
+                      <span className="mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">Dolu</span>
+                      <span className="absolute top-1 right-1 w-2 h-2 bg-amber-300 rounded-full animate-pulse" />
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
+                      <span className="mt-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">Boş</span>
+                    </>
+                  )}
                 </button>
                   );
                 })}
@@ -2264,7 +2367,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
 
               {/* Paket Masaları - Kurumsal */}
               <div className="mb-6 mt-10">
-                <h3 className="text-center text-sm font-semibold uppercase tracking-widest text-slate-400 mb-4">Paket Masaları</h3>
+                <h3 className="text-center text-base md:text-lg font-extrabold uppercase tracking-[0.18em] text-slate-500 mb-5">Paket Masaları</h3>
                 <div className="grid grid-cols-5 gap-3">
                   {packageTables.map((table) => {
                     const hasOrder = getTableOrder(table.id);
@@ -2272,34 +2375,29 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                       <button
                         key={table.id}
                         onClick={() => handleTableClick(table)}
-                        className={`table-btn group relative overflow-hidden rounded-xl border transition-all duration-200 hover:shadow-md active:scale-[0.98] ${
+                        className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-2xl border-2 transition-all duration-200 hover:shadow-lg active:scale-[0.98] p-3 ${
                           hasOrder
-                            ? 'bg-slate-100 border-slate-300 hover:border-slate-400'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
+                            ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
+                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
                         }`}
                       >
-                        <div className="flex flex-col items-center justify-center p-4 space-y-3 h-full min-h-[100px]">
-                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
-                            hasOrder ? 'bg-slate-600 text-white' : 'bg-slate-100 text-slate-500'
-                          }`}>
-                            {hasOrder ? (
-                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                              </svg>
-                            ) : (
-                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                                <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                              </svg>
-                            )}
-                          </div>
-                          <span className={`text-sm font-medium leading-tight ${hasOrder ? 'text-slate-700' : 'text-slate-500'}`}>
-                            {table.name}
-                          </span>
-                          <span className={`text-xs font-medium ${hasOrder ? 'text-slate-500' : 'text-slate-400'}`}>
-                            {hasOrder ? 'Dolu' : 'Boş'}
-                          </span>
-                        </div>
+                        {hasOrder ? (
+                          <>
+                            <span className="text-2xl md:text-3xl font-black text-white tabular-nums leading-none">{table.number}</span>
+                            <span className="text-xs font-bold text-red-100 text-center leading-tight mt-2 line-clamp-2">{table.name}</span>
+                            <span className="mt-2 text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-md bg-red-950/40 text-red-100 border border-red-800/50">Dolu</span>
+                            <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-amber-300 rounded-full animate-pulse" />
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-7 h-7 text-slate-400 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                            </svg>
+                            <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
+                            <span className="text-[10px] font-bold text-slate-500 text-center mt-1.5 line-clamp-2">{table.name}</span>
+                            <span className="mt-2 text-[10px] font-bold text-slate-400 uppercase tracking-wide px-2 py-1 rounded-md bg-slate-100 border border-slate-200">Boş</span>
+                          </>
+                        )}
                       </button>
                     );
                   })}
@@ -2377,6 +2475,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           currentOrder={null}
           currentTableId={null}
           currentTableType={selectedType}
+          branchKey={branchKey}
           onClose={() => {
             setShowTransferModal(false);
           }}
@@ -2387,6 +2486,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
       {/* Masa Birleştir Modal */}
       {showMergeModal && (
         <TableMergeModal
+          branchKey={branchKey}
           onClose={() => setShowMergeModal(false)}
           onMerge={handleMergeTable}
         />
@@ -2395,7 +2495,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
       {/* Geçmiş Adisyon Modal */}
       {showAdisyonModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-          <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white backdrop-blur-xl border border-pink-200 theme-sultan:border-emerald-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-3xl font-bold gradient-text">Geçmiş Adisyon İste</h2>
               <button
@@ -2414,7 +2514,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
             <p className="text-gray-600 mb-6">Son 12 saatin satış geçmişi:</p>
             {loadingRecentSales ? (
               <div className="flex items-center justify-center py-12">
-                <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                <div className="w-12 h-12 border-4 border-pink-600 theme-sultan:border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
               </div>
             ) : recentSales.length === 0 ? (
               <div className="text-center py-12">
@@ -2428,8 +2528,8 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                       key={sale.id}
                       className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
                         selectedSaleForAdisyon?.id === sale.id
-                          ? 'bg-gradient-to-r from-purple-50 to-pink-50 border-purple-400'
-                          : 'bg-gray-50 border-gray-200 hover:border-purple-300'
+                          ? 'bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 border-pink-500 theme-sultan:border-emerald-500'
+                          : 'bg-gray-50 border-gray-200 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400'
                       }`}
                       onClick={() => setSelectedSaleForAdisyon(sale)}
                     >
@@ -2438,11 +2538,11 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                           <div className="flex items-center space-x-3 mb-2">
                             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                               sale.payment_method && sale.payment_method.includes('Nakit')
-                                ? 'bg-gradient-to-r from-green-500 to-emerald-500'
+                                ? 'bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500'
                                 : sale.payment_method && sale.payment_method.includes('Kredi Kartı')
                                 ? 'bg-gradient-to-r from-blue-500 to-cyan-500'
                                 : sale.isGrouped
-                                ? 'bg-gradient-to-r from-purple-500 to-pink-500'
+                                ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500'
                                 : 'bg-gradient-to-r from-gray-500 to-gray-600'
                             }`}>
                               {sale.payment_method && sale.payment_method.includes('Nakit') ? (
@@ -2467,7 +2567,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                               <p className="font-bold text-gray-800">
                                 {sale.table_name ? sale.table_name : 'Hızlı Satış'}
                                 {sale.isGrouped && (
-                                  <span className="ml-2 text-xs font-normal text-purple-600 bg-purple-100 px-2 py-0.5 rounded">(Kısmi Ödemeler)</span>
+                                  <span className="ml-2 text-xs font-normal text-pink-600 theme-sultan:text-emerald-600 bg-pink-100 theme-sultan:bg-emerald-100 px-2 py-0.5 rounded">(Kısmi Ödemeler)</span>
                                 )}
                               </p>
                               <p className="text-sm text-gray-600">
@@ -2481,7 +2581,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                           <p className="text-sm text-gray-500 mt-2">{sale.items || 'Ürün bulunamadı'}</p>
                         </div>
                         <div className="text-right ml-4">
-                          <p className="text-2xl font-bold text-purple-600">₺{sale.total_amount?.toFixed(2) || '0.00'}</p>
+                          <p className="text-2xl font-bold text-pink-600 theme-sultan:text-emerald-600">₺{sale.total_amount?.toFixed(2) || '0.00'}</p>
                           <p className="text-xs text-gray-500 mt-1">{sale.payment_method}</p>
                         </div>
                       </div>
@@ -2554,7 +2654,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                     disabled={!selectedSaleForAdisyon}
                     className={`px-6 py-3 rounded-xl font-bold text-white transition-all ${
                       selectedSaleForAdisyon
-                        ? 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 shadow-lg hover:shadow-xl'
+                        ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 shadow-lg hover:shadow-xl'
                         : 'bg-gray-300 cursor-not-allowed'
                     }`}
                   >
@@ -2584,9 +2684,9 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
       {/* Başarı Toast */}
       {showSuccessToast && (
         <div className="fixed inset-x-0 top-0 z-[1400] flex justify-center pointer-events-none pt-8">
-          <div className="bg-white/98 backdrop-blur-xl border-2 border-green-300 rounded-3xl shadow-2xl px-8 py-5 pointer-events-auto animate-fade-in transform transition-all duration-300 scale-100">
+          <div className="bg-white/98 backdrop-blur-xl border-2 border-fuchsia-300 theme-sultan:border-green-300 rounded-3xl shadow-2xl px-8 py-5 pointer-events-auto animate-fade-in transform transition-all duration-300 scale-100">
             <div className="flex items-center space-x-4">
-              <div className="w-14 h-14 rounded-full bg-gradient-to-br from-green-500 to-emerald-600 flex items-center justify-center shadow-xl ring-4 ring-green-100">
+              <div className="w-14 h-14 rounded-full bg-gradient-to-br from-fuchsia-500 theme-sultan:from-green-500 to-pink-600 theme-sultan:to-emerald-600 flex items-center justify-center shadow-xl ring-4 ring-fuchsia-100 theme-sultan:ring-green-100">
                 <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                 </svg>
@@ -2611,12 +2711,12 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-[2000] animate-fade-in px-4">
           <div className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl transform animate-scale-in relative overflow-hidden border border-gray-100">
             {/* Üst gradient çizgi */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-green-500 via-emerald-500 to-green-500"></div>
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 via-pink-500 theme-sultan:via-emerald-500 to-fuchsia-500 theme-sultan:to-green-500"></div>
             
             {/* İkon */}
             <div className="flex items-center justify-center mb-6">
-              <div className="w-24 h-24 bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl flex items-center justify-center border-2 border-green-100 shadow-lg">
-                <svg className="w-12 h-12 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <div className="w-24 h-24 bg-gradient-to-br from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 rounded-2xl flex items-center justify-center border-2 border-fuchsia-100 theme-sultan:border-green-100 shadow-lg">
+                <svg className="w-12 h-12 text-fuchsia-600 theme-sultan:text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               </div>
@@ -2628,12 +2728,12 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               <p className="text-gray-600 leading-relaxed mb-4">
                 Bu online siparişi onaylamak istediğinizden <span className="font-semibold text-gray-900">emin misiniz?</span>
               </p>
-              <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-4 border border-green-100">
+              <div className="bg-gradient-to-r from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl p-4 border border-fuchsia-100 theme-sultan:border-green-100">
                 <div className="space-y-2">
                   <p className="text-sm text-gray-700 font-medium">
                     <span className="font-semibold">Müşteri:</span> {orderToMarkAsPaid.customer_name || orderToMarkAsPaid.name || 'İsimsiz'}
                   </p>
-                  <p className="text-lg font-bold text-green-700">
+                  <p className="text-lg font-bold text-fuchsia-700 theme-sultan:text-green-700">
                     <span className="font-semibold">Toplam:</span> ₺{(orderToMarkAsPaid.total_amount || orderToMarkAsPaid.total || 0).toFixed(2)}
                   </p>
                 </div>
@@ -2654,7 +2754,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               <button
                 onClick={confirmMarkAsPaid}
                 disabled={isConfirmingOrder}
-                className="flex-1 py-4 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                className="flex-1 py-4 bg-gradient-to-r from-fuchsia-600 theme-sultan:from-green-600 to-pink-600 theme-sultan:to-emerald-600 hover:from-fuchsia-700 theme-sultan:hover:from-fuchsia-700 theme-sultan:from-green-700 hover:to-pink-700 theme-sultan:hover:to-pink-700 theme-sultan:to-emerald-700 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
               >
                 {isConfirmingOrder ? (
                   <>
@@ -2767,7 +2867,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
             {/* Header */}
-            <div className="bg-gradient-to-r from-green-600 to-emerald-600 px-8 py-6 flex items-center justify-between">
+            <div className="bg-gradient-to-r from-fuchsia-600 theme-sultan:from-green-600 to-pink-600 theme-sultan:to-emerald-600 px-8 py-6 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
                   <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2776,7 +2876,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                 </div>
                 <div>
                   <h2 className="text-2xl font-bold text-white">Alınmış Ödemeler</h2>
-                  <p className="text-sm text-green-100">Onaylanmış siparişler (en son 50 sipariş)</p>
+                  <p className="text-sm text-fuchsia-100 theme-sultan:text-green-100">Onaylanmış siparişler (en son 50 sipariş)</p>
                 </div>
               </div>
               <button
@@ -2802,12 +2902,12 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               ) : (
                 <div className="space-y-4">
                   {paidOrders.map((order) => (
-                    <div key={order.id} className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl p-6 border-2 border-green-200 hover:border-green-300 transition-all">
+                    <div key={order.id} className="bg-gradient-to-r from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl p-6 border-2 border-fuchsia-200 theme-sultan:border-green-200 hover:border-fuchsia-300 theme-sultan:hover:border-fuchsia-300 theme-sultan:border-green-300 transition-all">
                       <div className="flex items-start justify-between mb-4">
                         <div className="flex-1">
                           <div className="flex items-center gap-3 mb-2">
                             <h3 className="text-xl font-bold text-gray-900">{order.customer_name || order.name || 'İsimsiz Müşteri'}</h3>
-                            <span className="px-3 py-1 bg-green-600 text-white text-xs font-bold rounded-full">ONAYLANDI</span>
+                            <span className="px-3 py-1 bg-fuchsia-600 theme-sultan:bg-green-600 text-white text-xs font-bold rounded-full">ONAYLANDI</span>
                           </div>
                           <p className="text-sm text-gray-600 mb-1">
                             <span className="font-semibold">Tel:</span> {order.customer_phone || order.phone || '-'}
@@ -2820,7 +2920,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                           </p>
                         </div>
                         <div className="text-right">
-                          <p className="text-2xl font-bold text-green-700">₺{(order.total_amount || order.total || 0).toFixed(2)}</p>
+                          <p className="text-2xl font-bold text-fuchsia-700 theme-sultan:text-green-700">₺{(order.total_amount || order.total || 0).toFixed(2)}</p>
                           <p className="text-xs text-gray-500 mt-1">
                             {order.paymentMethod === 'card' ? 'Kart' : order.paymentMethod === 'cash' ? 'Nakit' : 'Diğer'}
                           </p>
@@ -2873,7 +2973,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               <div className="absolute inset-0 z-30 rounded-3xl bg-black/75 backdrop-blur-md flex flex-col items-center justify-center gap-4 animate-fade-in">
                 {isCancelSuccess ? (
                   <>
-                    <div className="w-20 h-20 rounded-full bg-emerald-500/90 flex items-center justify-center shadow-2xl animate-success-pop">
+                    <div className="w-20 h-20 rounded-full bg-pink-500 theme-sultan:bg-emerald-500/90 flex items-center justify-center shadow-2xl animate-success-pop">
                       <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                       </svg>
@@ -2889,11 +2989,11 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               </div>
             )}
             {/* Üst gradient çizgi */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-500 via-pink-500 to-red-500"></div>
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-500 via-pink-500 theme-sultan:via-emerald-500 to-red-500"></div>
             
             {/* İkon */}
             <div className="flex items-center justify-center mb-6">
-              <div className="w-24 h-24 bg-gradient-to-br from-red-50 to-pink-50 rounded-2xl flex items-center justify-center border-2 border-red-100 shadow-lg">
+              <div className="w-24 h-24 bg-gradient-to-br from-red-50 to-pink-50 theme-sultan:to-emerald-50 rounded-2xl flex items-center justify-center border-2 border-red-100 shadow-lg">
                 <svg className="w-12 h-12 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -2906,7 +3006,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               <p className="text-gray-600 leading-relaxed mb-4">
                 Bu online siparişi iptal etmek istediğinizden <span className="font-semibold text-gray-900">emin misiniz?</span>
               </p>
-              <div className="bg-gradient-to-r from-red-50 to-pink-50 rounded-xl p-4 border border-red-100">
+              <div className="bg-gradient-to-r from-red-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl p-4 border border-red-100">
                 <p className="text-sm text-red-700 font-medium flex items-center justify-center gap-2">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
@@ -2927,7 +3027,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               <button
                 onClick={confirmCancelOrder}
                 disabled={isCancellingOrder}
-                className="flex-1 py-4 bg-gradient-to-r from-red-600 to-pink-600 hover:from-red-700 hover:to-pink-700 rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
+                className="flex-1 py-4 bg-gradient-to-r from-red-600 to-pink-600 theme-sultan:to-emerald-600 hover:from-red-700 hover:to-pink-700 theme-sultan:hover:to-pink-700 theme-sultan:to-emerald-700 rounded-xl text-white font-bold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
               >
                 {isCancellingOrder ? (
                   <Spinner size="md" className="text-white" />
@@ -2948,13 +3048,13 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-[3000] animate-fade-in px-4">
           <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl transform animate-scale-in relative overflow-hidden border border-gray-100">
             {/* Üst gradient çizgi - Tehlike rengi */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-500 via-rose-500 to-red-500"></div>
+            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-red-500 via-pink-500 theme-sultan:via-emerald-500 to-red-500"></div>
             
             {/* Icon ve Başlık */}
             <div className="pt-10 pb-6 px-8 text-center">
               {/* Uyarı İkonu */}
               <div className="flex items-center justify-center mb-6">
-                <div className="w-20 h-20 bg-gradient-to-br from-red-50 to-rose-100 rounded-2xl flex items-center justify-center border-2 border-red-200 shadow-lg">
+                <div className="w-20 h-20 bg-gradient-to-br from-red-50 to-pink-100 theme-sultan:to-emerald-100 rounded-2xl flex items-center justify-center border-2 border-red-200 shadow-lg">
                   <svg className="w-10 h-10 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                   </svg>
@@ -2970,7 +3070,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               </p>
 
               {/* Sipariş Özeti Kartı */}
-              <div className="bg-gradient-to-br from-red-50 to-rose-50 rounded-xl p-5 border-2 border-red-200 mb-6">
+              <div className="bg-gradient-to-br from-red-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl p-5 border-2 border-red-200 mb-6">
                 <div className="space-y-2.5">
                   <div className="flex justify-between items-center">
                     <span className="text-sm font-semibold text-gray-700">Müşteri Adı:</span>
@@ -3052,7 +3152,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                   }
                 }}
                 disabled={isDeleting}
-                className="flex-1 py-3.5 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 rounded-xl text-white font-bold text-base transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 py-3.5 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 rounded-xl text-white font-bold text-base transition-all duration-300 shadow-lg hover:shadow-xl transform hover:scale-105 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isDeleting ? (
                   <>

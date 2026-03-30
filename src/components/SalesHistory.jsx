@@ -301,7 +301,7 @@ const SalesHistory = () => {
 
   const getPaymentMethodColor = (method) => {
     return method === 'Nakit' 
-      ? 'from-green-500 to-emerald-500' 
+      ? 'from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500' 
       : 'from-blue-500 to-cyan-500';
   };
 
@@ -540,7 +540,7 @@ const SalesHistory = () => {
     return (
       <div className="flex items-center justify-center h-[calc(100vh-200px)]">
         <div className="text-center">
-          <div className="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <div className="w-16 h-16 border-4 border-pink-600 theme-sultan:border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
           <p className="text-gray-600">Yükleniyor...</p>
         </div>
       </div>
@@ -567,7 +567,7 @@ const SalesHistory = () => {
             />
           </div>
           <div className="text-center py-20">
-            <svg className="w-32 h-32 mx-auto text-purple-200 mb-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-32 h-32 mx-auto text-pink-200 theme-sultan:text-emerald-200 mb-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
             </svg>
             <h3 className="text-2xl font-bold text-gray-700 mb-2">
@@ -719,11 +719,11 @@ const SalesHistory = () => {
           <div className="card-glass p-6">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm text-gray-600">Toplam Ciro</p>
-              <svg className="w-8 h-8 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-8 h-8 text-fuchsia-500 theme-sultan:text-fuchsia-50 theme-sultan:text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <p className="text-3xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 bg-clip-text text-transparent">
+            <p className="text-3xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 bg-clip-text text-transparent">
               ₺{totalRevenue.toFixed(2)}
             </p>
           </div>
@@ -741,11 +741,11 @@ const SalesHistory = () => {
           <div className="card-glass p-6">
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm text-gray-600">Ortalama Sepet</p>
-              <svg className="w-8 h-8 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-8 h-8 text-pink-600 theme-sultan:text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
             </div>
-            <p className="text-3xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">
+            <p className="text-3xl font-bold bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 bg-clip-text text-transparent">
               ₺{(reportSales.length > 0 ? (totalRevenue / reportSales.length) : 0).toFixed(2)}
             </p>
           </div>
@@ -768,7 +768,7 @@ const SalesHistory = () => {
           {/* En Çok Satılan Ürünler */}
           <div className="card-glass p-6">
             <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center space-x-2">
-              <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-6 h-6 text-fuchsia-500 theme-sultan:text-fuchsia-50 theme-sultan:text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
               </svg>
               <span>En Çok Satılan Ürünler</span>
@@ -776,9 +776,9 @@ const SalesHistory = () => {
             <div className="space-y-3">
               {topProductsByCount.length > 0 ? (
                 topProductsByCount.map(([product, stats], index) => (
-                  <div key={product} className="flex items-center justify-between p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200">
+                  <div key={product} className="flex items-center justify-between p-4 bg-gradient-to-r from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl border border-fuchsia-200 theme-sultan:border-green-200">
                     <div className="flex items-center space-x-4 flex-1">
-                      <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-500 rounded-full flex items-center justify-center text-white font-bold text-lg">
+                      <div className="w-10 h-10 bg-gradient-to-br from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 rounded-full flex items-center justify-center text-white font-bold text-lg">
                         {index + 1}
                       </div>
                       <div className="flex-1">
@@ -792,7 +792,7 @@ const SalesHistory = () => {
                             </>
                           )}
                         </div>
-                        <p className="text-sm font-bold text-green-600 mt-1">Toplam: ₺{stats.revenue.toFixed(2)}</p>
+                        <p className="text-sm font-bold text-fuchsia-600 theme-sultan:text-green-600 mt-1">Toplam: ₺{stats.revenue.toFixed(2)}</p>
                       </div>
                     </div>
                   </div>
@@ -814,9 +814,9 @@ const SalesHistory = () => {
             <div className="space-y-3">
               {bottomProductsByCount.length > 0 ? (
                 bottomProductsByCount.map(([product, stats], index) => (
-                  <div key={product} className="flex items-center justify-between p-4 bg-gradient-to-r from-red-50 to-pink-50 rounded-xl border border-red-200">
+                  <div key={product} className="flex items-center justify-between p-4 bg-gradient-to-r from-red-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl border border-red-200">
                     <div className="flex items-center space-x-4 flex-1">
-                      <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-pink-500 rounded-full flex items-center justify-center text-white font-bold text-lg">
+                      <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-pink-500 theme-sultan:to-emerald-500 rounded-full flex items-center justify-center text-white font-bold text-lg">
                         {index + 1}
                       </div>
                       <div className="flex-1">
@@ -922,7 +922,7 @@ const SalesHistory = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="card-glass p-6">
             <h3 className="text-xl font-bold text-gray-900 mb-4 flex items-center space-x-2">
-              <svg className="w-6 h-6 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-6 h-6 text-fuchsia-500 theme-sultan:text-fuchsia-50 theme-sultan:text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
               </svg>
               <span>Ödeme Yöntemleri</span>
@@ -938,7 +938,7 @@ const SalesHistory = () => {
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-3">
                     <div 
-                      className={`h-3 rounded-full ${method === 'Nakit' ? 'bg-gradient-to-r from-emerald-500 to-lime-500' : 'bg-gradient-to-r from-sky-500 to-indigo-500'}`}
+                      className={`h-3 rounded-full ${method === 'Nakit' ? 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-lime-500' : 'bg-gradient-to-r from-sky-500 to-indigo-500'}`}
                       style={{ width: `${reportSales.length > 0 ? (data.count / reportSales.length) * 100 : 0}%` }}
                     ></div>
                   </div>
@@ -956,7 +956,7 @@ const SalesHistory = () => {
               <span>Performans Özeti</span>
             </h3>
             <div className="space-y-4">
-              <div className="p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl">
+              <div className="p-4 bg-gradient-to-r from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl">
                 <p className="text-sm text-gray-600 mb-1">En Karlı Gün</p>
                 <p className="text-2xl font-bold text-gray-900">
                   {(() => {
@@ -978,7 +978,7 @@ const SalesHistory = () => {
                 <p className="text-sm text-gray-600 mb-1">Toplam İşlem Sayısı</p>
                 <p className="text-2xl font-bold text-gray-900">{reportSales.length} işlem</p>
               </div>
-              <div className="p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl">
+              <div className="p-4 bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl">
                 <p className="text-sm text-gray-600 mb-1">
                   {selectedDate ? 'Seçilen Tarih' : 'Bugünkü'} Satışlar
                 </p>
@@ -1170,7 +1170,7 @@ const SalesHistory = () => {
             />
           </div>
           <div className="text-center py-20">
-            <svg className="w-32 h-32 mx-auto text-purple-200 mb-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-32 h-32 mx-auto text-pink-200 theme-sultan:text-emerald-200 mb-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
             <h3 className="text-2xl font-bold text-gray-700 mb-2">
@@ -1231,7 +1231,7 @@ const SalesHistory = () => {
                       index === 0 ? 'bg-gradient-to-br from-yellow-400 to-orange-500' :
                       index === 1 ? 'bg-gradient-to-br from-gray-300 to-gray-400' :
                       index === 2 ? 'bg-gradient-to-br from-amber-600 to-amber-700' :
-                      'bg-gradient-to-br from-purple-500 to-pink-500'
+                      'bg-gradient-to-br from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500'
                     }`}>
                       {index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '👤'}
                     </div>
@@ -1246,9 +1246,9 @@ const SalesHistory = () => {
 
                 {/* İstatistikler */}
                 <div className="grid grid-cols-2 gap-4 mb-6">
-                  <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 border border-green-200">
+                  <div className="bg-gradient-to-br from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl p-4 border border-fuchsia-200 theme-sultan:border-green-200">
                     <p className="text-xs font-semibold text-gray-600 mb-1">Toplam Ciro</p>
-                    <p className="text-2xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 bg-clip-text text-transparent">
+                    <p className="text-2xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 bg-clip-text text-transparent">
                       ₺{staff.totalRevenue.toFixed(2)}
                     </p>
                   </div>
@@ -1258,9 +1258,9 @@ const SalesHistory = () => {
                       ₺{staff.averageSale.toFixed(2)}
                     </p>
                   </div>
-                  <div className="bg-gradient-to-br from-purple-50 to-pink-50 rounded-xl p-4 border border-purple-200">
+                  <div className="bg-gradient-to-br from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl p-4 border border-pink-200 theme-sultan:border-emerald-200">
                     <p className="text-xs font-semibold text-gray-600 mb-1">Toplam Satış</p>
-                    <p className="text-2xl font-bold bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">
+                    <p className="text-2xl font-bold bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 bg-clip-text text-transparent">
                       {staff.totalSales}
                     </p>
                   </div>
@@ -1281,7 +1281,7 @@ const SalesHistory = () => {
                 {topProducts.length > 0 && (
                   <div className="border-t border-gray-200 pt-4">
                     <h4 className="text-sm font-semibold text-gray-700 mb-3 flex items-center space-x-2">
-                      <svg className="w-4 h-4 text-purple-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-4 h-4 text-pink-600 theme-sultan:text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
                       </svg>
                       <span>En Çok Sattığı Ürünler</span>
@@ -1295,10 +1295,10 @@ const SalesHistory = () => {
                         return (
                           <div
                             key={productName}
-                            className="flex items-center justify-between p-3 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg"
+                            className="flex items-center justify-between p-3 bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 rounded-lg"
                           >
                             <div className="flex items-center space-x-3 flex-1 min-w-0">
-                              <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
+                              <div className="w-8 h-8 bg-gradient-to-br from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 rounded-lg flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
                                 {idx + 1}
                               </div>
                               <div className="flex-1 min-w-0">
@@ -1308,7 +1308,7 @@ const SalesHistory = () => {
                                 )}
                               </div>
                             </div>
-                            <span className="text-sm font-semibold text-purple-600 ml-2 flex-shrink-0">{count} adet</span>
+                            <span className="text-sm font-semibold text-pink-600 theme-sultan:text-emerald-600 ml-2 flex-shrink-0">{count} adet</span>
                           </div>
                         );
                       })}
@@ -1366,7 +1366,7 @@ const SalesHistory = () => {
                     setLoadingRecentSales(false);
                   }
                 }}
-                className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center space-x-2 mx-auto"
+                className="px-6 py-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center space-x-2 mx-auto"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
@@ -1381,7 +1381,7 @@ const SalesHistory = () => {
       {/* Geçmiş Adisyon Modal */}
       {showAdisyonModal && (
         <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-          <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+          <div className="bg-white backdrop-blur-xl border border-pink-200 theme-sultan:border-emerald-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-6">
               <h2 className="text-3xl font-bold gradient-text">Geçmiş Adisyon İste</h2>
               <button
@@ -1402,7 +1402,7 @@ const SalesHistory = () => {
 
             {loadingRecentSales ? (
               <div className="flex items-center justify-center py-12">
-                <div className="w-12 h-12 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div>
+                <div className="w-12 h-12 border-4 border-pink-600 theme-sultan:border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
               </div>
             ) : recentSales.length === 0 ? (
               <div className="text-center py-12">
@@ -1416,8 +1416,8 @@ const SalesHistory = () => {
                       key={sale.id}
                       className={`p-4 rounded-xl border-2 transition-all ${
                         selectedSaleForAdisyon?.id === sale.id
-                          ? 'bg-gradient-to-r from-purple-50 to-pink-50 border-purple-400'
-                          : 'bg-gray-50 border-gray-200 hover:border-purple-300'
+                          ? 'bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 border-pink-500 theme-sultan:border-emerald-500'
+                          : 'bg-gray-50 border-gray-200 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -1428,11 +1428,11 @@ const SalesHistory = () => {
                           <div className="flex items-center space-x-3 mb-2">
                             <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
                               sale.payment_method && sale.payment_method.includes('Nakit')
-                                ? 'bg-gradient-to-r from-green-500 to-emerald-500'
+                                ? 'bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500'
                                 : sale.payment_method && sale.payment_method.includes('Kredi Kartı')
                                 ? 'bg-gradient-to-r from-blue-500 to-cyan-500'
                                 : sale.isGrouped
-                                ? 'bg-gradient-to-r from-purple-500 to-pink-500'
+                                ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500'
                                 : 'bg-gradient-to-r from-gray-500 to-gray-600'
                             }`}>
                               {sale.payment_method && sale.payment_method.includes('Nakit') ? (
@@ -1457,7 +1457,7 @@ const SalesHistory = () => {
                               <p className="font-bold text-gray-800">
                                 {sale.table_name ? sale.table_name : 'Hızlı Satış'}
                                 {sale.isGrouped && (
-                                  <span className="ml-2 text-xs font-normal text-purple-600 bg-purple-100 px-2 py-0.5 rounded">
+                                  <span className="ml-2 text-xs font-normal text-pink-600 theme-sultan:text-emerald-600 bg-pink-100 theme-sultan:bg-emerald-100 px-2 py-0.5 rounded">
                                     (Kısmi Ödemeler)
                                   </span>
                                 )}
@@ -1476,7 +1476,7 @@ const SalesHistory = () => {
                         </div>
                         <div className="flex items-center space-x-3 ml-4">
                           <div className="text-right">
-                            <p className="text-2xl font-bold text-purple-600">
+                            <p className="text-2xl font-bold text-pink-600 theme-sultan:text-emerald-600">
                               ₺{sale.total_amount?.toFixed(2) || '0.00'}
                             </p>
                             <p className="text-xs text-gray-500 mt-1">{sale.payment_method}</p>
@@ -1576,7 +1576,7 @@ const SalesHistory = () => {
                     disabled={!selectedSaleForAdisyon}
                     className={`px-6 py-3 rounded-xl font-bold text-white transition-all ${
                       selectedSaleForAdisyon
-                        ? 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 shadow-lg hover:shadow-xl'
+                        ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 shadow-lg hover:shadow-xl'
                         : 'bg-gray-300 cursor-not-allowed'
                     }`}
                   >

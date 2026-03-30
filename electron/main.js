@@ -22,6 +22,7 @@ let firebaseAddDoc = null;
 let firebaseServerTimestamp = null;
 let firebaseGetDocs = null;
 let firebaseDeleteDoc = null;
+let firebaseWriteBatch = null;
 let firebaseDoc = null;
 let firebaseSetDoc = null;
 let firebaseOnSnapshot = null;
@@ -66,6 +67,16 @@ const FIREBASE_SURICI_SALES = {
   appId: "1:237735301273:web:bf62c8f145434df0292808",
   measurementId: "G-WXWWQT92L6"
 };
+// Sultan Somatı: Makara’dan bağımsız; kategori/ürün/satış/masa/stok tek projede
+const FIREBASE_SULTAN_SOMATI = {
+  apiKey: "AIzaSyB_sSvCgbWC4HYKufueqfoDmbBS4SHlUnA",
+  authDomain: "sultansomati-5a3e9.firebaseapp.com",
+  projectId: "sultansomati-5a3e9",
+  storageBucket: "sultansomati-5a3e9.firebasestorage.app",
+  messagingSenderId: "166037373406",
+  appId: "1:166037373406:web:ed1c3724085446ae0d1d4f",
+  measurementId: "G-SV23DHVNDG"
+};
 
 // Çoklu şube yapılandırması
 const BRANCH_CONFIGS = {
@@ -81,8 +92,73 @@ const BRANCH_CONFIGS = {
     mainFirebase: FIREBASE_MAKARA_MAIN,
     tablesFirebase: FIREBASE_MAKARA_TABLES,
     salesFirebase: FIREBASE_SURICI_SALES
+  },
+  sultansomati: {
+    key: 'sultansomati',
+    label: 'Sultan Somatı',
+    mainFirebase: FIREBASE_SULTAN_SOMATI,
+    tablesFirebase: FIREBASE_SULTAN_SOMATI
   }
 };
+
+/** Sultan Somatı masa düzeni (API + mobil); Makara masa ID'leriyle çakışmaz (sultan-…). */
+const SULTAN_TABLE_LAYOUT = [
+  { key: 'disari', label: 'Dışarı', count: 4 },
+  { key: 'kis-bahcesi', label: 'Kış Bahçesi', count: 14 },
+  { key: 'osmanli-odasi', label: 'Osmanlı Odası', count: 8 },
+  { key: 'selcuklu-odasi', label: 'Selçuklu Odası', count: 10 },
+  { key: 'mevlevi-odasi', label: 'Mevlevi Odası', count: 1 },
+  { key: 'ask-odasi', label: 'Aşk Odası', count: 1 },
+  { key: 'yapma-odasi', label: 'Yapma Odası', count: 1 }
+];
+
+function parseSultanTableIdForMain(tableId) {
+  if (!tableId || typeof tableId !== 'string' || !tableId.startsWith('sultan-')) return null;
+  for (const sec of SULTAN_TABLE_LAYOUT) {
+    const prefix = `sultan-${sec.key}-`;
+    if (!tableId.startsWith(prefix)) continue;
+    const numStr = tableId.slice(prefix.length);
+    const n = parseInt(numStr, 10);
+    if (String(n) !== numStr) continue;
+    if (n < 1 || n > sec.count) continue;
+    const name = sec.count === 1 ? sec.label : `${sec.label} · Masa ${n}`;
+    return { id: tableId, sectionKey: sec.key, number: n, name, type: sec.key };
+  }
+  return null;
+}
+
+function buildSultanTablesListForApi(db) {
+  const orders = db.tableOrders || [];
+  const list = [];
+  for (const sec of SULTAN_TABLE_LAYOUT) {
+    for (let n = 1; n <= sec.count; n++) {
+      const id = `sultan-${sec.key}-${n}`;
+      const name = sec.count === 1 ? sec.label : `${sec.label} · Masa ${n}`;
+      const hasOrder = orders.some((o) => o.table_id === id && o.status === 'pending');
+      list.push({
+        id,
+        number: n,
+        type: sec.key,
+        name,
+        hasOrder,
+        sectionKey: sec.key,
+        sectionLabel: sec.label
+      });
+    }
+  }
+  return list;
+}
+
+/** Yan Ürünler — yalnızca Makara şubeleri; Sultan Somatı listelerinden çıkarılır */
+function isYanUrunlerCategoryForFilter(c) {
+  if (!c) return false;
+  const id = c.id;
+  const num = Number(id);
+  if (num === 999999 || num === -999) return true;
+  if (String(id) === 'yan_urunler') return true;
+  const nm = (c.name && String(c.name).trim().toLowerCase()) || '';
+  return nm === 'yan ürünler' || nm === 'yan urunler';
+}
 
 let activeBranchKey = 'makara';
 /** activate-branch IPC çağrılarını sıraya al (paralel iki activate şubeyi ve katalogu bozabiliyor) */
@@ -94,6 +170,8 @@ let broadcastsRealtimeUnsubscribe = null;
 /** Şube değişince eski arka plan warmup iptal etmek için */
 let branchWarmupGeneration = 0;
 let saveDatabaseTimer = null;
+/** activateBranch öncesi bellekteki ürünlerden; db.products=[] sonrası Firebase sync bu map ile base64 görseli geri yazar */
+let pendingLocalProductDataUrlById = null;
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -217,6 +295,7 @@ async function initializeFirebaseForBranch(branchKey) {
     firebaseServerTimestamp = firebaseFirestoreModule.serverTimestamp;
     firebaseGetDocs = firebaseFirestoreModule.getDocs;
     firebaseDeleteDoc = firebaseFirestoreModule.deleteDoc;
+    firebaseWriteBatch = firebaseFirestoreModule.writeBatch;
     firebaseDoc = firebaseFirestoreModule.doc;
     firebaseSetDoc = firebaseFirestoreModule.setDoc;
     firebaseOnSnapshot = firebaseFirestoreModule.onSnapshot;
@@ -263,6 +342,7 @@ async function initializeFirebaseForBranch(branchKey) {
   } catch (error) {
     console.error(`❌ Firebase branch başlatılamadı (${branch.key}):`, error);
     firestore = null;
+    firebaseWriteBatch = null;
     storage = null;
     tablesFirestore = null;
     salesFirestore = null;
@@ -278,6 +358,16 @@ async function activateBranch(branchKey) {
 
   const ok = await initializeFirebaseForBranch(branchKey);
   if (!ok) return { success: false, error: 'Firebase bağlantısı kurulamadı' };
+
+  // Base64 görseller Firestore'da yok; db.products silinmeden önce sakla (sync Firebase ile birleşsin)
+  pendingLocalProductDataUrlById = new Map();
+  for (const p of db.products || []) {
+    if (!p || p.image == null) continue;
+    if (typeof p.image !== 'string' || !p.image.startsWith('data:image')) continue;
+    const pid = typeof p.id === 'string' ? parseInt(p.id, 10) : Number(p.id);
+    if (Number.isNaN(pid)) continue;
+    pendingLocalProductDataUrlById.set(pid, p.image);
+  }
 
   // Eski şube katalogunu göstermemek için bellek temizliği (disk yazımı senkron bitince)
   db.categories = [];
@@ -296,6 +386,13 @@ async function activateBranch(branchKey) {
     await syncCategoriesFromFirebase();
   } catch (error) {
     console.error('Kategori senkronu (activateBranch):', error);
+  }
+  if (activeBranchKey === 'sultansomati') {
+    try {
+      await maybeInstallSultanMenuBundleOnActivate();
+    } catch (e) {
+      console.error('Sultan menü paketi kurulumu:', e);
+    }
   }
   if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) {
     return { success: false, error: 'Şube eşzamanlı değişti, tekrar deneyin.' };
@@ -535,17 +632,155 @@ async function saveProductToFirebase(product) {
   
   try {
     const productRef = firebaseDoc(firestore, 'products', product.id.toString());
-    await firebaseSetDoc(productRef, {
+    const payload = {
       id: product.id,
       name: product.name,
       category_id: product.category_id,
       price: parseFloat(product.price) || 0,
-      image: product.image || null
-    }, { merge: true });
+      image: product.image != null && product.image !== '' ? product.image : null
+    };
+    if (product.description) payload.description = product.description;
+    if (product.gluten_free === true) payload.gluten_free = true;
+    if (product.per_person === true) payload.per_person = true;
+    await firebaseSetDoc(productRef, payload, { merge: true });
     console.log(`✅ Ürün Firebase'e kaydedildi: ${product.name} (ID: ${product.id}, Fiyat: ${parseFloat(product.price) || 0})`);
   } catch (error) {
     console.error(`❌ Ürün Firebase'e kaydedilemedi (${product.name}):`, error);
+    const msg = String(error?.message || '');
+    if (msg.includes('longer than') || msg.includes('exceed') || error?.code === 'invalid-argument') {
+      console.error('   Firestore belge boyutu sınırı (yakl. 1 MB): görsel çok büyükse Ayarlar’dan daha küçük dosya seçin.');
+    }
   }
+}
+
+function mapFirebaseProductToLocal(firebaseProduct) {
+  const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id, 10) : firebaseProduct.id;
+  const o = {
+    id: productId,
+    name: firebaseProduct.name || '',
+    category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id, 10) : firebaseProduct.category_id,
+    price: parseFloat(firebaseProduct.price) || 0,
+    image: firebaseProduct.image || null
+  };
+  if (firebaseProduct.description) o.description = firebaseProduct.description;
+  if (firebaseProduct.gluten_free === true) o.gluten_free = true;
+  if (firebaseProduct.per_person === true) o.per_person = true;
+  if (firebaseProduct.trackStock === true) o.trackStock = true;
+  if (firebaseProduct.stock !== undefined && firebaseProduct.stock !== null) o.stock = firebaseProduct.stock;
+  return o;
+}
+
+/** Firebase dokümanında image yokken (eski kayıtlar) yerel data:image korunur */
+function mergeProductFromFirebaseWithLocalDataUrl(prevLocal, mappedFromFirebase) {
+  if (
+    prevLocal &&
+    typeof prevLocal.image === 'string' &&
+    prevLocal.image.startsWith('data:image') &&
+    (mappedFromFirebase.image == null || mappedFromFirebase.image === '')
+  ) {
+    return { ...mappedFromFirebase, image: prevLocal.image };
+  }
+  return mappedFromFirebase;
+}
+
+function normalizeBundledProductForLocal(p) {
+  const o = {
+    id: p.id,
+    name: p.name,
+    category_id: p.category_id,
+    price: parseFloat(p.price) || 0,
+    image: p.image || null
+  };
+  if (p.description) o.description = p.description;
+  if (p.gluten_free === true) o.gluten_free = true;
+  if (p.per_person === true) o.per_person = true;
+  return o;
+}
+
+function productDocForFirestore(p) {
+  const d = {
+    id: p.id,
+    name: p.name,
+    category_id: p.category_id,
+    price: parseFloat(p.price) || 0,
+    image: p.image || null
+  };
+  if (p.description) d.description = p.description;
+  if (p.gluten_free === true) d.gluten_free = true;
+  if (p.per_person === true) d.per_person = true;
+  return d;
+}
+
+async function deleteAllFirestoreDocsInCollection(collectionName) {
+  if (!firestore || !firebaseCollection || !firebaseGetDocs || !firebaseDeleteDoc) return;
+  const ref = firebaseCollection(firestore, collectionName);
+  const snapshot = await firebaseGetDocs(ref);
+  const docs = snapshot.docs || [];
+  for (let i = 0; i < docs.length; i += 45) {
+    const chunk = docs.slice(i, i + 45);
+    await Promise.all(chunk.map((d) => firebaseDeleteDoc(d.ref)));
+  }
+}
+
+async function firestoreBatchSetDocuments(collectionName, items, toFirestoreFields) {
+  if (!firestore || !firebaseWriteBatch || !firebaseDoc) {
+    throw new Error('Firestore batch kullanılamıyor');
+  }
+  let batch = firebaseWriteBatch(firestore);
+  let ops = 0;
+  for (const item of items) {
+    const ref = firebaseDoc(firestore, collectionName, String(item.id));
+    batch.set(ref, toFirestoreFields(item));
+    ops += 1;
+    if (ops >= 400) {
+      await batch.commit();
+      batch = firebaseWriteBatch(firestore);
+      ops = 0;
+    }
+  }
+  if (ops > 0) await batch.commit();
+}
+
+async function replaceSultanCatalogFromBundledData(categoriesSeed, productsSeed) {
+  await deleteAllFirestoreDocsInCollection('products');
+  await deleteAllFirestoreDocsInCollection('categories');
+  await firestoreBatchSetDocuments('categories', categoriesSeed, (c) => ({
+    id: c.id,
+    name: c.name,
+    order_index: c.order_index || 0
+  }));
+  await firestoreBatchSetDocuments('products', productsSeed, productDocForFirestore);
+  db.categories = categoriesSeed
+    .map((c) => ({ id: c.id, name: c.name, order_index: c.order_index || 0 }))
+    .sort((a, b) => (a.order_index !== b.order_index ? a.order_index - b.order_index : a.id - b.id));
+  db.products = productsSeed.map(normalizeBundledProductForLocal);
+  saveDatabase();
+  flushSaveDatabaseSync();
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('categories-updated', db.categories);
+    mainWindow.webContents.send('products-updated', db.products);
+  }
+}
+
+async function maybeInstallSultanMenuBundleOnActivate() {
+  let bundle;
+  try {
+    bundle = require('./data/sultanMenuCatalog');
+  } catch (e) {
+    console.warn('⚠️ sultanMenuCatalog yüklenemedi:', e.message);
+    return;
+  }
+  const { SULTAN_MENU_BUNDLE_ID, categories: sc, products: sp } = bundle;
+  const markerPath = path.join(app.getPath('userData'), 'sultan_menu_bundle_id.txt');
+  let installed = 0;
+  try {
+    installed = parseInt(fs.readFileSync(markerPath, 'utf8'), 10) || 0;
+  } catch (_) {}
+  if (installed >= SULTAN_MENU_BUNDLE_ID) return;
+  console.log(`📦 Sultan Somatı menü paketi yükleniyor (sürüm ${SULTAN_MENU_BUNDLE_ID}, ${sp.length} ürün)...`);
+  await replaceSultanCatalogFromBundledData(sc, sp);
+  fs.writeFileSync(markerPath, String(SULTAN_MENU_BUNDLE_ID), 'utf8');
+  console.log('✅ Sultan menü paketi Firebase ve yerel kataloga yazıldı.');
 }
 
 // Firebase'e (makaramasalar) ürün stok bilgisini kaydetme fonksiyonu
@@ -733,6 +968,12 @@ async function migrateLocalImagesToFirebase() {
         continue;
       }
 
+      // Base64 data URL — yerelde kalır, dosya yoluna çevrilmeye çalışılmaz
+      if (typeof product.image === 'string' && product.image.startsWith('data:image')) {
+        skippedCount++;
+        continue;
+      }
+
       // Firebase Storage veya R2 URL kontrolü
       if (product.image.includes('firebasestorage.googleapis.com') || 
           product.image.includes('r2.cloudflarestorage.com') || 
@@ -873,9 +1114,10 @@ async function syncCategoriesFromFirebase() {
 async function syncProductsFromFirebase() {
   if (!firestore || !firebaseCollection || !firebaseGetDocs) {
     console.warn('⚠️ Firebase başlatılamadı, ürünler çekilemedi');
+    pendingLocalProductDataUrlById = null;
     return;
   }
-  
+
   try {
     console.log('📥 Firebase\'den ürünler çekiliyor...');
     const productsRef = firebaseCollection(firestore, 'products');
@@ -888,29 +1130,24 @@ async function syncProductsFromFirebase() {
     await processInChunks(docs, 150, (snapshotDoc) => {
       const firebaseProduct = snapshotDoc.data();
       const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id) : firebaseProduct.id;
-      
       // Local database'de bu ürün var mı kontrol et
       const existingProductIndex = db.products.findIndex(p => p.id === productId);
+      let prevLocal = existingProductIndex !== -1 ? db.products[existingProductIndex] : null;
+      if (!prevLocal && pendingLocalProductDataUrlById && pendingLocalProductDataUrlById.has(productId)) {
+        prevLocal = { image: pendingLocalProductDataUrlById.get(productId) };
+      }
+      const mapped = mergeProductFromFirebaseWithLocalDataUrl(
+        prevLocal,
+        mapFirebaseProductToLocal(firebaseProduct)
+      );
       
       if (existingProductIndex !== -1) {
         // Ürün mevcut, güncelle
-        db.products[existingProductIndex] = {
-          id: productId,
-          name: firebaseProduct.name || '',
-          category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id) : firebaseProduct.category_id,
-          price: parseFloat(firebaseProduct.price) || 0,
-          image: firebaseProduct.image || null
-        };
+        db.products[existingProductIndex] = mapped;
         updatedCount++;
       } else {
         // Yeni ürün, ekle
-        db.products.push({
-          id: productId,
-          name: firebaseProduct.name || '',
-          category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id) : firebaseProduct.category_id,
-          price: parseFloat(firebaseProduct.price) || 0,
-          image: firebaseProduct.image || null
-        });
+        db.products.push(mapped);
         addedCount++;
       }
     }, 14);
@@ -919,6 +1156,8 @@ async function syncProductsFromFirebase() {
     console.log(`✅ Firebase'den ${snapshot.size} ürün çekildi (${addedCount} yeni, ${updatedCount} güncellendi)`);
   } catch (error) {
     console.error('❌ Firebase\'den ürün çekme hatası:', error);
+  } finally {
+    pendingLocalProductDataUrlById = null;
   }
 }
 
@@ -1061,14 +1300,11 @@ function setupProductsRealtimeListener() {
         if (change.type === 'added' || change.type === 'modified') {
           // Ürün eklendi veya güncellendi
           const existingProductIndex = db.products.findIndex(p => p.id === productId);
-          
-          const productData = {
-            id: productId,
-            name: firebaseProduct.name || '',
-            category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id) : firebaseProduct.category_id,
-            price: parseFloat(firebaseProduct.price) || 0,
-            image: firebaseProduct.image || null
-          };
+          const prevLocal = existingProductIndex !== -1 ? db.products[existingProductIndex] : null;
+          const productData = mergeProductFromFirebaseWithLocalDataUrl(
+            prevLocal,
+            mapFirebaseProductToLocal(firebaseProduct)
+          );
           
           if (existingProductIndex !== -1) {
             // Güncelle - sadece gerçekten değiştiyse
@@ -1076,7 +1312,10 @@ function setupProductsRealtimeListener() {
             const hasRealChange = oldProduct.name !== productData.name || 
                                  oldProduct.category_id !== productData.category_id ||
                                  oldProduct.price !== productData.price ||
-                                 oldProduct.image !== productData.image;
+                                 oldProduct.image !== productData.image ||
+                                 (oldProduct.description || '') !== (productData.description || '') ||
+                                 !!oldProduct.gluten_free !== !!productData.gluten_free ||
+                                 !!oldProduct.per_person !== !!productData.per_person;
             
             if (hasRealChange) {
               db.products[existingProductIndex] = productData;
@@ -1251,8 +1490,32 @@ ipcMain.handle('activate-branch', async (event, branchKey) => {
   }
 });
 
+/** Sultan Somatı: paket menüyü Firebase + yerelde yeniden yazar (mevcut kategori/ürünleri siler). */
+ipcMain.handle('sultan-reinstall-menu-bundle', async () => {
+  if (activeBranchKey !== 'sultansomati') {
+    return { success: false, error: 'Bu işlem yalnızca Sultan Somatı şubesinde kullanılabilir.' };
+  }
+  if (!firestore || !firebaseWriteBatch) {
+    return { success: false, error: 'Firebase bağlı değil.' };
+  }
+  try {
+    const { SULTAN_MENU_BUNDLE_ID, categories: sc, products: sp } = require('./data/sultanMenuCatalog');
+    await replaceSultanCatalogFromBundledData(sc, sp);
+    const markerPath = path.join(app.getPath('userData'), 'sultan_menu_bundle_id.txt');
+    fs.writeFileSync(markerPath, String(SULTAN_MENU_BUNDLE_ID), 'utf8');
+    return { success: true, message: `Menü yenilendi (${sp.length} ürün).` };
+  } catch (e) {
+    console.error('sultan-reinstall-menu-bundle:', e);
+    return { success: false, error: e.message || String(e) };
+  }
+});
+
 ipcMain.handle('get-categories', () => {
-  return db.categories.sort((a, b) => a.order_index - b.order_index);
+  let list = [...(db.categories || [])].sort((a, b) => a.order_index - b.order_index);
+  if (activeBranchKey === 'sultansomati') {
+    list = list.filter((c) => !isYanUrunlerCategoryForFilter(c));
+  }
+  return list;
 });
 
 ipcMain.handle('create-category', (event, categoryData) => {
@@ -2491,24 +2754,8 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
     return { success: false, error: 'Aktarılacak ürün bulunamadı' };
   }
 
-  // Hedef masa bilgilerini al (masa adı ve tipi)
-  let targetTableName = '';
-  let targetTableType = sourceOrder.table_type; // Varsayılan olarak kaynak masanın tipi
-
-  // Masa ID'sinden masa bilgilerini çıkar
-  if (targetTableId.startsWith('inside-')) {
-    targetTableName = `Masa ${targetTableId.replace('inside-', '')}`;
-    targetTableType = 'inside';
-  } else if (targetTableId.startsWith('outside-')) {
-    const num = parseInt(targetTableId.replace('outside-', ''), 10);
-    const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
-    targetTableName = `Masa ${OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num)}`;
-    targetTableType = 'outside';
-  } else if (targetTableId.startsWith('package-')) {
-    const parts = targetTableId.split('-');
-    targetTableName = `Paket ${parts[parts.length - 1]}`;
-    targetTableType = parts[1] || sourceOrder.table_type; // package-{type}-{number}
-  }
+  const targetTableName = getTableNameFromId(targetTableId);
+  const targetTableType = getTableTypeFromId(targetTableId);
 
   // Kaynak siparişin tüm bilgilerini koru (order_date, order_time, order_note, total_amount)
   // Sadece table_id, table_name ve table_type'ı güncelle
@@ -2565,6 +2812,8 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
 
 // Sipariş ürünlerini başka masaya aktar (ürünleri kaynak masadan sil, hedef masaya ekle, kategori bazlı yazdır + aktarım bildirimi)
 function getTableNameFromId(tableId) {
+  const sultanParsed = parseSultanTableIdForMain(tableId);
+  if (sultanParsed) return sultanParsed.name;
   if (tableId.startsWith('inside-')) return `Masa ${tableId.replace('inside-', '')}`;
   if (tableId.startsWith('outside-')) {
     const num = parseInt(tableId.replace('outside-', ''), 10);
@@ -2578,6 +2827,8 @@ function getTableNameFromId(tableId) {
   return tableId;
 }
 function getTableTypeFromId(tableId) {
+  const sultanParsed = parseSultanTableIdForMain(tableId);
+  if (sultanParsed) return sultanParsed.type;
   if (tableId.startsWith('inside-') || (tableId.startsWith('package-') && tableId.includes('inside'))) return 'inside';
   if (tableId.startsWith('outside-') || (tableId.startsWith('package-') && tableId.includes('outside'))) return 'outside';
   return 'inside';
@@ -3452,7 +3703,7 @@ ipcMain.handle('get-admin-pin', () => {
 
 // Product Management IPC Handlers
 ipcMain.handle('create-product', (event, productData) => {
-  const { name, category_id, price, image } = productData;
+  const { name, category_id, price, image, description, gluten_free, per_person } = productData;
   
   const newId = db.products.length > 0 
     ? Math.max(...db.products.map(p => p.id)) + 1 
@@ -3465,10 +3716,16 @@ ipcMain.handle('create-product', (event, productData) => {
     price: parseFloat(price),
     image: image || null
   };
+  if (description) newProduct.description = description;
+  if (gluten_free === true) newProduct.gluten_free = true;
+  if (per_person === true) newProduct.per_person = true;
   
   db.products.push(newProduct);
   saveDatabase();
-  
+  if (newProduct.image && typeof newProduct.image === 'string' && newProduct.image.startsWith('data:image')) {
+    flushSaveDatabaseSync();
+  }
+
   // Firebase'e kaydet
   saveProductToFirebase(newProduct).catch(err => {
     console.error('Firebase ürün kaydetme hatası:', err);
@@ -3501,7 +3758,7 @@ ipcMain.handle('create-product', (event, productData) => {
 });
 
 ipcMain.handle('update-product', async (event, productData) => {
-  const { id, name, category_id, price, image } = productData;
+  const { id, name, category_id, price, image, description, gluten_free, per_person } = productData;
   
   const productIndex = db.products.findIndex(p => p.id === id);
   if (productIndex === -1) {
@@ -3516,16 +3773,28 @@ ipcMain.handle('update-product', async (event, productData) => {
       await deleteImageFromR2(oldImage);
     }
   
-  db.products[productIndex] = {
+  const next = {
     ...db.products[productIndex],
     name,
     category_id,
     price: parseFloat(price),
     image: image || null
   };
+  if (description !== undefined) {
+    if (description) next.description = description;
+    else delete next.description;
+  }
+  if (gluten_free === true) next.gluten_free = true;
+  else delete next.gluten_free;
+  if (per_person === true) next.per_person = true;
+  else delete next.per_person;
+  db.products[productIndex] = next;
   
   saveDatabase();
-  
+  if (next.image && typeof next.image === 'string' && next.image.startsWith('data:image')) {
+    flushSaveDatabaseSync();
+  }
+
   // Firebase'e kaydet
   saveProductToFirebase(db.products[productIndex]).catch(err => {
     console.error('Firebase ürün güncelleme hatası:', err);
@@ -7036,20 +7305,26 @@ async function printCancelReceipt(printerName, printerType, cancelData) {
   }
 }
 
-function generateMobileHTML(serverURL) {
+function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
+  const isSultanMobileTpl = mobileBranchKey === 'sultansomati';
+  const pageTitle = isSultanMobileTpl ? 'Sultan Somatı - Mobil Sipariş' : 'MAKARA - Mobil Sipariş';
+  const themeColor = isSultanMobileTpl ? '#059669' : '#ec4899';
+  const appleTitle = isSultanMobileTpl ? 'Sultan Somatı Mobil' : 'MAKARA Mobil';
+  const faviconHref = isSultanMobileTpl ? `${serverURL}/sultan-mobile-icon.svg` : `${serverURL}/mobilpersonel.png`;
+  const appleTouchHref = faviconHref;
   return `<!DOCTYPE html>
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="theme-color" content="#ec4899">
+  <meta name="theme-color" content="${themeColor}">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="MAKARA Mobil">
+  <meta name="apple-mobile-web-app-title" content="${appleTitle}">
   <link rel="manifest" href="${serverURL}/mobile-manifest.json">
-  <link rel="icon" type="image/png" href="${serverURL}/mobilpersonel.png">
-  <link rel="apple-touch-icon" href="${serverURL}/mobilpersonel.png">
-  <title>MAKARA - Mobil Sipariş</title>
+  <link rel="icon" type="${isSultanMobileTpl ? 'image/svg+xml' : 'image/png'}" href="${faviconHref}">
+  <link rel="apple-touch-icon" href="${appleTouchHref}">
+  <title>${pageTitle}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html {
@@ -7207,16 +7482,23 @@ function generateMobileHTML(serverURL) {
       color: #92400e;
     }
     .category-tabs {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding-bottom: 8px;
+      padding-top: 0;
+      padding-bottom: 4px;
       width: 100%;
       overflow-x: auto;
-      overflow-y: hidden;
+      overflow-y: visible;
       -webkit-overflow-scrolling: touch;
       scrollbar-width: thin;
       scrollbar-color: #a855f7 #f1f1f1;
+    }
+    /* Üç satır birlikte tek yatay kaydırmada hareket eder */
+    .category-tabs-inner {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      width: max-content;
+      min-width: 100%;
+      box-sizing: border-box;
     }
     .category-tabs::-webkit-scrollbar {
       height: 6px;
@@ -7240,27 +7522,42 @@ function generateMobileHTML(serverURL) {
       min-width: 100%;
       align-items: stretch;
     }
+    /* 3 satır: en geniş satır genişliğinde hizalanır; kaydırma üstteki .category-tabs’ta */
+    .category-tabs-row.category-tabs-row--equal {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: stretch;
+      gap: 10px;
+      width: 100%;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
     .category-tab {
-      padding: 16px 20px;
+      padding: 12px 18px;
       border: 2px solid #e5e7eb;
       border-radius: 14px;
       background: linear-gradient(135deg, #ffffff 0%, #f9fafb 100%);
       font-size: 14px;
-      font-weight: 600;
+      font-weight: 700;
       white-space: nowrap;
+      word-break: normal;
+      overflow-wrap: normal;
+      hyphens: manual;
       cursor: pointer;
       transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
       color: #4b5563;
       box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
       text-align: center;
-      flex-shrink: 0;
-      min-width: fit-content;
-      min-height: 50px;
-      display: flex;
+      flex: 0 0 auto;
+      min-width: max-content;
+      min-height: 48px;
+      display: inline-flex;
       align-items: center;
       justify-content: center;
       position: relative;
       overflow: hidden;
+      line-height: 1.15;
     }
     .category-tab::before {
       content: '';
@@ -8374,13 +8671,146 @@ function generateMobileHTML(serverURL) {
       border-radius: 12px;
       border: 2px dashed #e5e7eb;
     }
+    /* Sultan Somatı mobil — Makara stillerini ezmez; yalnızca body.sultan-mobile ile */
+    body.sultan-mobile {
+      background: linear-gradient(145deg, #064e3b 0%, #0d9488 45%, #134e4a 100%) !important;
+    }
+    body.sultan-mobile .container {
+      border: 1px solid rgba(45, 212, 191, 0.35);
+      box-shadow: 0 24px 64px rgba(6, 78, 59, 0.45);
+    }
+    body.sultan-mobile .pin-btn {
+      background: linear-gradient(135deg, #059669 0%, #0d9488 100%) !important;
+    }
+    body.sultan-mobile .category-tab.active {
+      border-color: #5eead4 !important;
+      color: #047857 !important;
+      background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%) !important;
+    }
+    body.sultan-mobile .category-tab.active::after {
+      background: linear-gradient(90deg, #10b981 0%, #059669 50%, #10b981 100%) !important;
+    }
+    body.sultan-mobile .category-tab {
+      font-size: 14px !important;
+      font-weight: 700 !important;
+      padding: 12px 18px !important;
+      min-height: 48px !important;
+      white-space: nowrap !important;
+    }
+    body.sultan-mobile .product-card {
+      background: #ffffff !important;
+      background-image: none !important;
+      border: 1px solid #e5e7eb !important;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+    }
+    body.sultan-mobile .product-card::before {
+      display: none !important;
+    }
+    body.sultan-mobile .product-card:hover {
+      border-color: #d1d5db !important;
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08) !important;
+    }
+    body.sultan-mobile .product-name {
+      color: #334155 !important;
+      text-shadow: none !important;
+      font-weight: 700 !important;
+    }
+    body.sultan-mobile .product-price {
+      color: #94a3b8 !important;
+      text-shadow: none !important;
+      font-weight: 700 !important;
+      font-size: 16px !important;
+    }
+    body.sultan-mobile .table-btn.selected {
+      border-color: #10b981 !important;
+      background: linear-gradient(135deg, #059669 0%, #0d9488 100%) !important;
+    }
+    body.sultan-mobile .table-btn.sultan-table-empty.selected {
+      background: #ffffff !important;
+      border-color: #10b981 !important;
+      box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.35) !important;
+    }
+    body.sultan-mobile .table-btn.sultan-table-empty.selected .table-number {
+      color: #059669 !important;
+    }
+    body.sultan-mobile .sultan-section-scroll-wrap {
+      margin: 0 -12px 4px;
+      padding: 0 12px;
+    }
+    body.sultan-mobile .sultan-section-scroll {
+      display: flex;
+      flex-direction: row;
+      flex-wrap: nowrap;
+      align-items: stretch;
+      gap: 12px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      -webkit-overflow-scrolling: touch;
+      scroll-snap-type: x proximity;
+      padding: 6px 4px 14px;
+      scrollbar-width: thin;
+      scrollbar-color: #94a3af #f1f5f9;
+    }
+    body.sultan-mobile .sultan-section-scroll::-webkit-scrollbar {
+      height: 6px;
+    }
+    body.sultan-mobile .sultan-section-scroll::-webkit-scrollbar-track {
+      background: #f1f5f9;
+      border-radius: 10px;
+    }
+    body.sultan-mobile .sultan-section-scroll::-webkit-scrollbar-thumb {
+      background: #94a3af;
+      border-radius: 10px;
+    }
+    body.sultan-mobile .sultan-section-tab {
+      flex: 0 0 auto;
+      scroll-snap-align: start;
+      min-width: max-content;
+      padding: 16px 22px;
+      border-radius: 16px;
+      border: 2px solid #e2e8f0;
+      background: #fff;
+      font-size: 16px;
+      font-weight: 800;
+      color: #1e293b;
+      cursor: pointer;
+      transition: all 0.2s;
+      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+    }
+    body.sultan-mobile .sultan-section-tab.active {
+      border-color: #10b981;
+      background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
+      color: #fff;
+      box-shadow: 0 6px 20px rgba(5, 150, 105, 0.45);
+    }
+    body.sultan-mobile .sultan-section-tab .cnt {
+      opacity: 0.9;
+      font-weight: 700;
+      font-size: 14px;
+      margin-left: 6px;
+    }
+    body.sultan-mobile .table-btn.sultan-table-empty {
+      background: #ffffff !important;
+      border: 2px solid #e2e8f0 !important;
+      box-shadow: none !important;
+    }
+    body.sultan-mobile .table-btn.sultan-table-empty .table-number {
+      font-size: 22px !important;
+      font-weight: 800 !important;
+      color: #64748b !important;
+      margin: 0 !important;
+    }
+    body.sultan-mobile .table-btn.sultan-table-empty:not(.selected):hover {
+      border-color: #cbd5e1 !important;
+      background: #fafafa !important;
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <!-- PIN Giriş Ekranı - Kurumsal ve Profesyonel -->
     <div id="pinSection" class="pin-section">
-      <img src="${serverURL}/assets/login.png" alt="Login" class="login-image" onerror="this.style.display='none';">
+      ${isSultanMobileTpl ? '' : `<img src="${serverURL}/assets/login.png" alt="Login" class="login-image" onerror="this.style.display='none';">`}
       <h2>Personel Girişi</h2>
       <p class="subtitle">Lütfen şifrenizi giriniz</p>
       <div class="pin-input-wrapper">
@@ -8504,14 +8934,15 @@ function generateMobileHTML(serverURL) {
           <button class="table-type-tab" data-type="outside" onclick="selectTableType('outside')">🌳 Dış</button>
         </div>
         
+        <div id="sultanSectionBar" style="display: none; margin-bottom: 14px;"></div>
         <!-- Masa Grid -->
         <div class="table-grid" id="tablesGrid"></div>
       </div>
       
       <div id="orderSection" style="display: none;">
         <!-- En Üst: Geri Dön Butonu ve Ürün Aktar (Müdür) -->
-        <div style="position: sticky; top: 0; z-index: 100; background: white; padding: 8px 15px 15px 15px; margin: -15px -15px 0 -15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
-          <button class="back-btn" onclick="goBackToTables()" style="position: relative; top: 0; left: 0; margin-bottom: 8px; width: 100%; max-width: none; animation: none;">
+        <div style="position: sticky; top: 0; z-index: 100; background: white; padding: 6px 12px 8px 12px; margin: -15px -15px 0 -15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
+          <button class="back-btn" onclick="goBackToTables()" style="position: relative; top: 0; left: 0; margin-bottom: 6px; width: 100%; max-width: none; animation: none;">
             <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
             </svg>
@@ -8527,12 +8958,15 @@ function generateMobileHTML(serverURL) {
         </div>
         
         <!-- Kategoriler ve Arama -->
-        <div style="position: sticky; top: 70px; z-index: 99; background: white; padding: 15px 0; margin: 0 -15px 15px -15px; padding-left: 15px; padding-right: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
-          <!-- Kategoriler -->
-          <div style="margin-bottom: 12px;">
+        <div style="position: sticky; top: 46px; z-index: 99; background: white; padding: 4px 0 6px 0; margin: 0 -15px 6px -15px; padding-left: 15px; padding-right: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
+          <!-- Kategoriler: 3 satır, satırlara mümkün olduğunca eşit sayıda -->
+          <div style="margin-bottom: 6px;">
             <div class="category-tabs" id="categoryTabs">
-              <div class="category-tabs-row" id="categoryTabsRow1"></div>
-              <div class="category-tabs-row" id="categoryTabsRow2"></div>
+              <div class="category-tabs-inner">
+                <div class="category-tabs-row category-tabs-row--equal" id="categoryTabsRow1"></div>
+                <div class="category-tabs-row category-tabs-row--equal" id="categoryTabsRow2"></div>
+                <div class="category-tabs-row category-tabs-row--equal" id="categoryTabsRow3"></div>
+              </div>
             </div>
           </div>
           
@@ -8891,6 +9325,9 @@ function generateMobileHTML(serverURL) {
   <script>
     const API_URL = '${serverURL}/api';
     const SOCKET_URL = '${serverURL}';
+    const MOBILE_BRANCH_KEY = ${JSON.stringify(mobileBranchKey)};
+    const isSultanMobile = MOBILE_BRANCH_KEY === 'sultansomati';
+    let currentSultanSectionKey = '';
     let selectedTable = null;
     let categories = [];
     let products = [];
@@ -8947,6 +9384,9 @@ function generateMobileHTML(serverURL) {
     
     // Sayfa yüklendiğinde oturum kontrolü
     window.addEventListener('load', async () => {
+      if (isSultanMobile) {
+        document.body.classList.add('sultan-mobile');
+      }
       // Cart'ı başlat
       initializeCart();
       
@@ -9298,6 +9738,14 @@ function generateMobileHTML(serverURL) {
           fetch(API_URL + '/tables')
         ]);
         categories = await catsRes.json();
+        if (isSultanMobile) {
+          categories = categories.filter(function (c) {
+            var n = Number(c.id);
+            if (n === 999999 || n === -999) return false;
+            var nm = (c.name && String(c.name).trim().toLowerCase()) || '';
+            return nm !== 'yan ürünler' && nm !== 'yan urunler';
+          });
+        }
         products = await prodsRes.json();
         tables = await tablesRes.json();
         renderTables();
@@ -9349,8 +9797,141 @@ function generateMobileHTML(serverURL) {
       }
     }
     
+    function renderSultanSectionTabs() {
+      const bar = document.getElementById('sultanSectionBar');
+      if (!bar) return;
+      if (!isSultanMobile || !tables.length || typeof tables[0].id !== 'string' || tables[0].id.indexOf('sultan-') !== 0) {
+        bar.style.display = 'none';
+        bar.innerHTML = '';
+        return;
+      }
+      const byKey = {};
+      tables.forEach(function (t) {
+        if (t.sectionKey) byKey[t.sectionKey] = t.sectionLabel || t.sectionKey;
+      });
+      const keys = Object.keys(byKey);
+      if (!keys.length) {
+        bar.style.display = 'none';
+        return;
+      }
+      if (!currentSultanSectionKey || keys.indexOf(currentSultanSectionKey) < 0) {
+        currentSultanSectionKey = keys[0];
+      }
+      const sub = byKey[currentSultanSectionKey] || '';
+      bar.style.display = 'block';
+      bar.innerHTML =
+        '<p style="text-align:center;font-size:12px;font-weight:800;letter-spacing:0.14em;color:#64748b;margin:0 0 12px 0;text-transform:uppercase;">Bölüm seçin <span style="font-weight:600;opacity:0.75;font-size:11px;">(kaydırarak seçin)</span></p>' +
+        '<div class="sultan-section-scroll-wrap">' +
+        '<div class="sultan-section-scroll">' +
+        keys
+          .map(function (k) {
+            const label = byKey[k];
+            const cnt = tables.filter(function (x) {
+              return x.sectionKey === k;
+            }).length;
+            const active = currentSultanSectionKey === k ? ' active' : '';
+            const kEsc = k.replace(/'/g, "\\'");
+            return (
+              '<button type="button" class="sultan-section-tab' +
+              active +
+              '" onclick="selectSultanSectionKey(\\'' +
+              kEsc +
+              '\\')">' +
+              String(label).replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+              '<span class="cnt">(' +
+              cnt +
+              ')</span></button>'
+            );
+          })
+          .join('') +
+        '</div></div>' +
+        '<p style="text-align:center;font-size:15px;font-weight:800;color:#334155;margin:18px 0 10px 0;">' +
+        String(sub).replace(/</g, '&lt;').replace(/>/g, '&gt;') +
+        ' — Masa seçin</p>';
+      requestAnimationFrame(function () {
+        var scrollEl = bar.querySelector('.sultan-section-scroll');
+        var activeBtn = bar.querySelector('.sultan-section-tab.active');
+        if (!scrollEl || !activeBtn) return;
+        var sR = scrollEl.getBoundingClientRect();
+        var bR = activeBtn.getBoundingClientRect();
+        var delta = bR.left + bR.width / 2 - (sR.left + sR.width / 2);
+        var maxScroll = Math.max(0, scrollEl.scrollWidth - sR.width);
+        scrollEl.scrollLeft = Math.max(0, Math.min(scrollEl.scrollLeft + delta, maxScroll));
+      });
+    }
+
+    function selectSultanSectionKey(key) {
+      currentSultanSectionKey = key;
+      renderTables();
+    }
+
     function renderTables() {
       const grid = document.getElementById('tablesGrid');
+      if (isSultanMobile && tables.length > 0 && typeof tables[0].id === 'string' && tables[0].id.indexOf('sultan-') === 0) {
+        renderSultanSectionTabs();
+        const inSection = tables.filter(function (t) {
+          return t.sectionKey === currentSultanSectionKey;
+        });
+        const html = inSection
+          .map(function (table) {
+            const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
+            const nameStr = table.name.replace(/'/g, "\\'");
+            const typeStr = (table.type || '').replace(/'/g, "\\'");
+            const hasOrderClass = table.hasOrder ? ' has-order' : '';
+            const selectedClass = selectedTable && selectedTable.id === table.id ? ' selected' : '';
+            if (!table.hasOrder) {
+              return (
+                '<button class="table-btn sultan-table-empty' +
+                selectedClass +
+                '" onclick="selectTable(' +
+                tableIdStr +
+                ', \\'' +
+                nameStr +
+                '\\', \\'' +
+                typeStr +
+                '\\')">' +
+                '<div class="table-number">' +
+                table.number +
+                '</div></button>'
+              );
+            }
+            const disp = String(table.name || '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;');
+            return (
+              '<button class="table-btn' +
+              hasOrderClass +
+              selectedClass +
+              '" onclick="selectTable(' +
+              tableIdStr +
+              ', \\'' +
+              nameStr +
+              '\\', \\'' +
+              typeStr +
+              '\\')">' +
+              '<div class="table-number">' +
+              table.number +
+              '</div>' +
+              '<div style="font-size:10px;font-weight:700;color:#ecfdf5;margin:6px 2px 0;line-height:1.25;text-align:center;max-height:40px;overflow:hidden;">' +
+              disp +
+              '</div>' +
+              '<div style="font-size: 10px; font-weight: 600; color: #bbf7d0; margin-top: 4px; padding: 2px 6px; background: rgba(22, 101, 52, 0.25); border-radius: 6px;">' +
+              'Dolu' +
+              '</div></button>'
+            );
+          })
+          .join('');
+        requestAnimationFrame(function () {
+          if (grid) grid.innerHTML = html;
+        });
+        return;
+      }
+      const sultanBar = document.getElementById('sultanSectionBar');
+      if (sultanBar) {
+        sultanBar.style.display = 'none';
+        sultanBar.innerHTML = '';
+      }
       // Tek ekran: tüm masalar (1-20, boşluk, 61-88 (69,70,79,80 hariç), paket)
       const insideTables = tables.filter(t => t.id.startsWith('inside-') && !t.id.startsWith('package-'));
       const outsideTables = tables.filter(t => t.id.startsWith('outside-') && !t.id.startsWith('package-'));
@@ -9649,8 +10230,8 @@ function generateMobileHTML(serverURL) {
           const hasOrder = table.hasOrder;
           const isSelected = selectedTargetTableId === table.id;
           const isSourceTable = selectedSourceTableId === table.id;
-          const isOutside = table.type === 'outside';
-          
+          const isOutside = table.type === 'outside' && !isSultanMobile;
+
           if (hasOrder || isSourceTable) {
             return '<div style="opacity: 0.3; cursor: not-allowed; padding: 12px; border: 2px solid #d1d5db; border-radius: 12px; background: #f3f4f6; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 80px;">' +
               '<div style="width: 40px; height: 40px; border-radius: 50%; background: #9ca3af; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; color: white; margin-bottom: 8px;">' + table.number + '</div>' +
@@ -9659,20 +10240,27 @@ function generateMobileHTML(serverURL) {
             '</div>';
           }
           
-          const bgColor = isOutside
+          const bgColor = isSultanMobile
+            ? (isSelected ? '#d1fae5' : '#ecfdf5')
+            : isOutside
             ? (isSelected ? '#fef3c7' : '#fffbeb')
             : (isSelected ? '#ede9fe' : '#faf5ff');
-          const borderColor = isOutside
+          const borderColor = isSultanMobile
+            ? (isSelected ? '#10b981' : '#6ee7b7')
+            : isOutside
             ? (isSelected ? '#fbbf24' : '#facc15')
             : (isSelected ? '#a855f7' : '#c4b5fd');
-          const circleBg = isOutside
+          const circleBg = isSultanMobile
+            ? 'linear-gradient(135deg, #34d399 0%, #059669 100%)'
+            : isOutside
             ? 'linear-gradient(135deg, #facc15 0%, #eab308 100%)'
             : '#f3f4f6';
-          const nameColor = isOutside ? '#92400e' : '#111827';
-          const statusColor = isOutside ? '#b45309' : '#4b5563';
+          const nameColor = isSultanMobile ? '#064e3b' : isOutside ? '#92400e' : '#111827';
+          const statusColor = isSultanMobile ? '#047857' : isOutside ? '#b45309' : '#4b5563';
+          const circleText = isSultanMobile ? '#ffffff' : isOutside ? '#78350f' : '#4b5563';
           
           return '<button onclick="selectTargetTable(\\'' + table.id + '\\')" style="padding: 12px; border: 2px solid ' + borderColor + '; border-radius: 12px; background: ' + bgColor + '; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 80px; transition: all 0.3s; transform: ' + (isSelected ? 'scale(1.05)' : 'scale(1)') + ';" onmouseover="if(!this.disabled) { this.style.transform=\\'scale(1.05)\\'; this.style.boxShadow=\\'0 4px 12px rgba(148, 163, 184, 0.3)\\'; }" onmouseout="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; this.style.boxShadow=\\'none\\'; }" ' + (isSelected ? 'disabled' : '') + '>' +
-            '<div style="width: 40px; height: 40px; border-radius: 50%; background: ' + circleBg + '; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; color: ' + (isOutside ? '#78350f' : '#4b5563') + '; margin-bottom: 8px; box-shadow: 0 2px 8px rgba(148, 163, 184, 0.3);">' + table.number + '</div>' +
+            '<div style="width: 40px; height: 40px; border-radius: 50%; background: ' + circleBg + '; display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 900; color: ' + circleText + '; margin-bottom: 8px; box-shadow: 0 2px 8px rgba(148, 163, 184, 0.3);">' + table.number + '</div>' +
             '<span style="font-size: 11px; color: ' + nameColor + '; font-weight: 700;">' + table.name + '</span>' +
             '<span style="font-size: 9px; color: ' + statusColor + '; margin-top: 4px; font-weight: 600;">Boş</span>' +
           '</button>';
@@ -10238,102 +10826,80 @@ function generateMobileHTML(serverURL) {
     function renderCategories() {
       const row1 = document.getElementById('categoryTabsRow1');
       const row2 = document.getElementById('categoryTabsRow2');
-      if (!row1 || !row2) return;
+      const row3 = document.getElementById('categoryTabsRow3');
+      if (!row1 || !row2 || !row3) return;
       
       row1.innerHTML = '';
       row2.innerHTML = '';
+      row3.innerHTML = '';
       
-      // Üst satır kategorileri (belirli sırayla)
-      const topRowCategoryNames = [
-        'Makaralar',
-        'Fransız Pastalar',
-        'Kruvasanlar',
-        'Sütlü Tatlılar ve Pastalar',
-        'Waffle'
-      ];
-      
-      // Alt satır kategorileri (belirli sırayla)
-      const bottomRowCategoryNames = [
-        'Sıcak İçecekler',
-        'Soğuk İçecekler',
-        'Frozenlar',
-        'Milk Shakeler',
-        'Milkshakeler',
-        'Ekstra Çikolata'
-      ];
-      
-      // Kategorileri isimlerine göre bul ve sırala (case-insensitive)
-      const topRowCategories = [];
-      const bottomRowCategories = [];
-      let otherCategories = [];
-      
-      // Milk Shakeler/Milkshakeler kategorisini önce bul (farklı yazımlar için)
-      const milkShakeCategory = categories.find(cat => {
-        const catNameLower = cat.name.toLowerCase().trim();
-        return catNameLower === 'milk shakeler' || catNameLower === 'milkshakeler' || (catNameLower.includes('milk') && catNameLower.includes('shake'));
-      });
-      
-      topRowCategoryNames.forEach(categoryName => {
-        const category = categories.find(cat => {
-          const catNameLower = cat.name.toLowerCase().trim();
-          const categoryNameLower = categoryName.toLowerCase().trim();
-          return catNameLower === categoryNameLower;
+      var catList = categories;
+      if (isSultanMobile) {
+        catList = categories.filter(function (c) {
+          var n = Number(c.id);
+          if (n === 999999 || n === -999) return false;
+          var nm = (c.name && String(c.name).trim().toLowerCase()) || '';
+          return nm !== 'yan ürünler' && nm !== 'yan urunler';
         });
-        if (category) {
-          topRowCategories.push(category);
-        }
-      });
-      
-      bottomRowCategoryNames.forEach(categoryName => {
-        const category = categories.find(cat => {
-          const catNameLower = cat.name.toLowerCase().trim();
-          const categoryNameLower = categoryName.toLowerCase().trim();
-          return catNameLower === categoryNameLower;
-        });
-        if (category) {
-          bottomRowCategories.push(category);
-        }
-      });
-      
-      // Milk Shakeler'i alt satıra ekle (eğer orada yoksa)
-      if (milkShakeCategory) {
-        const alreadyInBottomRow = bottomRowCategories.find(cat => {
-          const catNameLower = cat.name.toLowerCase().trim();
-          return catNameLower === 'milk shakeler' || catNameLower === 'milkshakeler' || (catNameLower.includes('milk') && catNameLower.includes('shake'));
-        });
-        if (!alreadyInBottomRow) {
-          bottomRowCategories.push(milkShakeCategory);
-        }
       }
       
-      // Belirtilen kategorilerde olmayan diğer kategorileri ekle (case-insensitive)
-      // Milk Shakeler'i kesinlikle ekleme
-      const allSpecifiedNamesLower = [...topRowCategoryNames, ...bottomRowCategoryNames].map(name => name.toLowerCase().trim());
-      categories.forEach(cat => {
-        const catNameLower = cat.name.toLowerCase().trim();
-        // Milk Shakeler/Milkshakeler'i otherCategories'e ekleme
-        const isMilkShake = catNameLower === 'milk shakeler' || catNameLower === 'milkshakeler' || (catNameLower.includes('milk') && catNameLower.includes('shake'));
-        const isInTopRow = topRowCategories.some(tc => tc.id === cat.id);
-        const isInBottomRow = bottomRowCategories.some(bc => bc.id === cat.id);
-        
-        if (!allSpecifiedNamesLower.includes(catNameLower) && !isMilkShake && !isInTopRow && !isInBottomRow) {
-          otherCategories.push(cat);
+      var sorted = catList.slice().sort(function (a, b) {
+        var oa = typeof a.order_index === 'number' ? a.order_index : parseInt(a.order_index, 10) || 0;
+        var ob = typeof b.order_index === 'number' ? b.order_index : parseInt(b.order_index, 10) || 0;
+        if (oa !== ob) return oa - ob;
+        return (Number(a.id) || 0) - (Number(b.id) || 0);
+      });
+      
+      var n = sorted.length;
+      var chunk0 = [];
+      var chunk1 = [];
+      var chunk2 = [];
+      if (n > 0) {
+        function cmpOrder(a, b) {
+          var oa = typeof a.order_index === 'number' ? a.order_index : parseInt(a.order_index, 10) || 0;
+          var ob = typeof b.order_index === 'number' ? b.order_index : parseInt(b.order_index, 10) || 0;
+          if (oa !== ob) return oa - ob;
+          return (Number(a.id) || 0) - (Number(b.id) || 0);
         }
-      });
-      
-      // Yan Ürünler kategorisini bul
-      const yanUrunlerCategory = categories.find(cat => cat.id === 999999 || cat.name === 'Yan Ürünler');
-      
-      // Üst satıra diğer kategorileri de ekle (eğer yer varsa)
-      // Milk Shakeler'i üst satırdan kesinlikle çıkar
-      const firstRow = [...topRowCategories, ...otherCategories].filter(cat => {
-        const catNameLower = cat.name.toLowerCase().trim();
-        return catNameLower !== 'milk shakeler' && catNameLower !== 'milkshakeler' && !(catNameLower.includes('milk') && catNameLower.includes('shake'));
-      });
-      // Alt satıra Yan Ürünler kategorisini ekle (eğer varsa)
-      const secondRow = [...bottomRowCategories];
-      if (yanUrunlerCategory && !secondRow.find(cat => cat.id === yanUrunlerCategory.id)) {
-        secondRow.push(yanUrunlerCategory);
+        /* Selçuklu Mevlevi Mutfağı — Ara Sıcaklar + Çorbalar 3. satırda */
+        function isSelcukluMevleviPinnedRow3(cat) {
+          var raw = (cat.name && String(cat.name).toLowerCase()) || '';
+          if (raw.indexOf('selçuklu') === -1 && raw.indexOf('selcuklu') === -1) return false;
+          if (raw.indexOf('mevlevi') === -1) return false;
+          var araSicak = (raw.indexOf('ara') !== -1) && (raw.indexOf('sıcak') !== -1 || raw.indexOf('sicak') !== -1);
+          var corba = raw.indexOf('çorba') !== -1 || raw.indexOf('corba') !== -1;
+          return araSicak || corba;
+        }
+        function estimateTabWidth(cat) {
+          var nm = (cat.name && String(cat.name)) || '';
+          return nm.length * 13 + 52;
+        }
+        var pinned = [];
+        var rest = [];
+        for (var pi = 0; pi < sorted.length; pi++) {
+          if (isSelcukluMevleviPinnedRow3(sorted[pi])) pinned.push(sorted[pi]);
+          else rest.push(sorted[pi]);
+        }
+        var rows = [[], [], []];
+        var rowWeight = [0, 0, 0];
+        for (var ri = 0; ri < rest.length; ri++) {
+          var c = rest[ri];
+          var w = estimateTabWidth(c);
+          var pick = 0;
+          if (rowWeight[1] < rowWeight[pick]) pick = 1;
+          if (rowWeight[2] < rowWeight[pick]) pick = 2;
+          rows[pick].push(c);
+          rowWeight[pick] += w;
+        }
+        for (var pj = 0; pj < pinned.length; pj++) {
+          rows[2].push(pinned[pj]);
+        }
+        rows[0].sort(cmpOrder);
+        rows[1].sort(cmpOrder);
+        rows[2].sort(cmpOrder);
+        chunk0 = rows[0];
+        chunk1 = rows[1];
+        chunk2 = rows[2];
       }
       
       // Soft pastel renk paleti (çeşitli renkler - flu tonlar)
@@ -10364,21 +10930,29 @@ function generateMobileHTML(serverURL) {
         return softColors[index];
       };
       
-      row1.innerHTML = firstRow.map((cat, index) => {
+      function categoryTabButtonHtml(cat) {
         const colors = getCategoryColor(cat.id);
         const isActive = selectedCategoryId === cat.id;
         const activeBg = colors.hover;
         const activeBorder = colors.border;
         return '<button class="category-tab ' + (isActive ? 'active' : '') + '" onclick="selectCategory(' + cat.id + ')" style="background: ' + (isActive ? activeBg : colors.bg) + '; border-color: ' + (isActive ? activeBorder : colors.border) + '; color: ' + colors.text + '; box-shadow: 0 2px 8px rgba(0,0,0,0.08); font-weight: ' + (isActive ? '700' : '600') + ';" onmouseover="if(!this.classList.contains(\\'active\\')) { this.style.background=\\'' + colors.hover + '\\'; this.style.transform=\\'translateY(-2px)\\'; }" onmouseout="if(!this.classList.contains(\\'active\\')) { this.style.background=\\'' + colors.bg + '\\'; this.style.transform=\\'translateY(0)\\'; }">' + cat.name + '</button>';
-      }).join('');
+      }
       
-      row2.innerHTML = secondRow.map((cat, index) => {
-        const colors = getCategoryColor(cat.id);
-        const isActive = selectedCategoryId === cat.id;
-        const activeBg = colors.hover;
-        const activeBorder = colors.border;
-        return '<button class="category-tab ' + (isActive ? 'active' : '') + '" onclick="selectCategory(' + cat.id + ')" style="background: ' + (isActive ? activeBg : colors.bg) + '; border-color: ' + (isActive ? activeBorder : colors.border) + '; color: ' + colors.text + '; box-shadow: 0 2px 8px rgba(0,0,0,0.08); font-weight: ' + (isActive ? '700' : '600') + ';" onmouseover="if(!this.classList.contains(\\'active\\')) { this.style.background=\\'' + colors.hover + '\\'; this.style.transform=\\'translateY(-2px)\\'; }" onmouseout="if(!this.classList.contains(\\'active\\')) { this.style.background=\\'' + colors.bg + '\\'; this.style.transform=\\'translateY(0)\\'; }">' + cat.name + '</button>';
-      }).join('');
+      function fillCategoryRow(el, rowCats) {
+        if (!el) return;
+        if (!rowCats.length) {
+          el.style.display = 'none';
+          el.innerHTML = '';
+          return;
+        }
+        el.style.display = 'flex';
+        el.style.gridTemplateColumns = '';
+        el.innerHTML = rowCats.map(categoryTabButtonHtml).join('');
+      }
+      
+      fillCategoryRow(row1, chunk0);
+      fillCategoryRow(row2, chunk1);
+      fillCategoryRow(row3, chunk2);
     }
     
     // PERFORMANS: Kategori bazlı ürün cache'i - aynı kategoriye tekrar tıklanınca API çağrısı yapma
@@ -10600,7 +11174,9 @@ function generateMobileHTML(serverURL) {
         const cardId = 'product-card-' + prod.id;
         // Cache'de varsa hemen göster, yoksa placeholder
         const cachedImageUrl = prod.image && imageCache[prod.image] ? imageCache[prod.image] : null;
-        const backgroundStyle = cachedImageUrl ? 'background-image: url(' + cachedImageUrl + ');' : 'background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);';
+        const backgroundStyle = isSultanMobile
+          ? 'background: #ffffff;'
+          : (cachedImageUrl ? 'background-image: url(' + cachedImageUrl + ');' : 'background: linear-gradient(135deg, #f3f4f6 0%, #e5e7eb 100%);');
         const trackStock = prod.trackStock === true;
         const stock = trackStock && prod.stock !== undefined ? (prod.stock || 0) : null;
         const isOutOfStock = trackStock && stock !== null && stock === 0;
@@ -10635,7 +11211,10 @@ function generateMobileHTML(serverURL) {
       }).join('');
       
       // PERFORMANS: Resimleri akıllı yükleme - sadece yoksa yükle, hızlı batch'ler
-      const productsToLoad = filtered.filter(prod => prod.image && !imageCache[prod.image]);
+      // Sultan Somatı: kartlar düz beyaz; ürün görseli arka planda kullanılmaz
+      const productsToLoad = isSultanMobile
+        ? []
+        : filtered.filter(prod => prod.image && !imageCache[prod.image]);
       const priorityProducts = productsToLoad.slice(0, 8); // İlk 8 ürün öncelikli
       const otherProducts = productsToLoad.slice(8);
       
@@ -11617,8 +12196,11 @@ function startAPIServer() {
 
   function getLocalCategoriesWithYanUrunler() {
     const YAN_URUNLER_CATEGORY_ID = 999999;
-    const base = Array.isArray(db.categories) ? [...db.categories] : [];
+    let base = Array.isArray(db.categories) ? [...db.categories] : [];
     base.sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+    if (activeBranchKey === 'sultansomati') {
+      return base.filter((c) => !isYanUrunlerCategoryForFilter(c));
+    }
     if (!base.find(c => c.id === YAN_URUNLER_CATEGORY_ID)) {
       base.push({
         id: YAN_URUNLER_CATEGORY_ID,
@@ -11659,7 +12241,11 @@ function startAPIServer() {
         if (categories.length === 0) {
           return res.json(getLocalCategoriesWithYanUrunler());
         }
-        // Yan Ürünler kategorisini ekle
+        if (activeBranchKey === 'sultansomati') {
+          const filtered = categories.filter((c) => !isYanUrunlerCategoryForFilter(c));
+          return res.json(filtered);
+        }
+        // Yan Ürünler kategorisini ekle (Makara vb.)
         const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
         if (!categories.find(c => c.id === YAN_URUNLER_CATEGORY_ID)) {
           categories.push({
@@ -11668,7 +12254,7 @@ function startAPIServer() {
             order_index: 9999
           });
         }
-        
+
         res.json(categories);
       } else {
         // Firebase yoksa local database'den çek
@@ -11685,6 +12271,10 @@ function startAPIServer() {
     const categoryId = req.query.category_id;
     try {
       const YAN_URUNLER_CATEGORY_ID = 999999; // Özel ID
+
+      if (activeBranchKey === 'sultansomati' && categoryId && Number(categoryId) === YAN_URUNLER_CATEGORY_ID) {
+        return res.json([]);
+      }
       
       // Yan Ürünler kategorisi seçildiyse yan ürünleri döndür
       if (categoryId && Number(categoryId) === YAN_URUNLER_CATEGORY_ID) {
@@ -11710,13 +12300,7 @@ function startAPIServer() {
         
         snapshot.forEach((doc) => {
           const firebaseProduct = doc.data();
-          const product = {
-            id: typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id) : firebaseProduct.id,
-            name: firebaseProduct.name || '',
-            category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id) : firebaseProduct.category_id,
-            price: parseFloat(firebaseProduct.price) || 0,
-            image: firebaseProduct.image || null
-          };
+          const product = mapFirebaseProductToLocal(firebaseProduct);
           
           // Kategori filtresi varsa uygula
           if (!categoryId || product.category_id === Number(categoryId)) {
@@ -11741,13 +12325,23 @@ function startAPIServer() {
         }
       }
 
-      // PERFORMANS: Stok bilgisini sadece local'den al (Firebase çağrısı yok - daha hızlı)
+      // PERFORMANS: Stok + yalnızca yerelde olan base64 görseli birleştir (Firebase'de image yok)
       const productsWithStock = products.map((product) => {
         const localProduct = db.products.find(p => p.id === product.id);
         const trackStock = localProduct?.trackStock === true;
         const stock = trackStock ? (localProduct?.stock !== undefined ? localProduct.stock : 0) : undefined;
+        let imageOut = product.image;
+        if (
+          localProduct &&
+          typeof localProduct.image === 'string' &&
+          localProduct.image.startsWith('data:image') &&
+          (imageOut == null || imageOut === '')
+        ) {
+          imageOut = localProduct.image;
+        }
         return {
           ...product,
+          image: imageOut,
           trackStock,
           stock
         };
@@ -12007,6 +12601,9 @@ function startAPIServer() {
   });
 
   appExpress.get('/api/tables', (req, res) => {
+    if (activeBranchKey === 'sultansomati') {
+      return res.json(buildSultanTablesListForApi(db));
+    }
     const tables = [];
     for (let i = 1; i <= 20; i++) {
       const tableId = `inside-${i}`;
@@ -12420,24 +13017,8 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Aktarılacak ürün bulunamadı' });
       }
 
-      // Hedef masa bilgilerini al (masa adı ve tipi)
-      let targetTableName = '';
-      let targetTableType = sourceOrder.table_type; // Varsayılan olarak kaynak masanın tipi
-
-      // Masa ID'sinden masa bilgilerini çıkar
-      if (targetTableId.startsWith('inside-')) {
-        targetTableName = `Masa ${targetTableId.replace('inside-', '')}`;
-        targetTableType = 'inside';
-      } else if (targetTableId.startsWith('outside-')) {
-        const num = parseInt(targetTableId.replace('outside-', ''), 10);
-        const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
-        targetTableName = `Masa ${OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num)}`;
-        targetTableType = 'outside';
-      } else if (targetTableId.startsWith('package-')) {
-        const parts = targetTableId.split('-');
-        targetTableName = `Paket ${parts[parts.length - 1]}`;
-        targetTableType = parts[1] || sourceOrder.table_type; // package-{type}-{number}
-      }
+      const targetTableName = getTableNameFromId(targetTableId);
+      const targetTableType = getTableTypeFromId(targetTableId);
 
       // Kaynak siparişin tüm bilgilerini koru (order_date, order_time, order_note, total_amount)
       // Sadece table_id, table_name ve table_type'ı güncelle
@@ -12723,36 +13304,62 @@ function startAPIServer() {
     const protocol = req.protocol || 'http';
     const host = req.get('host') || 'localhost:3000';
     const baseURL = `${protocol}://${host}`;
-    
+    const sultanManifest = activeBranchKey === 'sultansomati';
+
     const manifest = {
-      "name": "MAKARA Mobil Sipariş",
-      "short_name": "MAKARA Mobil",
-      "description": "MAKARA Satış Sistemi - Mobil Personel Arayüzü",
+      "name": sultanManifest ? "Sultan Somatı Mobil Sipariş" : "MAKARA Mobil Sipariş",
+      "short_name": sultanManifest ? "Sultan Somatı" : "MAKARA Mobil",
+      "description": sultanManifest
+        ? "Sultan Somatı Satış Sistemi - Mobil Personel Arayüzü"
+        : "MAKARA Satış Sistemi - Mobil Personel Arayüzü",
       "start_url": `${baseURL}/mobile`,
       "display": "standalone",
-      "background_color": "#ec4899",
-      "theme_color": "#ec4899",
+      "background_color": sultanManifest ? "#064e3b" : "#ec4899",
+      "theme_color": sultanManifest ? "#059669" : "#ec4899",
       "orientation": "portrait",
-      "icons": [
-        {
-          "src": `${baseURL}/mobilpersonel.png`,
-          "sizes": "512x512",
-          "type": "image/png",
-          "purpose": "any maskable"
-        },
-        {
-          "src": `${baseURL}/mobilpersonel.png`,
-          "sizes": "192x192",
-          "type": "image/png",
-          "purpose": "any maskable"
-        }
-      ]
+      "icons": sultanManifest
+        ? [
+            {
+              src: `${baseURL}/sultan-mobile-icon.svg`,
+              sizes: '512x512',
+              type: 'image/svg+xml',
+              purpose: 'any maskable'
+            },
+            {
+              src: `${baseURL}/sultan-mobile-icon.svg`,
+              sizes: '192x192',
+              type: 'image/svg+xml',
+              purpose: 'any maskable'
+            }
+          ]
+        : [
+            {
+              src: `${baseURL}/mobilpersonel.png`,
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'any maskable'
+            },
+            {
+              src: `${baseURL}/mobilpersonel.png`,
+              sizes: '192x192',
+              type: 'image/png',
+              purpose: 'any maskable'
+            }
+          ]
     };
     
     res.setHeader('Content-Type', 'application/manifest+json');
     res.json(manifest);
   });
   
+  // Sultan Somatı mobil: markasız düz renk ikon (PWA / sekme; Makara logosu yok)
+  appExpress.get('/sultan-mobile-icon.svg', (req, res) => {
+    res.setHeader('Content-Type', 'image/svg+xml; charset=utf-8');
+    res.send(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="96" fill="#059669"/></svg>'
+    );
+  });
+
   // Mobil personel icon'u - public klasöründen serve et
   appExpress.get('/mobilpersonel.png', (req, res) => {
     const iconPath = path.join(__dirname, '..', 'public', 'mobilpersonel.png');
@@ -12765,7 +13372,7 @@ function startAPIServer() {
   });
 
   appExpress.get('/mobile', (req, res) => {
-    res.send(generateMobileHTML(serverURL));
+    res.send(generateMobileHTML(serverURL, activeBranchKey));
   });
 
   // Mesaj gönderme API endpoint'i
@@ -13690,6 +14297,13 @@ async function syncSingleTableToFirebase(tableId) {
       tableNumber = parseInt(tableId.replace('package-outside-', '')) || 0;
       tableName = `Paket ${tableNumber}`;
       tableType = 'outside';
+    } else {
+      const st = parseSultanTableIdForMain(tableId);
+      if (st) {
+        tableNumber = st.number;
+        tableName = st.name;
+        tableType = st.type;
+      }
     }
 
     const isOccupied = !!order;

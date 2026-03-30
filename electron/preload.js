@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getBranchOptions: () => ipcRenderer.invoke('get-branch-options'),
   getActiveBranch: () => ipcRenderer.invoke('get-active-branch'),
   activateBranch: (branchKey) => ipcRenderer.invoke('activate-branch', branchKey),
+  sultanReinstallMenuBundle: () => ipcRenderer.invoke('sultan-reinstall-menu-bundle'),
   getCategories: () => ipcRenderer.invoke('get-categories'),
   createCategory: (categoryData) => ipcRenderer.invoke('create-category', categoryData),
   updateCategory: (categoryId, categoryData) => ipcRenderer.invoke('update-category', categoryId, categoryData),

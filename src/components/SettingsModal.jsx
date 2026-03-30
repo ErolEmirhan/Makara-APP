@@ -2,6 +2,56 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import Toast from './Toast';
 
+const PRODUCT_IMAGE_MAX_EDGE = 960;
+const PRODUCT_IMAGE_DATA_URL_MAX_LEN = 900000;
+
+function fileToCompressedJpegDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const data = reader.result;
+      const img = new Image();
+      img.onload = () => {
+        try {
+          let w = img.naturalWidth;
+          let h = img.naturalHeight;
+          if (!w || !h) {
+            reject(new Error('Geçersiz görsel'));
+            return;
+          }
+          if (w > PRODUCT_IMAGE_MAX_EDGE || h > PRODUCT_IMAGE_MAX_EDGE) {
+            if (w >= h) {
+              h = Math.round((h * PRODUCT_IMAGE_MAX_EDGE) / w);
+              w = PRODUCT_IMAGE_MAX_EDGE;
+            } else {
+              w = Math.round((w * PRODUCT_IMAGE_MAX_EDGE) / h);
+              h = PRODUCT_IMAGE_MAX_EDGE;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          let q = 0.88;
+          let dataUrl = canvas.toDataURL('image/jpeg', q);
+          while (dataUrl.length > PRODUCT_IMAGE_DATA_URL_MAX_LEN && q > 0.5) {
+            q -= 0.07;
+            dataUrl = canvas.toDataURL('image/jpeg', q);
+          }
+          resolve(dataUrl);
+        } catch (e) {
+          reject(e);
+        }
+      };
+      img.onerror = () => reject(new Error('Görsel okunamadı'));
+      img.src = data;
+    };
+    reader.onerror = () => reject(reader.error || new Error('Dosya okunamadı'));
+    reader.readAsDataURL(file);
+  });
+}
+
 const SettingsModal = ({
   onClose,
   onProductsUpdated,
@@ -49,7 +99,9 @@ const SettingsModal = ({
   const [editingCategory, setEditingCategory] = useState(null);
   const [newCategoryName, setNewCategoryName] = useState('');
   const productFormRef = useRef(null);
+  const productImageInputRef = useRef(null);
   const [categoryError, setCategoryError] = useState('');
+  const [productImageBusy, setProductImageBusy] = useState(false);
   
   // Printer management state
   const [printers, setPrinters] = useState({ usb: [], network: [], all: [] });
@@ -65,6 +117,7 @@ const SettingsModal = ({
   const [firebaseImages, setFirebaseImages] = useState([]);
   const [isLoadingFirebaseImages, setIsLoadingFirebaseImages] = useState(false);
   const [isCreatingImageRecords, setIsCreatingImageRecords] = useState(false);
+  const [sultanMenuReinstalling, setSultanMenuReinstalling] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
   
   // Integration state
@@ -523,9 +576,9 @@ const SettingsModal = ({
     }
 
     try {
+      let result;
       if (editingProduct) {
-        // Update product
-        await window.electronAPI.updateProduct({
+        result = await window.electronAPI.updateProduct({
           id: editingProduct.id,
           name: productForm.name,
           category_id: parseInt(productForm.category_id),
@@ -533,26 +586,51 @@ const SettingsModal = ({
           image: productForm.image || null
         });
       } else {
-        // Create product
-        await window.electronAPI.createProduct({
+        result = await window.electronAPI.createProduct({
           name: productForm.name,
           category_id: parseInt(productForm.category_id),
           price: price,
           image: productForm.image || null
         });
       }
-      
+
+      if (!result || result.success === false) {
+        showToast(result?.error || 'Ürün kaydedilemedi', 'error');
+        return;
+      }
+
       // Reset form
       setProductForm({ name: '', category_id: selectedCategory?.id || '', price: '', image: '' });
       setEditingProduct(null);
       loadAllProducts();
-      
-      // Ana uygulamayı yenile
+
       if (onProductsUpdated) {
         onProductsUpdated();
       }
+      showToast(editingProduct ? 'Ürün güncellendi' : 'Ürün eklendi', 'success');
     } catch (error) {
       showToast('Ürün kaydedilemedi: ' + error.message, 'error');
+    }
+  };
+
+  const handleProductImageFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      showToast('Lütfen bir resim dosyası seçin', 'warning');
+      return;
+    }
+    setProductImageBusy(true);
+    try {
+      const dataUrl = await fileToCompressedJpegDataUrl(file);
+      setProductForm((prev) => ({ ...prev, image: dataUrl }));
+      showToast('Görsel hazır. Kaydet ile veritabanına yazılır.', 'success');
+    } catch (err) {
+      console.error(err);
+      showToast('Görsel işlenemedi', 'error');
+    } finally {
+      setProductImageBusy(false);
     }
   };
 
@@ -883,7 +961,7 @@ const SettingsModal = ({
 
   const content = (
     <>
-      {!isPage && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400" />}
+      {!isPage && <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-pink-400 theme-sultan:to-emerald-400" />}
       {!isPage && (
         <button
           onClick={onClose}
@@ -911,7 +989,7 @@ const SettingsModal = ({
       )}
 
         <div className="text-center mb-6 pt-2">
-          <div className="w-14 h-14 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+          <div className="w-14 h-14 bg-pink-500 theme-sultan:bg-emerald-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
             <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -928,7 +1006,7 @@ const SettingsModal = ({
               onClick={() => setActiveTab('password')}
               className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
                 activeTab === 'password'
-                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-600 theme-sultan:text-emerald-600 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
               }`}
             >
@@ -945,7 +1023,7 @@ const SettingsModal = ({
                   onClick={() => setActiveTab('branch')}
                   className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
                     activeTab === 'branch'
-                      ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                      ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-600 theme-sultan:text-emerald-600 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm'
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
                   }`}
                 >
@@ -961,7 +1039,7 @@ const SettingsModal = ({
               onClick={() => setActiveTab('products')}
               className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
                 activeTab === 'products'
-                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-600 theme-sultan:text-emerald-600 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
               }`}
             >
@@ -975,7 +1053,7 @@ const SettingsModal = ({
               onClick={() => setActiveTab('printers')}
               className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
                 activeTab === 'printers'
-                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-600 theme-sultan:text-emerald-600 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
               }`}
             >
@@ -989,7 +1067,7 @@ const SettingsModal = ({
               onClick={() => setActiveTab('stock')}
               className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
                 activeTab === 'stock'
-                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-600 theme-sultan:text-emerald-600 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
               }`}
             >
@@ -1003,7 +1081,7 @@ const SettingsModal = ({
               onClick={() => setActiveTab('integration')}
               className={`px-6 py-3 text-sm font-medium transition-all rounded-lg flex items-center space-x-2 ${
                 activeTab === 'integration'
-                  ? 'bg-pink-50 text-pink-600 border border-pink-200 shadow-sm'
+                  ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-600 theme-sultan:text-emerald-600 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm'
                   : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
               }`}
             >
@@ -1030,14 +1108,14 @@ const SettingsModal = ({
                       key={key}
                       className={`flex items-center gap-4 p-4 rounded-xl border-2 cursor-pointer transition-all ${
                         branchDraft === key
-                          ? 'border-pink-400 bg-pink-50/80 shadow-sm'
+                          ? 'border-pink-400 theme-sultan:border-emerald-400 bg-pink-50 theme-sultan:bg-emerald-50/80 shadow-sm'
                           : 'border-gray-200 bg-white hover:border-gray-300'
                       }`}
                     >
                       <input
                         type="radio"
                         name="settings-branch"
-                        className="w-4 h-4 text-pink-600"
+                        className="w-4 h-4 text-pink-600 theme-sultan:text-emerald-600"
                         checked={branchDraft === key}
                         onChange={() => setBranchDraft(key)}
                       />
@@ -1066,10 +1144,43 @@ const SettingsModal = ({
                     setBranchChanging(false);
                   }
                 }}
-                className="w-full px-6 py-3 bg-pink-500 hover:bg-pink-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-semibold transition-all shadow-sm"
+                className="w-full px-6 py-3 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl font-semibold transition-all shadow-sm"
               >
                 {branchChanging ? 'Uygulanıyor…' : 'Şubeyi uygula'}
               </button>
+
+              {(currentBranchKey || '').trim().toLowerCase() === 'sultansomati' && window.electronAPI?.sultanReinstallMenuBundle && (
+                <div className="rounded-xl border-2 border-amber-200 bg-amber-50/80 p-4 space-y-3">
+                  <p className="text-sm text-amber-950 font-medium">Sultan Somatı tam menü paketi</p>
+                  <p className="text-xs text-amber-900/90 leading-relaxed">
+                    Uygulamaya gömülü güncel menüyü Firebase ve bu cihazdaki kataloga yazar. Mevcut tüm kategoriler ve ürünler silinir; yalnızca paketteki 22 kategori ve 129 ürün kalır.
+                  </p>
+                  <button
+                    type="button"
+                    disabled={sultanMenuReinstalling}
+                    onClick={async () => {
+                      if (!window.confirm('Tüm Sultan kategorileri ve ürünleri silinip paket menüyle değiştirilecek. Devam edilsin mi?')) return;
+                      setSultanMenuReinstalling(true);
+                      try {
+                        const res = await window.electronAPI.sultanReinstallMenuBundle();
+                        if (res?.success) {
+                          showToast(res.message || 'Menü güncellendi', 'success');
+                          if (typeof onProductsUpdated === 'function') onProductsUpdated();
+                        } else {
+                          showToast(res?.error || 'İşlem başarısız', 'error');
+                        }
+                      } catch (e) {
+                        showToast(e?.message || 'Hata', 'error');
+                      } finally {
+                        setSultanMenuReinstalling(false);
+                      }
+                    }}
+                    className="w-full px-4 py-2.5 rounded-lg bg-amber-700 hover:bg-amber-800 text-white text-sm font-semibold disabled:opacity-50"
+                  >
+                    {sultanMenuReinstalling ? 'Yükleniyor…' : 'Paket menüyü yeniden yükle'}
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
@@ -1089,7 +1200,7 @@ const SettingsModal = ({
                       setCurrentPassword(val);
                       setPasswordError('');
                     }}
-                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 transition-all bg-white"
                     placeholder="4 haneli parola"
                   />
                 </div>
@@ -1107,7 +1218,7 @@ const SettingsModal = ({
                       setNewPassword(val);
                       setPasswordError('');
                     }}
-                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 transition-all bg-white"
                     placeholder="4 haneli yeni parola"
                   />
                 </div>
@@ -1125,7 +1236,7 @@ const SettingsModal = ({
                       setConfirmPassword(val);
                       setPasswordError('');
                     }}
-                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 transition-all bg-white"
                     placeholder="Yeni parolayı tekrar girin"
                   />
                 </div>
@@ -1137,14 +1248,14 @@ const SettingsModal = ({
                 )}
 
                 {passwordSuccess && (
-                  <div className="p-3 bg-green-50 border border-green-200 rounded-xl text-green-600 text-sm">
+                  <div className="p-3 bg-fuchsia-50 theme-sultan:bg-green-50 border border-fuchsia-200 theme-sultan:border-green-200 rounded-xl text-fuchsia-600 theme-sultan:text-green-600 text-sm">
                     ✅ Parola başarıyla değiştirildi!
                   </div>
                 )}
 
                 <button
                   onClick={handlePasswordChange}
-                  className="w-full px-6 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
+                  className="w-full px-6 py-3 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                 >
                   Parolayı Değiştir
                 </button>
@@ -1169,7 +1280,7 @@ const SettingsModal = ({
                         type="text"
                         value={productForm.name}
                         onChange={(e) => setProductForm({ ...productForm, name: e.target.value })}
-                        className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white"
+                        className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 bg-white"
                         placeholder="Ürün adı"
                         required
                       />
@@ -1184,18 +1295,18 @@ const SettingsModal = ({
                         onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
                         className={`w-full px-4 py-3 rounded-lg border transition-all text-left flex items-center justify-between ${
                           productForm.category_id
-                            ? 'border-pink-500 bg-pink-50'
-                            : 'border-gray-300 hover:border-pink-400'
-                        } focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white`}
+                            ? 'border-pink-500 theme-sultan:border-emerald-500 bg-pink-50 theme-sultan:bg-emerald-50'
+                            : 'border-gray-300 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400'
+                        } focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 bg-white`}
                       >
-                        <span className={productForm.category_id ? 'text-pink-700 font-medium' : 'text-gray-500'}>
+                        <span className={productForm.category_id ? 'text-pink-700 theme-sultan:text-emerald-700 font-medium' : 'text-gray-500'}>
                           {productForm.category_id
                             ? categories.find(c => c.id === parseInt(productForm.category_id))?.name || 'Kategori Seçin'
                             : 'Kategori Seçin'}
                         </span>
                         <svg 
                           className={`w-5 h-5 transition-transform ${showCategoryDropdown ? 'rotate-180' : ''} ${
-                            productForm.category_id ? 'text-pink-600' : 'text-gray-400'
+                            productForm.category_id ? 'text-pink-600 theme-sultan:text-emerald-600' : 'text-gray-400'
                           }`}
                           fill="none" 
                           stroke="currentColor" 
@@ -1215,16 +1326,16 @@ const SettingsModal = ({
                                 setProductForm({ ...productForm, category_id: cat.id.toString() });
                                 setShowCategoryDropdown(false);
                               }}
-                              className={`w-full px-4 py-3 text-left hover:bg-pink-50 transition-all flex items-center space-x-3 ${
+                              className={`w-full px-4 py-3 text-left hover:bg-pink-50 theme-sultan:hover:bg-pink-50 theme-sultan:bg-emerald-50 transition-all flex items-center space-x-3 ${
                                 productForm.category_id === cat.id.toString()
-                                  ? 'bg-pink-500 text-white'
+                                  ? 'bg-pink-500 theme-sultan:bg-emerald-500 text-white'
                                   : 'text-gray-700'
                               }`}
                             >
                               <div className={`w-2 h-2 rounded-full ${
                                 productForm.category_id === cat.id.toString()
                                   ? 'bg-white'
-                                  : 'bg-pink-500'
+                                  : 'bg-pink-500 theme-sultan:bg-emerald-500'
                               }`}></div>
                               <span className="font-medium">{cat.name}</span>
                               {productForm.category_id === cat.id.toString() && (
@@ -1260,7 +1371,7 @@ const SettingsModal = ({
                             : normalized;
                           setProductForm({ ...productForm, price: finalValue });
                         }}
-                        className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white"
+                        className="w-full px-4 py-2 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 bg-white"
                         placeholder="0.00"
                         required
                       />
@@ -1268,10 +1379,52 @@ const SettingsModal = ({
 
                   </div>
 
+                  <div className="rounded-xl border border-dashed border-gray-300 bg-white/80 p-4 space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-medium text-gray-700">Ürün görseli</span>
+                      <input
+                        ref={productImageInputRef}
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif"
+                        className="hidden"
+                        onChange={handleProductImageFile}
+                      />
+                      <button
+                        type="button"
+                        disabled={productImageBusy}
+                        onClick={() => productImageInputRef.current?.click()}
+                        className="px-4 py-2 rounded-lg border border-pink-300 theme-sultan:border-emerald-300 bg-pink-50 theme-sultan:bg-emerald-50 hover:bg-pink-100 theme-sultan:hover:bg-emerald-100 text-sm font-semibold text-pink-800 theme-sultan:text-emerald-800 disabled:opacity-50"
+                      >
+                        {productImageBusy ? 'İşleniyor…' : 'Görsel ekle'}
+                      </button>
+                      {productForm.image ? (
+                        <button
+                          type="button"
+                          onClick={() => setProductForm((prev) => ({ ...prev, image: '' }))}
+                          className="px-4 py-2 rounded-lg border border-gray-300 bg-gray-50 hover:bg-gray-100 text-sm font-medium text-gray-700"
+                        >
+                          Görseli kaldır
+                        </button>
+                      ) : null}
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Seçilen görsel sıkıştırılıp base64 olarak yerel veritabanında saklanır. Kaydet / Güncelle ile yazılır.
+                    </p>
+                    {productForm.image ? (
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 p-2 inline-block max-w-full">
+                        <img
+                          src={productForm.image}
+                          alt="Ürün önizleme"
+                          className="max-h-44 max-w-full rounded-md object-contain"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+
                   <div className="flex space-x-3">
                     <button
                       type="submit"
-                      className="flex-1 px-6 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
+                      className="flex-1 px-6 py-3 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                     >
                       {editingProduct ? 'Güncelle' : 'Ekle'}
                     </button>
@@ -1296,7 +1449,7 @@ const SettingsModal = ({
                 <div className="mb-6">
                   <div className="bg-gray-50 rounded-xl p-4 border border-gray-200">
                     <div className="flex items-center space-x-2 mb-3">
-                      <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="w-5 h-5 text-pink-600 theme-sultan:text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                       </svg>
                       <span className="text-sm font-semibold text-gray-700">Kategori Filtrele</span>
@@ -1306,8 +1459,8 @@ const SettingsModal = ({
                         onClick={() => setSelectedCategory(null)}
                         className={`px-4 py-2.5 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 ${
                           !selectedCategory
-                            ? 'bg-pink-500 text-white shadow-md'
-                            : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200 hover:border-purple-300'
+                            ? 'bg-pink-500 theme-sultan:bg-emerald-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 hover:bg-pink-50 theme-sultan:hover:bg-pink-50 theme-sultan:bg-emerald-50 border-2 border-gray-200 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400'
                         }`}
                       >
                         <div className="flex items-center space-x-2">
@@ -1323,13 +1476,13 @@ const SettingsModal = ({
                             onClick={() => setSelectedCategory(cat)}
                             className={`px-4 py-2.5 rounded-xl font-medium transition-all duration-300 transform hover:scale-105 ${
                               selectedCategory?.id === cat.id
-                                ? 'bg-pink-500 text-white shadow-md'
-                                : 'bg-white text-gray-700 hover:bg-purple-50 border-2 border-gray-200 hover:border-purple-300'
+                                ? 'bg-pink-500 theme-sultan:bg-emerald-500 text-white shadow-md'
+                                : 'bg-white text-gray-700 hover:bg-pink-50 theme-sultan:hover:bg-pink-50 theme-sultan:bg-emerald-50 border-2 border-gray-200 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400'
                             }`}
                           >
                             <div className="flex items-center space-x-2">
                               <div className={`w-2 h-2 rounded-full ${
-                                selectedCategory?.id === cat.id ? 'bg-white' : 'bg-purple-500'
+                                selectedCategory?.id === cat.id ? 'bg-white' : 'bg-pink-600 theme-sultan:bg-emerald-600'
                               }`}></div>
                               <span>{cat.name}</span>
                               {selectedCategory?.id === cat.id && (
@@ -1371,7 +1524,7 @@ const SettingsModal = ({
                                 e.stopPropagation();
                                 handleEditCategory(cat);
                               }}
-                              className="w-6 h-6 bg-pink-500 hover:bg-pink-600 text-white rounded-full flex items-center justify-center shadow-lg transition-all"
+                              className="w-6 h-6 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-full flex items-center justify-center shadow-lg transition-all"
                               title="Kategoriyi Düzenle"
                             >
                               <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1395,7 +1548,7 @@ const SettingsModal = ({
                       ))}
                       <button
                         onClick={() => setShowAddCategoryModal(true)}
-                        className="px-4 py-2.5 rounded-lg font-medium transition-all duration-200 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm hover:shadow-md"
+                        className="px-4 py-2.5 rounded-lg font-medium transition-all duration-200 bg-pink-600 theme-sultan:bg-emerald-600 hover:bg-pink-700 theme-sultan:hover:bg-pink-700 theme-sultan:bg-emerald-700 text-white shadow-sm hover:shadow-md"
                       >
                         <div className="flex items-center space-x-2">
                           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1406,12 +1559,12 @@ const SettingsModal = ({
                       </button>
                     </div>
                     {selectedCategory && (
-                      <div className="mt-3 pt-3 border-t border-purple-200">
+                      <div className="mt-3 pt-3 border-t border-pink-200 theme-sultan:border-emerald-200">
                         <div className="flex items-center justify-between">
                           <span className="text-sm text-gray-600">
-                            <span className="font-semibold text-pink-600">{selectedCategory.name}</span> kategorisinde
+                            <span className="font-semibold text-pink-600 theme-sultan:text-emerald-600">{selectedCategory.name}</span> kategorisinde
                           </span>
-                          <span className="text-sm font-bold text-pink-600">
+                          <span className="text-sm font-bold text-pink-600 theme-sultan:text-emerald-600">
                             {filteredProducts.length} ürün
                           </span>
                         </div>
@@ -1433,12 +1586,21 @@ const SettingsModal = ({
                             <h4 className="font-bold text-gray-900 text-base leading-tight mb-1.5 truncate" title={product.name} style={{ fontWeight: 700 }}>{product.name}</h4>
                             <p className="text-xs text-gray-500 mb-2 truncate">{category?.name || 'Kategori yok'}</p>
                             <div className="inline-block">
-                              <span className="px-3 py-1.5 bg-gradient-to-r from-emerald-50 to-teal-50 text-emerald-700 font-semibold rounded-lg text-sm border border-emerald-200/50">
+                              <span className="px-3 py-1.5 bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-indigo-50 theme-sultan:to-teal-50 text-pink-700 theme-sultan:text-emerald-700 font-semibold rounded-lg text-sm border border-pink-200 theme-sultan:border-emerald-200/50">
                                 {product.price.toFixed(2)} ₺
                               </span>
                             </div>
                           </div>
                         </div>
+                        {product.image ? (
+                          <div className="mb-3 rounded-lg overflow-hidden border border-gray-100 bg-gray-50">
+                            <img
+                              src={product.image}
+                              alt=""
+                              className="w-full max-h-40 object-contain"
+                            />
+                          </div>
+                        ) : null}
                         <div className="flex space-x-2 pt-2 border-t border-gray-100">
                           <button
                             onClick={() => handleEditProduct(product)}
@@ -1473,7 +1635,7 @@ const SettingsModal = ({
               {/* Filtreler */}
               <div className="bg-white rounded-xl p-6 border border-gray-200 shadow-sm">
                 <div className="flex items-center space-x-2 mb-4">
-                  <svg className="w-5 h-5 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-5 h-5 text-pink-600 theme-sultan:text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                   </svg>
                   <h4 className="text-lg font-semibold text-gray-800">Filtrele ve Ara</h4>
@@ -1491,7 +1653,7 @@ const SettingsModal = ({
                         setStockFilterCategory(cat || null);
                         setStockFilterProduct(null);
                       }}
-                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all"
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 bg-white transition-all"
                     >
                       <option value="">Tüm Kategoriler</option>
                       {categories.map(cat => (
@@ -1510,7 +1672,7 @@ const SettingsModal = ({
                         const prod = products.find(p => p.id === prodId);
                         setStockFilterProduct(prod || null);
                       }}
-                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all disabled:bg-gray-50 disabled:text-gray-400"
+                      className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 bg-white transition-all disabled:bg-gray-50 disabled:text-gray-400"
                       disabled={!stockFilterCategory && categories.length > 0}
                     >
                       <option value="">Önce kategori seçin</option>
@@ -1565,7 +1727,7 @@ const SettingsModal = ({
 
               {/* Stok Güncelleme */}
               {stockFilterProduct && (
-                <div data-stock-form className="bg-gradient-to-br from-pink-50 to-rose-50 rounded-xl p-6 border border-pink-200 shadow-sm">
+                <div data-stock-form className="bg-gradient-to-br from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 rounded-xl p-6 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm">
                   <div className="flex items-start justify-between mb-6">
                     <div className="flex-1">
                       <div className="flex items-center space-x-3 mb-2">
@@ -1592,7 +1754,7 @@ const SettingsModal = ({
                                 ? 'text-red-600'
                                 : stockFilterProduct.stock < 10
                                 ? 'text-yellow-600'
-                                : 'text-emerald-600'
+                                : 'text-pink-600 theme-sultan:text-emerald-600'
                               : 'text-gray-400'
                           }`}>
                             {stockFilterProduct.trackStock && stockFilterProduct.stock !== undefined 
@@ -1610,7 +1772,7 @@ const SettingsModal = ({
                       onClick={() => handleToggleStockTracking(stockFilterProduct.id, stockFilterProduct.trackStock)}
                       className={`px-5 py-2.5 rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md flex items-center space-x-2 ${
                         stockFilterProduct.trackStock
-                          ? 'bg-emerald-600 text-white hover:bg-emerald-700'
+                          ? 'bg-pink-600 theme-sultan:bg-emerald-600 text-white hover:bg-pink-700 theme-sultan:hover:bg-pink-700 theme-sultan:bg-emerald-700'
                           : 'bg-gray-300 text-gray-700 hover:bg-gray-400'
                       }`}
                     >
@@ -1634,7 +1796,7 @@ const SettingsModal = ({
                   {stockFilterProduct.trackStock ? (
                     <div className="bg-white rounded-lg p-5 border border-gray-200">
                       <h5 className="text-sm font-semibold text-gray-700 mb-4 flex items-center space-x-2">
-                        <svg className="w-4 h-4 text-pink-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <svg className="w-4 h-4 text-pink-600 theme-sultan:text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                         </svg>
                         <span>Stok Güncelle</span>
@@ -1647,7 +1809,7 @@ const SettingsModal = ({
                           <select
                             value={stockAdjustmentType}
                             onChange={(e) => setStockAdjustmentType(e.target.value)}
-                            className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all"
+                            className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 bg-white transition-all"
                           >
                             <option value="add">➕ Stok Ekle</option>
                             <option value="subtract">➖ Stok Çıkar</option>
@@ -1665,7 +1827,7 @@ const SettingsModal = ({
                               const val = e.target.value.replace(/\D/g, '');
                               setStockAdjustmentAmount(val);
                             }}
-                            className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 bg-white transition-all"
+                            className="w-full px-4 py-2.5 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 bg-white transition-all"
                             placeholder="Miktar girin"
                           />
                         </div>
@@ -1674,7 +1836,7 @@ const SettingsModal = ({
                             onClick={handleStockAdjustment}
                             className={`w-full px-6 py-2.5 rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md flex items-center justify-center space-x-2 ${
                               stockAdjustmentType === 'add'
-                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                ? 'bg-pink-600 theme-sultan:bg-emerald-600 hover:bg-pink-700 theme-sultan:hover:bg-pink-700 theme-sultan:bg-emerald-700 text-white'
                                 : 'bg-red-600 hover:bg-red-700 text-white'
                             }`}
                           >
@@ -1723,7 +1885,7 @@ const SettingsModal = ({
                   </div>
                   <div className="flex items-center space-x-2 text-sm text-gray-600">
                     <div className="flex items-center space-x-1">
-                      <div className="w-3 h-3 rounded-full bg-emerald-500"></div>
+                      <div className="w-3 h-3 rounded-full bg-pink-500 theme-sultan:bg-emerald-500"></div>
                       <span>Yeterli</span>
                     </div>
                     <div className="flex items-center space-x-1">
@@ -1749,7 +1911,7 @@ const SettingsModal = ({
                         ? { color: 'red', bg: 'bg-red-50', border: 'border-red-200', text: 'text-red-700', label: 'Tükendi' }
                         : stock < 10 
                         ? { color: 'yellow', bg: 'bg-yellow-50', border: 'border-yellow-200', text: 'text-yellow-700', label: 'Az Stok' }
-                        : { color: 'emerald', bg: 'bg-emerald-50', border: 'border-emerald-200', text: 'text-emerald-700', label: 'Yeterli' }
+                        : { color: 'emerald', bg: 'bg-pink-50 theme-sultan:bg-emerald-50', border: 'border-pink-200 theme-sultan:border-emerald-200', text: 'text-pink-700 theme-sultan:text-emerald-700', label: 'Yeterli' }
                       : { color: 'gray', bg: 'bg-gray-50', border: 'border-gray-200', text: 'text-gray-500', label: 'Takip Yok' };
                     
                     return (
@@ -1801,7 +1963,7 @@ const SettingsModal = ({
                                   document.querySelector('[data-stock-form]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                                 }, 100);
                               }}
-                              className="px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg transition-all text-sm font-semibold shadow-sm hover:shadow-md flex items-center justify-center space-x-1"
+                              className="px-4 py-2 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-lg transition-all text-sm font-semibold shadow-sm hover:shadow-md flex items-center justify-center space-x-1"
                             >
                               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -1813,7 +1975,7 @@ const SettingsModal = ({
                               className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-sm hover:shadow-md flex items-center justify-center space-x-1 ${
                                 trackStock
                                   ? 'bg-orange-500 hover:bg-orange-600 text-white'
-                                  : 'bg-emerald-500 hover:bg-emerald-600 text-white'
+                                  : 'bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white'
                               }`}
                             >
                               {trackStock ? (
@@ -1873,7 +2035,7 @@ const SettingsModal = ({
                       }}
                       className="sr-only peer"
                     />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-pink-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-pink-500"></div>
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-pink-300 theme-sultan:focus:ring-pink-300 theme-sultan:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-pink-500 theme-sultan:peer-checked:bg-pink-50 theme-sultan:peer-checked:bg-pink-500 theme-sultan:checked:bg-pink-50 theme-sultan:checked:bg-pink-500 theme-sultan:bg-emerald-500"></div>
                   </label>
                 </div>
 
@@ -1893,7 +2055,7 @@ const SettingsModal = ({
                           }));
                         }}
                         placeholder="Trendyol API Key'inizi girin"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 transition-all"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 transition-all"
                       />
                     </div>
                     <div>
@@ -1910,7 +2072,7 @@ const SettingsModal = ({
                           }));
                         }}
                         placeholder="Trendyol API Secret'ınızı girin"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 transition-all"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 transition-all"
                       />
                     </div>
                     <div>
@@ -1927,7 +2089,7 @@ const SettingsModal = ({
                           }));
                         }}
                         placeholder="Trendyol Supplier ID'nizi girin"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 transition-all"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 transition-all"
                       />
                     </div>
                     <div>
@@ -1970,7 +2132,7 @@ const SettingsModal = ({
                         )}
                       </button>
                       {connectionStatus.trendyol === 'success' && (
-                        <div className="flex items-center gap-2 text-green-600">
+                        <div className="flex items-center gap-2 text-fuchsia-600 theme-sultan:text-green-600">
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                           </svg>
@@ -1994,7 +2156,7 @@ const SettingsModal = ({
               <div className="bg-white rounded-xl border-2 border-gray-200 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-emerald-500 rounded-lg flex items-center justify-center shadow-md">
+                    <div className="w-12 h-12 bg-gradient-to-br from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 rounded-lg flex items-center justify-center shadow-md">
                       <span className="text-white font-bold text-lg">Y</span>
                     </div>
                     <div>
@@ -2014,7 +2176,7 @@ const SettingsModal = ({
                       }}
                       className="sr-only peer"
                     />
-                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-pink-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-pink-500"></div>
+                    <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-pink-300 theme-sultan:focus:ring-pink-300 theme-sultan:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-pink-500 theme-sultan:peer-checked:bg-pink-50 theme-sultan:peer-checked:bg-pink-500 theme-sultan:checked:bg-pink-50 theme-sultan:checked:bg-pink-500 theme-sultan:bg-emerald-500"></div>
                   </label>
                 </div>
 
@@ -2034,7 +2196,7 @@ const SettingsModal = ({
                           }));
                         }}
                         placeholder="Yemeksepeti API Key'inizi girin"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 transition-all"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 transition-all"
                       />
                     </div>
                     <div>
@@ -2051,7 +2213,7 @@ const SettingsModal = ({
                           }));
                         }}
                         placeholder="Yemeksepeti API Secret'ınızı girin"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 transition-all"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 transition-all"
                       />
                     </div>
                     <div>
@@ -2068,7 +2230,7 @@ const SettingsModal = ({
                           }));
                         }}
                         placeholder="Yemeksepeti Restaurant ID'nizi girin"
-                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 focus:border-pink-500 transition-all"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 transition-all"
                       />
                     </div>
                     <div>
@@ -2111,7 +2273,7 @@ const SettingsModal = ({
                         )}
                       </button>
                       {connectionStatus.yemeksepeti === 'success' && (
-                        <div className="flex items-center gap-2 text-green-600">
+                        <div className="flex items-center gap-2 text-fuchsia-600 theme-sultan:text-green-600">
                           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                           </svg>
@@ -2135,7 +2297,7 @@ const SettingsModal = ({
               <div className="flex justify-end pt-4 border-t border-gray-200">
                 <button
                   onClick={saveIntegrationSettings}
-                  className="px-6 py-3 bg-gradient-to-r from-pink-500 to-rose-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all transform hover:scale-105 flex items-center gap-2"
+                  className="px-6 py-3 bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-500 theme-sultan:to-emerald-500 text-white rounded-lg font-semibold hover:shadow-lg transition-all transform hover:scale-105 flex items-center gap-2"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -2156,8 +2318,8 @@ const SettingsModal = ({
                   onClick={() => setPrinterSubTab('usb')}
                   className={`px-6 py-3 rounded-lg font-medium transition-all ${
                     printerSubTab === 'usb'
-                            ? 'bg-pink-500 text-white shadow-md'
-                            : 'bg-white text-gray-700 hover:bg-pink-50 border border-gray-300'
+                            ? 'bg-pink-500 theme-sultan:bg-emerald-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 hover:bg-pink-50 theme-sultan:hover:bg-pink-50 theme-sultan:bg-emerald-50 border border-gray-300'
                   }`}
                 >
                   🔌 USB ile Bağlı Yazıcılar
@@ -2166,8 +2328,8 @@ const SettingsModal = ({
                   onClick={() => setPrinterSubTab('network')}
                   className={`px-6 py-3 rounded-lg font-medium transition-all ${
                     printerSubTab === 'network'
-                            ? 'bg-pink-500 text-white shadow-md'
-                            : 'bg-white text-gray-700 hover:bg-pink-50 border border-gray-300'
+                            ? 'bg-pink-500 theme-sultan:bg-emerald-500 text-white shadow-md'
+                            : 'bg-white text-gray-700 hover:bg-pink-50 theme-sultan:hover:bg-pink-50 theme-sultan:bg-emerald-50 border border-gray-300'
                   }`}
                 >
                   🌐 Ethernet Yazıcılar
@@ -2202,10 +2364,10 @@ const SettingsModal = ({
                         <div className="flex items-center space-x-4 flex-1">
                           <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
                             isCashierPrinter 
-                              ? 'bg-emerald-600' 
-                              : 'bg-pink-100'
+                              ? 'bg-pink-600 theme-sultan:bg-emerald-600' 
+                              : 'bg-pink-100 theme-sultan:bg-emerald-100'
                           }`}>
-                            <svg className={`w-6 h-6 ${isCashierPrinter ? 'text-white' : 'text-pink-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg className={`w-6 h-6 ${isCashierPrinter ? 'text-white' : 'text-pink-600 theme-sultan:text-emerald-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                             </svg>
                           </div>
@@ -2213,7 +2375,7 @@ const SettingsModal = ({
                             <div className="flex items-center gap-2">
                               <h4 className="font-semibold text-gray-800">{printer.displayName || printer.name}</h4>
                               {isCashierPrinter && (
-                                <span className="inline-flex items-center px-2 py-1 rounded-lg bg-green-100 text-green-700 text-xs font-bold">
+                                <span className="inline-flex items-center px-2 py-1 rounded-lg bg-fuchsia-100 theme-sultan:bg-green-100 text-fuchsia-700 theme-sultan:text-green-700 text-xs font-bold">
                                   💰 KASA YAZICISI
                                 </span>
                               )}
@@ -2222,14 +2384,14 @@ const SettingsModal = ({
                             {assignedCategories.length > 0 ? (
                               <div className="mt-1 flex flex-wrap gap-1">
                                 {assignedCategories.map(category => (
-                                  <span key={category.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-purple-100 text-purple-700 text-xs font-medium">
+                                  <span key={category.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-pink-100 theme-sultan:bg-emerald-100 text-pink-800 theme-sultan:text-emerald-800 text-xs font-medium">
                                     📋 {category.name}
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         handleRemoveCategoryAssignment(category.id);
                                       }}
-                                      className="hover:bg-purple-200 rounded px-1 transition-colors"
+                                      className="hover:bg-pink-200 theme-sultan:hover:bg-pink-200 theme-sultan:bg-emerald-200 rounded px-1 transition-colors"
                                       title="Kategori atamasını kaldır"
                                     >
                                       ✕
@@ -2249,14 +2411,14 @@ const SettingsModal = ({
                           className={`flex-1 px-4 py-2 rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md ${
                             isCashierPrinter
                               ? 'bg-red-600 hover:bg-red-700 text-white'
-                              : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                              : 'bg-pink-600 theme-sultan:bg-emerald-600 hover:bg-pink-700 theme-sultan:hover:bg-pink-700 theme-sultan:bg-emerald-700 text-white'
                           }`}
                         >
                           {isCashierPrinter ? '💰 Kasa Yazıcısını Kaldır' : '💰 Kasa Yazıcısı Seç'}
                         </button>
                         <button
                           onClick={() => handleAssignCategory(printer.name, printerSubTab)}
-                          className="flex-1 px-4 py-2 bg-pink-500 hover:bg-pink-600 text-white rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md"
+                          className="flex-1 px-4 py-2 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md"
                         >
                           Kategori Ata
                         </button>
@@ -2285,7 +2447,7 @@ const SettingsModal = ({
       {showCategoryAssignModal && selectedPrinter && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[1000] animate-fade-in px-4">
           <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-xl transform animate-scale-in relative overflow-hidden border border-gray-200">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-pink-400 theme-sultan:to-emerald-400"></div>
             
             <button
               onClick={() => {
@@ -2302,14 +2464,14 @@ const SettingsModal = ({
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+              <div className="w-16 h-16 bg-pink-500 theme-sultan:bg-emerald-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
                 </svg>
               </div>
               <h3 className="text-xl font-bold text-gray-900 mb-2">Kategori Ata</h3>
               <p className="text-gray-600 mb-2">
-                <span className="font-semibold text-pink-600">{selectedPrinter.name}</span>
+                <span className="font-semibold text-pink-600 theme-sultan:text-emerald-600">{selectedPrinter.name}</span>
               </p>
               <p className="text-sm text-gray-500">Bu yazıcıya birden fazla kategori seçebilirsiniz</p>
             </div>
@@ -2346,9 +2508,9 @@ const SettingsModal = ({
                         }}
                         className={`w-full px-4 py-3 rounded-lg text-left transition-all cursor-pointer ${
                           isSelected
-                        ? 'bg-pink-500 text-white'
+                        ? 'bg-pink-500 theme-sultan:bg-emerald-500 text-white'
                             : isAssignedToThisPrinter
-                            ? 'bg-pink-100 text-pink-800 border border-pink-300'
+                            ? 'bg-pink-100 theme-sultan:bg-emerald-100 text-pink-800 theme-sultan:text-emerald-800 border border-pink-300 theme-sultan:border-emerald-300'
                             : isAssignedToOtherPrinter
                             ? 'bg-yellow-50 text-yellow-800 border border-yellow-300 cursor-not-allowed opacity-60'
                         : 'bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200'
@@ -2365,13 +2527,13 @@ const SettingsModal = ({
                                 }
                               }}
                               disabled={isAssignedToOtherPrinter}
-                              className="w-5 h-5 rounded border-2 border-gray-300 text-purple-600 focus:ring-purple-500 focus:ring-2 cursor-pointer"
+                              className="w-5 h-5 rounded border-2 border-gray-300 text-pink-600 theme-sultan:text-emerald-600 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:ring-2 cursor-pointer"
                               onClick={(e) => e.stopPropagation()}
                             />
                             <span className="font-medium">{category.name}</span>
                     </div>
                           {isAssignedToThisPrinter && !isSelected && (
-                            <span className="text-xs bg-purple-600 text-white px-2 py-1 rounded">
+                            <span className="text-xs bg-pink-600 theme-sultan:bg-emerald-600 text-white px-2 py-1 rounded">
                               Bu yazıcıya atanmış
                             </span>
                           )}
@@ -2405,7 +2567,7 @@ const SettingsModal = ({
                     <button
                   onClick={confirmCategoryAssignment}
                   disabled={assigningCategory}
-                  className="flex-1 px-4 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 px-4 py-3 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {assigningCategory ? 'Atanıyor...' : 'Kategorileri Ata'}
                     </button>
@@ -2419,7 +2581,7 @@ const SettingsModal = ({
       {showAddCategoryModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
           <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-xl transform animate-scale-in relative overflow-hidden border border-gray-200">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-600 to-teal-600"></div>
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-indigo-600 theme-sultan:to-teal-600"></div>
             
             <button
               onClick={() => {
@@ -2435,7 +2597,7 @@ const SettingsModal = ({
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-emerald-600 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+              <div className="w-16 h-16 bg-pink-600 theme-sultan:bg-emerald-600 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
@@ -2461,7 +2623,7 @@ const SettingsModal = ({
                       handleAddCategory();
                     }
                   }}
-                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-green-500 focus:outline-none transition-all"
+                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-fuchsia-500 theme-sultan:focus:border-fuchsia-50 theme-sultan:focus:border-fuchsia-500 theme-sultan:border-fuchsia-50 theme-sultan:border-green-500 focus:outline-none transition-all"
                   placeholder="Kategori adını girin"
                   autoFocus
                 />
@@ -2486,7 +2648,7 @@ const SettingsModal = ({
                 </button>
                 <button
                   onClick={handleAddCategory}
-                  className="flex-1 px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
+                  className="flex-1 px-6 py-3 bg-pink-600 theme-sultan:bg-emerald-600 hover:bg-pink-700 theme-sultan:hover:bg-pink-700 theme-sultan:bg-emerald-700 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                 >
                   <div className="flex items-center justify-center space-x-2">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2505,7 +2667,7 @@ const SettingsModal = ({
       {showEditCategoryModal && editingCategory && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
           <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-xl transform animate-scale-in relative overflow-hidden border border-gray-200">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-pink-400 theme-sultan:to-emerald-400"></div>
             
             <button
               onClick={() => {
@@ -2522,14 +2684,14 @@ const SettingsModal = ({
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+              <div className="w-16 h-16 bg-pink-500 theme-sultan:bg-emerald-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                 </svg>
               </div>
               <h3 className="text-2xl font-bold text-gray-800 mb-2">Kategori Düzenle</h3>
               <p className="text-gray-600 text-sm">
-                <span className="font-semibold text-pink-600">{editingCategory.name}</span> kategorisinin adını değiştirin
+                <span className="font-semibold text-pink-600 theme-sultan:text-emerald-600">{editingCategory.name}</span> kategorisinin adını değiştirin
               </p>
             </div>
 
@@ -2550,7 +2712,7 @@ const SettingsModal = ({
                       handleUpdateCategory();
                     }
                   }}
-                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 focus:outline-none focus:ring-2 focus:ring-pink-100 transition-all bg-white"
+                  className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-pink-500 theme-sultan:focus:border-pink-50 theme-sultan:focus:border-pink-500 theme-sultan:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-pink-100 theme-sultan:focus:ring-pink-100 theme-sultan:ring-emerald-100 transition-all bg-white"
                   placeholder="Kategori adını girin"
                   autoFocus
                 />
@@ -2576,7 +2738,7 @@ const SettingsModal = ({
                 </button>
                 <button
                   onClick={handleUpdateCategory}
-                  className="flex-1 px-6 py-3 bg-pink-500 hover:bg-pink-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
+                  className="flex-1 px-6 py-3 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-lg font-semibold transition-all duration-200 shadow-sm hover:shadow-md"
                 >
                   <div className="flex items-center justify-center space-x-2">
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2595,17 +2757,17 @@ const SettingsModal = ({
       {deleteConfirmModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
           <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-pink-500 to-red-500"></div>
+            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-pink-500 theme-sultan:via-emerald-500 to-red-500"></div>
             
             <div className="text-center mb-6">
-              <div className="w-20 h-20 bg-gradient-to-br from-red-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <div className="w-20 h-20 bg-gradient-to-br from-red-500 to-pink-500 theme-sultan:to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
               </div>
               <h3 className="text-2xl font-bold text-gray-800 mb-2">Ürünü Sil</h3>
               <p className="text-gray-600 mb-4">
-                <span className="font-semibold text-purple-600">{deleteConfirmModal.productName}</span> adlı ürünü silmek istediğinize emin misiniz?
+                <span className="font-semibold text-pink-600 theme-sultan:text-emerald-600">{deleteConfirmModal.productName}</span> adlı ürünü silmek istediğinize emin misiniz?
               </p>
               <p className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg border border-red-200">
                 ⚠️ Bu işlem geri alınamaz!
@@ -2621,7 +2783,7 @@ const SettingsModal = ({
               </button>
               <button
                 onClick={confirmDelete}
-                className="flex-1 px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 theme-sultan:to-emerald-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
               >
                 <div className="flex items-center justify-center space-x-2">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2639,7 +2801,7 @@ const SettingsModal = ({
       {showFirebaseImageModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
           <div className="bg-white rounded-3xl p-8 w-full max-w-4xl shadow-2xl transform animate-scale-in relative overflow-hidden flex flex-col max-h-[90vh]">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 to-rose-400"></div>
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-pink-400 theme-sultan:to-emerald-400"></div>
             
             <button
               onClick={() => {
@@ -2654,7 +2816,7 @@ const SettingsModal = ({
             </button>
             
             <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-pink-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+              <div className="w-16 h-16 bg-pink-500 theme-sultan:bg-emerald-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                 </svg>
@@ -2666,7 +2828,7 @@ const SettingsModal = ({
             <div className="flex-1 overflow-y-auto scrollbar-custom mb-6">
               {isLoadingFirebaseImages ? (
                 <div className="text-center py-12">
-                  <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pink-500"></div>
+                  <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-pink-500 theme-sultan:border-emerald-500"></div>
                   <p className="mt-4 text-gray-600">Görseller yükleniyor...</p>
                 </div>
               ) : firebaseImages.length === 0 ? (
@@ -2687,7 +2849,7 @@ const SettingsModal = ({
                         setShowFirebaseImageModal(false);
                         setFirebaseImages([]);
                       }}
-                      className="bg-white rounded-xl border-2 border-gray-200 hover:border-pink-500 cursor-pointer transition-all hover:shadow-lg overflow-hidden group"
+                      className="bg-white rounded-xl border-2 border-gray-200 hover:border-pink-500 theme-sultan:hover:border-pink-50 theme-sultan:hover:border-pink-500 theme-sultan:border-emerald-500 cursor-pointer transition-all hover:shadow-lg overflow-hidden group"
                     >
                       <div className="aspect-square bg-gray-100 relative overflow-hidden">
                         <img
@@ -2732,17 +2894,17 @@ const SettingsModal = ({
       {deleteCategoryModal && (
         <div className="fixed inset-0 bg-black/90 backdrop-blur-lg flex items-center justify-center z-[1000] animate-fade-in px-4">
           <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-pink-500 to-red-500"></div>
+            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-red-500 via-pink-500 theme-sultan:via-emerald-500 to-red-500"></div>
             
             <div className="text-center mb-6">
-              <div className="w-20 h-20 bg-gradient-to-br from-red-500 to-pink-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
+              <div className="w-20 h-20 bg-gradient-to-br from-red-500 to-pink-500 theme-sultan:to-emerald-500 rounded-full flex items-center justify-center mx-auto mb-4 shadow-lg">
                 <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                 </svg>
               </div>
               <h3 className="text-2xl font-bold text-gray-800 mb-2">Kategoriyi Sil</h3>
               <p className="text-gray-600 mb-4">
-                <span className="font-semibold text-purple-600">{deleteCategoryModal.categoryName}</span> kategorisini silmek istediğinizden emin misiniz?
+                <span className="font-semibold text-pink-600 theme-sultan:text-emerald-600">{deleteCategoryModal.categoryName}</span> kategorisini silmek istediğinizden emin misiniz?
               </p>
               <p className="text-sm text-red-600 bg-red-50 px-4 py-2 rounded-lg border border-red-200">
                 ⚠️ Bu işlem geri alınamaz! Kategorideki tüm ürünler de silinecektir.
@@ -2758,7 +2920,7 @@ const SettingsModal = ({
               </button>
               <button
                 onClick={handleDeleteCategory}
-                className="flex-1 px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 theme-sultan:to-emerald-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
               >
                 <div className="flex items-center justify-center space-x-2">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

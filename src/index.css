@@ -12,6 +12,10 @@
     background: linear-gradient(135deg, #f0f4ff 0%, #e0e7ff 50%, #fce7f3 100%);
   }
 
+  body.body-theme-sultan {
+    background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 50%, #ccfbf1 100%);
+  }
+
   #root {
     @apply min-h-screen;
   }
@@ -23,7 +27,7 @@
   }
 
   .card-glass {
-    @apply backdrop-blur-md bg-white/80 border border-purple-200 rounded-2xl shadow-xl;
+    @apply backdrop-blur-md bg-white/80 border border-pink-200 theme-sultan:border-emerald-200 rounded-2xl shadow-xl;
   }
 
   .category-btn {
@@ -31,11 +35,11 @@
   }
 
   .category-btn-active {
-    @apply bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg transform scale-105;
+    @apply bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg transform scale-105;
   }
 
   .category-btn-inactive {
-    @apply bg-white text-gray-700 hover:bg-purple-50 hover:text-purple-700 shadow-md;
+    @apply bg-white text-gray-700 hover:bg-pink-50 theme-sultan:hover:bg-emerald-50 hover:text-pink-800 theme-sultan:hover:text-emerald-800 shadow-md;
   }
 
   .product-card {
@@ -43,7 +47,7 @@
   }
 
   .cart-item {
-    @apply flex items-center justify-between p-4 rounded-xl bg-white border border-purple-100 mb-2 transition-all hover:shadow-md;
+    @apply flex items-center justify-between p-4 rounded-xl bg-white border border-pink-100 theme-sultan:border-emerald-100 mb-2 transition-all hover:shadow-md;
   }
 
   .scrollbar-custom::-webkit-scrollbar {
@@ -51,11 +55,11 @@
   }
 
   .scrollbar-custom::-webkit-scrollbar-track {
-    @apply bg-purple-100 rounded-full;
+    @apply bg-pink-100 theme-sultan:bg-emerald-100 rounded-full;
   }
 
   .scrollbar-custom::-webkit-scrollbar-thumb {
-    @apply bg-purple-500/50 rounded-full hover:bg-purple-500/70;
+    @apply bg-pink-600/50 theme-sultan:bg-emerald-600/50 rounded-full hover:bg-pink-600/70 theme-sultan:hover:bg-emerald-600/70;
   }
 }
 
@@ -66,7 +70,14 @@
   background-clip: text;
 }
 
-/* Kurumsal başlık: koyu lacivert–indigo gradient */
+.theme-sultan .gradient-text {
+  background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Kurumsal başlık */
 .heading-display {
   font-family: 'Montserrat', sans-serif;
   background: linear-gradient(135deg, #1e293b 0%, #334155 40%, #4f46e5 100%);
@@ -74,6 +85,13 @@
   -webkit-text-fill-color: transparent;
   background-clip: text;
   letter-spacing: -0.02em;
+}
+
+.theme-sultan .heading-display {
+  background: linear-gradient(135deg, #14532d 0%, #166534 40%, #0d9488 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .animate-fade-in {

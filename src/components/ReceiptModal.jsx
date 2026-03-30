@@ -32,7 +32,7 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
   return (
     <>
       <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-        <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
+        <div className="bg-white backdrop-blur-xl border border-pink-200 theme-sultan:border-emerald-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-3xl font-bold gradient-text">Fiş Yazdır</h2>
             <button
@@ -101,7 +101,7 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
                         {item.name}
                       </span>
                       {isGift && (
-                        <span className="text-xs font-bold text-green-600 bg-green-50 px-1.5 py-0.5 rounded">
+                        <span className="text-xs font-bold text-fuchsia-600 theme-sultan:text-green-600 bg-fuchsia-50 theme-sultan:bg-green-50 px-1.5 py-0.5 rounded">
                           İKRAM
                         </span>
                       )}
@@ -112,7 +112,7 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
                           <span className="font-semibold text-gray-400 line-through text-xs block">
                             ₺{(item.price * item.quantity).toFixed(2)}
                           </span>
-                          <span className="font-semibold text-green-600">₺0.00</span>
+                          <span className="font-semibold text-fuchsia-600 theme-sultan:text-green-600">₺0.00</span>
                         </div>
                       ) : (
                         <span className="font-semibold">₺{displayTotal.toFixed(2)}</span>
@@ -124,7 +124,7 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
                       {item.quantity} adet × {isGift ? (
                         <>
                           <span className="line-through text-gray-400">₺{item.price.toFixed(2)}</span>
-                          <span className="text-green-600 font-semibold ml-1">₺0.00</span>
+                          <span className="text-fuchsia-600 theme-sultan:text-green-600 font-semibold ml-1">₺0.00</span>
                         </>
                       ) : (
                         `₺${item.price.toFixed(2)}`
@@ -197,7 +197,7 @@ const ReceiptModal = ({ saleInfo, items, onClose, onPrint }) => {
           <button
             onClick={handlePrint}
             disabled={isPrinting}
-            className="flex-1 py-4 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+            className="flex-1 py-4 bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 hover:from-fuchsia-600 theme-sultan:hover:from-fuchsia-600 theme-sultan:from-green-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
           >
             <div className="flex items-center justify-center space-x-2">
               {isPrinting ? (

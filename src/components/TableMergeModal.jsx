@@ -1,7 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Toast from './Toast';
+import { buildSultanTablesFlat } from '../constants/sultanTables';
 
-const TableMergeModal = ({ onClose, onMerge }) => {
+const TableMergeModal = ({ onClose, onMerge, branchKey }) => {
+  const isSultanBranch = branchKey === 'sultansomati';
+  const sultanTables = useMemo(() => (isSultanBranch ? buildSultanTablesFlat() : []), [isSultanBranch]);
   const [step, setStep] = useState(1);
   const [tableOrders, setTableOrders] = useState([]);
   const [selectedSourceTable, setSelectedSourceTable] = useState(null);
@@ -43,7 +46,9 @@ const TableMergeModal = ({ onClose, onMerge }) => {
     name: `Paket ${i + 1}`
   }));
 
-  const allTables = [...insideTables, ...outsideTables, ...packageTablesInside, ...packageTablesOutside];
+  const allTables = isSultanBranch
+    ? sultanTables
+    : [...insideTables, ...outsideTables, ...packageTablesInside, ...packageTablesOutside];
 
   useEffect(() => {
     loadTableOrders();
@@ -110,7 +115,7 @@ const TableMergeModal = ({ onClose, onMerge }) => {
     <>
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[2000]">
         <div className="bg-white rounded-2xl shadow-2xl w-[90vw] max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
-          <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white p-6">
+          <div className="bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-indigo-600 theme-sultan:to-teal-600 text-white p-6">
             <div className="flex items-center justify-between">
               <h2 className="text-2xl font-bold">
                 {step === 1 ? 'Birleştirilecek masayı seçin (içeriği taşınacak)' : 'Hedef masayı seçin (içeriğin ekleneceği dolu masa)'}
@@ -161,8 +166,8 @@ const TableMergeModal = ({ onClose, onMerge }) => {
                         onClick={() => handleSourceTableSelect(table)}
                         className={`rounded-md p-2 border-2 transition-all ${
                           isSelected
-                            ? 'bg-gradient-to-br from-emerald-600 to-teal-800 border-emerald-800 scale-105 text-white'
-                            : 'bg-gradient-to-br from-emerald-500 to-teal-700 border-teal-700 hover:border-teal-800 hover:scale-105 text-white'
+                            ? 'bg-gradient-to-br from-pink-600 theme-sultan:from-emerald-600 to-indigo-800 theme-sultan:to-teal-800 border-pink-800 theme-sultan:border-emerald-800 scale-105 text-white'
+                            : 'bg-gradient-to-br from-pink-500 theme-sultan:from-emerald-500 to-indigo-700 theme-sultan:to-teal-700 border-indigo-700 theme-sultan:border-teal-700 hover:border-indigo-800 theme-sultan:hover:border-indigo-800 theme-sultan:border-teal-800 hover:scale-105 text-white'
                         }`}
                       >
                         <div className="flex flex-col items-center justify-center">
@@ -228,24 +233,24 @@ const TableMergeModal = ({ onClose, onMerge }) => {
                           isSelected
                             ? isOutside
                               ? 'bg-amber-200 border-amber-500 scale-105'
-                              : 'bg-teal-200 border-teal-500 scale-105'
+                              : 'bg-indigo-200 theme-sultan:bg-teal-200 border-indigo-500 theme-sultan:border-indigo-50 theme-sultan:border-teal-500 scale-105'
                             : isOutside
                               ? 'bg-amber-50 border-amber-300 hover:border-amber-400 hover:scale-105'
-                              : 'bg-teal-50 border-teal-300 hover:border-teal-400 hover:scale-105'
+                              : 'bg-indigo-50 theme-sultan:bg-teal-50 border-indigo-300 theme-sultan:border-teal-300 hover:border-indigo-400 theme-sultan:hover:border-indigo-400 theme-sultan:border-teal-400 hover:scale-105'
                         }`}
                       >
                         <div className="flex flex-col items-center justify-center">
                           <div
                             className={`w-8 h-8 rounded-full flex items-center justify-center ${
-                              isOutside ? 'bg-amber-200 text-amber-900' : 'bg-teal-200 text-teal-900'
+                              isOutside ? 'bg-amber-200 text-amber-900' : 'bg-indigo-200 theme-sultan:bg-teal-200 text-indigo-900 theme-sultan:text-teal-900'
                             }`}
                           >
                             <span className="text-xs font-bold">{table.number}</span>
                           </div>
-                          <span className={`text-xs mt-1 font-semibold ${isOutside ? 'text-amber-900' : 'text-teal-900'}`}>
+                          <span className={`text-xs mt-1 font-semibold ${isOutside ? 'text-amber-900' : 'text-indigo-900 theme-sultan:text-teal-900'}`}>
                             {table.name}
                           </span>
-                          <span className={`text-[10px] mt-0.5 ${isOutside ? 'text-amber-700' : 'text-teal-700'}`}>
+                          <span className={`text-[10px] mt-0.5 ${isOutside ? 'text-amber-700' : 'text-indigo-700 theme-sultan:text-teal-700'}`}>
                             Dolu
                           </span>
                         </div>
@@ -277,7 +282,7 @@ const TableMergeModal = ({ onClose, onMerge }) => {
                 type="button"
                 onClick={handleConfirmMerge}
                 disabled={!selectedTargetTable || isMerging}
-                className="px-6 py-3 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                className="px-6 py-3 bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-indigo-500 theme-sultan:to-teal-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-indigo-600 theme-sultan:hover:to-indigo-600 theme-sultan:to-teal-600 text-white font-semibold rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
               >
                 {isMerging ? (
                   <>

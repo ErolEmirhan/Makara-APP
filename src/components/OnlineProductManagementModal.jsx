@@ -522,7 +522,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
     <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-[2000] animate-fade-in px-4 py-8">
       <div className="bg-white rounded-3xl w-full max-w-7xl shadow-[0_25px_50px_-12px_rgba(0,0,0,0.25)] transform animate-scale-in relative overflow-hidden border border-gray-200 max-h-[90vh] flex flex-col">
         {/* Premium Top Border */}
-        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-600 via-indigo-500 to-purple-600"></div>
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 via-indigo-500 to-pink-600 theme-sultan:to-emerald-600"></div>
         
         {/* Close Button */}
         <button
@@ -538,7 +538,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
         <div className="px-10 pt-10 pb-6 border-b border-gray-200">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center space-x-4">
-              <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-indigo-500 rounded-2xl flex items-center justify-center shadow-lg border-2 border-white">
+              <div className="w-16 h-16 bg-gradient-to-br from-pink-600 theme-sultan:from-emerald-600 to-indigo-500 rounded-2xl flex items-center justify-center shadow-lg border-2 border-white">
                 <svg className="w-9 h-9 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
                 </svg>
@@ -550,7 +550,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
             </div>
             <div className="flex items-center space-x-3">
               {/* Tüm Ürünlere Fiyat Ekle */}
-              <div className="flex items-center space-x-2 bg-gradient-to-r from-emerald-50 to-teal-50 border-2 border-emerald-300 rounded-xl px-4 py-2 shadow-sm">
+              <div className="flex items-center space-x-2 bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-indigo-50 theme-sultan:to-teal-50 border-2 border-pink-300 theme-sultan:border-emerald-300 rounded-xl px-4 py-2 shadow-sm">
                 <input
                   type="number"
                   step="0.01"
@@ -569,7 +569,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
                 <button
                   onClick={handleBulkPriceAdd}
                   disabled={savingBulkPrice || !bulkPriceAdd}
-                  className="px-4 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg text-xs font-bold hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
+                  className="px-4 py-1.5 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-indigo-600 theme-sultan:to-teal-600 hover:from-pink-700 theme-sultan:hover:from-pink-700 theme-sultan:from-emerald-700 hover:to-indigo-700 theme-sultan:hover:to-teal-700 text-white rounded-lg text-xs font-bold hover:shadow-md transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-1"
                 >
                   {savingBulkPrice ? (
                     <>
@@ -665,7 +665,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
                     onClick={() => scrollToCategory(category.id)}
                     className={`px-5 py-2.5 rounded-xl font-semibold text-sm whitespace-nowrap transition-all duration-300 flex items-center space-x-2 ${
                       selectedCategoryId === category.id
-                        ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg transform scale-105'
+                        ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-indigo-600 text-white shadow-lg transform scale-105'
                         : 'bg-gray-100 text-gray-700 hover:bg-gray-200 hover:text-gray-900'
                     }`}
                   >
@@ -686,7 +686,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
         <div ref={contentRef} className="flex-1 overflow-y-auto px-10 py-6">
           {loading ? (
             <div className="flex items-center justify-center py-20">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-purple-200 border-t-purple-600"></div>
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-pink-200 theme-sultan:border-emerald-200 border-t-emerald-600"></div>
             </div>
           ) : productsByCategory.length === 0 ? (
             <div className="text-center py-12 bg-gray-50 rounded-xl border-2 border-dashed border-gray-300">
@@ -704,7 +704,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
                   className="bg-white border-2 border-gray-200 rounded-2xl shadow-lg overflow-hidden scroll-mt-4"
                 >
                   {/* Kategori Başlığı */}
-                  <div className="bg-gradient-to-r from-purple-50 to-indigo-50 px-6 py-4 border-b border-gray-200">
+                  <div className="bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-indigo-50 px-6 py-4 border-b border-gray-200">
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
                         <div className="flex items-center space-x-4">
@@ -716,10 +716,10 @@ const OnlineProductManagementModal = ({ onClose }) => {
                             </span>
                             <button
                               onClick={() => handleCategoryStockToggle(category.id, !categoryOutOfStock[category.id])}
-                              className={`relative inline-flex h-10 w-20 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 shadow-md ${
+                              className={`relative inline-flex h-10 w-20 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:ring-offset-2 shadow-md ${
                                 categoryOutOfStock[category.id]
                                   ? 'bg-gradient-to-r from-red-500 to-red-600'
-                                  : 'bg-gradient-to-r from-green-500 to-emerald-500'
+                                  : 'bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500'
                               }`}
                             >
                               <span
@@ -786,7 +786,7 @@ const OnlineProductManagementModal = ({ onClose }) => {
                                     const newPrice = parseFloat(e.target.value) || product.price;
                                     handlePriceUpdate(product.id, newPrice);
                                   }}
-                                  className="w-32 px-3 py-2 border-2 border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent font-semibold text-gray-900"
+                                  className="w-32 px-3 py-2 border-2 border-pink-400 theme-sultan:border-emerald-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:border-transparent font-semibold text-gray-900"
                                 />
                                 <span className="text-xs text-gray-500">₺</span>
                               </div>
@@ -795,10 +795,10 @@ const OnlineProductManagementModal = ({ onClose }) => {
                               <div className="flex items-center justify-center">
                                 <button
                                   onClick={() => handleStockToggle(product.id, !product.is_out_of_stock_online)}
-                                  className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 ${
+                                  className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:ring-offset-2 ${
                                     product.is_out_of_stock_online
                                       ? 'bg-gradient-to-r from-red-500 to-red-600'
-                                      : 'bg-gradient-to-r from-green-500 to-emerald-500'
+                                      : 'bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500'
                                   }`}
                                 >
                                   <span
@@ -876,13 +876,13 @@ const OnlineProductManagementModal = ({ onClose }) => {
         {toast.show && (
           <div className="fixed inset-x-0 bottom-0 z-[3000] flex justify-center pointer-events-none pb-6">
             <div className={`bg-white/95 backdrop-blur-xl border-2 rounded-2xl shadow-2xl px-6 py-4 pointer-events-auto animate-fade-in max-w-md mx-4 ${
-              toast.type === 'success' ? 'border-green-300' : 
+              toast.type === 'success' ? 'border-fuchsia-300 theme-sultan:border-green-300' : 
               toast.type === 'error' ? 'border-red-300' : 
               'border-blue-300'
             }`}>
               <div className="flex items-center space-x-3">
                 {toast.type === 'success' && (
-                  <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-5 h-5 text-fuchsia-600 theme-sultan:text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
                 )}

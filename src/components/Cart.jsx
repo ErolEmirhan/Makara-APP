@@ -22,7 +22,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center space-x-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center shadow-lg">
+          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 flex items-center justify-center shadow-lg">
             <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
@@ -37,7 +37,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
       <div className="flex-1 overflow-y-auto scrollbar-custom space-y-2 mb-6">
         {cart.length === 0 ? (
           <div className="text-center py-12">
-            <svg className="w-24 h-24 mx-auto text-purple-200 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-24 h-24 mx-auto text-pink-200 theme-sultan:text-emerald-200 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
             </svg>
             <p className="text-gray-600">Sepetiniz boş</p>
@@ -54,7 +54,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
               key={item.id} 
               className={`bg-white rounded-lg border transition-all duration-200 animate-fade-in ${
                 isGift 
-                  ? 'border-green-200 bg-gradient-to-br from-green-50/40 to-white shadow-sm' 
+                  ? 'border-fuchsia-200 theme-sultan:border-green-200 bg-gradient-to-br from-fuchsia-50 theme-sultan:from-green-50/40 to-white shadow-sm' 
                   : 'border-gray-200/60 hover:border-gray-300/80 hover:shadow-md shadow-sm'
               }`}
               style={{ padding: '14px' }}
@@ -70,7 +70,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                       {item.name}
                     </h4>
                     {isGift && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-green-100 text-green-700 rounded-md text-xs font-bold whitespace-nowrap flex-shrink-0">
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-fuchsia-100 theme-sultan:bg-green-100 text-fuchsia-700 theme-sultan:text-green-700 rounded-md text-xs font-bold whitespace-nowrap flex-shrink-0">
                         <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                         </svg>
@@ -121,7 +121,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                     onClick={() => onToggleGift && onToggleGift(item.id)}
                     className={`px-2.5 py-1.5 text-xs font-semibold rounded-md transition-all whitespace-nowrap border flex items-center gap-1 ${
                       isGift 
-                        ? 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100 hover:border-green-300' 
+                        ? 'bg-fuchsia-50 theme-sultan:bg-green-50 text-fuchsia-700 theme-sultan:text-green-700 border-fuchsia-200 theme-sultan:border-green-200 hover:bg-fuchsia-100 theme-sultan:hover:bg-fuchsia-100 theme-sultan:bg-green-100 hover:border-fuchsia-300 theme-sultan:hover:border-fuchsia-300 theme-sultan:border-green-300' 
                         : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 hover:border-amber-300'
                     } shadow-sm active:scale-95`}
                     title={isGift ? 'İkramı İptal Et' : 'İkram Et'}
@@ -155,7 +155,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
         )}
       </div>
 
-      <div className="border-t border-purple-200 pt-6 space-y-4">
+      <div className="border-t border-pink-200 theme-sultan:border-emerald-200 pt-6 space-y-4">
         {cart.length > 0 && (
           <div className="flex justify-between items-center pb-4">
             <span className="text-sm text-gray-500">Sepeti temizle</span>
@@ -175,7 +175,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
         
         <div className="flex justify-between items-center text-lg font-bold text-gray-900">
           <span>TOPLAM</span>
-          <span className="text-3xl bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+          <span className="text-3xl bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-400 theme-sultan:to-emerald-400 bg-clip-text text-transparent">
             ₺{totalAmount.toFixed(2)}
           </span>
         </div>
@@ -251,7 +251,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
             className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
               cart.length === 0
                 ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
-                : 'bg-gradient-to-r from-emerald-500 to-lime-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
+                : 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-lime-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
             }`}
           >
             <div className="flex items-center justify-center space-x-2">

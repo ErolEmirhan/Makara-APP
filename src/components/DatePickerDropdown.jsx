@@ -127,7 +127,7 @@ const DatePickerDropdown = ({ selectedDate, onDateChange }) => {
       {/* Tarih Seçici Butonu */}
       <button
         onClick={() => setShowPicker(!showPicker)}
-        className="relative px-4 py-2.5 bg-white border border-gray-200 rounded-xl font-medium text-gray-700 hover:border-purple-300 hover:bg-gray-50 transition-all duration-200 shadow-sm hover:shadow-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent min-w-[200px] flex items-center justify-between"
+        className="relative px-4 py-2.5 bg-white border border-gray-200 rounded-xl font-medium text-gray-700 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400 hover:bg-gray-50 transition-all duration-200 shadow-sm hover:shadow-md focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:border-transparent min-w-[200px] flex items-center justify-between"
       >
         <div className="flex items-center space-x-2">
           <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -184,7 +184,7 @@ const DatePickerDropdown = ({ selectedDate, onDateChange }) => {
                   <select
                     value={selectedDay || ''}
                     onChange={(e) => handleDayChange(parseInt(e.target.value))}
-                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent appearance-none cursor-pointer"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:border-transparent appearance-none cursor-pointer"
                     style={{
                       backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
                       backgroundRepeat: 'no-repeat',
@@ -211,7 +211,7 @@ const DatePickerDropdown = ({ selectedDate, onDateChange }) => {
                   <select
                     value={selectedMonth || ''}
                     onChange={(e) => handleMonthChange(parseInt(e.target.value))}
-                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent appearance-none cursor-pointer"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:border-transparent appearance-none cursor-pointer"
                     style={{
                       backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
                       backgroundRepeat: 'no-repeat',
@@ -238,7 +238,7 @@ const DatePickerDropdown = ({ selectedDate, onDateChange }) => {
                   <select
                     value={selectedYear || ''}
                     onChange={(e) => handleYearChange(parseInt(e.target.value))}
-                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent appearance-none cursor-pointer"
+                    className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-lg text-gray-900 font-medium focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:border-transparent appearance-none cursor-pointer"
                     style={{
                       backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236b7280'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
                       backgroundRepeat: 'no-repeat',
@@ -267,7 +267,7 @@ const DatePickerDropdown = ({ selectedDate, onDateChange }) => {
               </button>
               <button
                 onClick={() => setShowPicker(false)}
-                className="px-4 py-2 bg-gradient-to-r from-purple-500 to-pink-500 text-white text-sm font-semibold rounded-lg hover:shadow-md transition-all duration-200"
+                className="px-4 py-2 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 text-white text-sm font-semibold rounded-lg hover:shadow-md transition-all duration-200"
               >
                 Tamam
               </button>

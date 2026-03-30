@@ -174,7 +174,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
           </div>
           <div class="p-6">
             <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
                 <div class="flex flex-col items-center space-y-2">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                   <span class="text-base">Nakit</span>
@@ -256,13 +256,13 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
       modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
       modal.innerHTML = `
         <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-          <div class="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4">
+          <div class="bg-gradient-to-r from-violet-600 to-pink-600 theme-sultan:to-emerald-600 px-6 py-4">
             <h3 class="text-xl font-bold text-white mb-1">Parçalı Ödeme 1/${denominator}</h3>
             <p class="text-sm text-white/90">Tutar: ₺${payAmount} (başlangıç toplamının 1/${denominator}'i, tam lira)</p>
           </div>
           <div class="p-6">
             <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
                 <div class="flex flex-col items-center space-y-2">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                   <span class="text-base">Nakit</span>
@@ -600,7 +600,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                 <button
                   type="button"
                   onClick={() => { setTransferStep(1); setTransferQuantities({}); setSelectedTargetTableId(null); setShowTransferItemsModal(true); }}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-gradient-to-r from-indigo-600 to-blue-600 text-white hover:from-indigo-700 hover:to-blue-700 shadow-sm transition-all"
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-gradient-to-r from-pink-700 theme-sultan:from-emerald-700 to-blue-600 text-white hover:from-pink-800 theme-sultan:hover:from-emerald-800 hover:to-blue-700 shadow-sm transition-all"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
@@ -625,7 +625,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                   key={`${item.product_id}_${item.isGift || false}`}
                   className={`bg-white rounded-lg border p-4 transition-all shadow-sm hover:shadow-md ${
                     isPaid
-                      ? 'bg-green-50/50 border-green-200'
+                      ? 'bg-fuchsia-50 theme-sultan:bg-green-50/50 border-fuchsia-200 theme-sultan:border-green-200'
                       : isGift
                       ? 'bg-amber-50/50 border-amber-200'
                       : 'border-gray-200 hover:border-gray-300'
@@ -635,7 +635,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                     <div className="flex-1 min-w-0 pr-3">
                       <div className="flex items-center space-x-2.5 mb-3">
                         {isPaid && (
-                          <div className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+                          <div className="w-6 h-6 rounded-full bg-fuchsia-600 theme-sultan:bg-green-600 flex items-center justify-center flex-shrink-0 shadow-sm">
                             <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                             </svg>
@@ -647,7 +647,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                           </div>
                         )}
                         <p className={`text-base font-semibold leading-snug text-gray-900 ${
-                          isPaid ? 'line-through text-green-700' : isGift ? 'line-through text-gray-500' : ''
+                          isPaid ? 'line-through text-fuchsia-700 theme-sultan:text-green-700' : isGift ? 'line-through text-gray-500' : ''
                         }`}>
                           {item.product_name}
                         </p>
@@ -666,7 +666,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                         {isGift ? (
                           <>
                             <span className="line-through text-gray-400 text-sm font-medium">₺{item.price.toFixed(2)}</span>
-                            <span className="text-green-700 font-bold text-base ml-1">₺0.00</span>
+                            <span className="text-fuchsia-700 theme-sultan:text-green-700 font-bold text-base ml-1">₺0.00</span>
                           </>
                         ) : (
                           <p className="text-base font-semibold text-gray-800">₺{item.price.toFixed(2)}</p>
@@ -674,7 +674,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                       </div>
                       {paidQuantity > 0 && paymentMethod && (
                         <p className={`text-xs font-medium mt-1.5 px-2 py-1 rounded ${
-                          isPaid ? 'text-green-800 bg-green-100' : 'text-blue-800 bg-blue-100'
+                          isPaid ? 'text-fuchsia-800 theme-sultan:text-green-800 bg-fuchsia-100 theme-sultan:bg-green-100' : 'text-blue-800 bg-blue-100'
                         }`}>
                           {paidQuantity} adet {paymentMethod} ile ödendi
                           {!isPaid && ` • ${remainingQuantity} adet kaldı`}
@@ -684,9 +684,9 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                     <div className="flex flex-col items-end space-y-3 flex-shrink-0">
                       <div className="text-right">
                         {isGift ? (
-                          <p className="font-bold text-lg text-green-700">₺0.00</p>
+                          <p className="font-bold text-lg text-fuchsia-700 theme-sultan:text-green-700">₺0.00</p>
                         ) : isPaid ? (
-                          <p className="font-bold text-lg text-green-700 line-through">₺{displayTotal.toFixed(2)}</p>
+                          <p className="font-bold text-lg text-fuchsia-700 theme-sultan:text-green-700 line-through">₺{displayTotal.toFixed(2)}</p>
                         ) : paidQuantity > 0 ? (
                           <div>
                             <p className="font-bold text-lg text-blue-700">₺{paidTotal.toFixed(2)}</p>
@@ -745,7 +745,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
             
             {/* Parçalı Ödeme Detayları */}
             {(hasPartialPayment || partialPaymentPaid > 0.01) && (
-              <div className="bg-gradient-to-br from-violet-50 to-purple-50 rounded-lg p-4 border border-violet-200 space-y-2">
+              <div className="bg-gradient-to-br from-violet-50 to-pink-50 theme-sultan:to-emerald-50 rounded-lg p-4 border border-violet-200 space-y-2">
                 <div className="flex items-center gap-2 mb-2">
                   <svg className="w-5 h-5 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -758,7 +758,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm font-semibold text-gray-700">Kalan tutar:</span>
-                  <span className={`text-lg font-bold ${splitPaymentRemainingAmount > 0.01 ? 'text-orange-600' : 'text-green-600'}`}>
+                  <span className={`text-lg font-bold ${splitPaymentRemainingAmount > 0.01 ? 'text-orange-600' : 'text-fuchsia-600 theme-sultan:text-green-600'}`}>
                     ₺{splitPaymentRemainingAmount.toFixed(2)}
                   </span>
                 </div>
@@ -767,9 +767,9 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
             
             {/* Kalem Bazlı Ödenen Tutar (eğer varsa) */}
             {paidAmount > 0.01 && !hasPartialPayment && (
-              <div className="flex justify-between items-center bg-green-50/50 rounded-lg p-4 border border-green-200">
+              <div className="flex justify-between items-center bg-fuchsia-50 theme-sultan:bg-green-50/50 rounded-lg p-4 border border-fuchsia-200 theme-sultan:border-green-200">
                 <span className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Ödenen Tutar</span>
-                <span className="text-lg font-bold text-green-700">₺{paidAmount.toFixed(2)}</span>
+                <span className="text-lg font-bold text-fuchsia-700 theme-sultan:text-green-700">₺{paidAmount.toFixed(2)}</span>
               </div>
             )}
             
@@ -814,7 +814,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                 </button>
                 <button
                   onClick={onAddItems}
-                  className="px-5 py-3.5 bg-green-600 hover:bg-green-700 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
+                  className="px-5 py-3.5 bg-fuchsia-600 theme-sultan:bg-green-600 hover:bg-fuchsia-700 theme-sultan:hover:bg-fuchsia-700 theme-sultan:bg-green-700 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -825,7 +825,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                   type="button"
                   onClick={() => setShowSplitFractionPanel(!showSplitFractionPanel)}
                   disabled={splitPaymentRemainingAmount <= 0.01 || processingSplitPayment}
-                  className="px-5 py-3.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
+                  className="px-5 py-3.5 bg-gradient-to-r from-violet-600 to-pink-600 theme-sultan:to-emerald-600 hover:from-violet-700 hover:to-pink-800 theme-sultan:hover:to-pink-800 theme-sultan:to-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -874,7 +874,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
             <div className="flex items-center justify-center pt-2">
               <span className={`px-5 py-2.5 rounded-lg font-semibold text-sm uppercase tracking-wide border ${
                 order.status === 'completed'
-                  ? 'bg-green-50 text-green-800 border-green-200'
+                  ? 'bg-fuchsia-50 theme-sultan:bg-green-50 text-fuchsia-800 theme-sultan:text-green-800 border-fuchsia-200 theme-sultan:border-green-200'
                   : 'bg-red-50 text-red-800 border-red-200'
               }`}>
                 {order.status === 'completed' ? '✓ Tamamlandı' : '✗ İptal Edildi'}
@@ -889,7 +889,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] animate-fade-in">
           <div className="bg-white backdrop-blur-xl border border-red-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
             <div className="text-center mb-6">
-              <div className="w-20 h-20 mx-auto mb-4 bg-gradient-to-br from-red-100 to-pink-100 rounded-full flex items-center justify-center">
+              <div className="w-20 h-20 mx-auto mb-4 bg-gradient-to-br from-red-100 to-pink-100 theme-sultan:to-emerald-100 rounded-full flex items-center justify-center">
                 <svg className="w-10 h-10 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
@@ -898,7 +898,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
               <p className="text-gray-600 text-sm">Bu ürünü iptal etmek istediğinize emin misiniz?</p>
             </div>
 
-            <div className="bg-gradient-to-r from-red-50 to-pink-50 rounded-2xl p-6 mb-6 border border-red-100">
+            <div className="bg-gradient-to-r from-red-50 to-pink-50 theme-sultan:to-emerald-50 rounded-2xl p-6 mb-6 border border-red-100">
               <div className="space-y-3">
                 <div>
                   <p className="text-xs font-semibold text-gray-500 mb-1">Ürün Adı</p>
@@ -1002,7 +1002,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
               <button
                 onClick={confirmCancelItem}
                 disabled={cancellingItemId === cancelConfirmItem.id}
-                className="px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 hover:from-red-600 hover:to-pink-600 text-white font-bold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                className="px-6 py-3 bg-gradient-to-r from-red-500 to-pink-500 theme-sultan:to-emerald-500 hover:from-red-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 text-white font-bold rounded-xl transition-all duration-200 shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
               >
                 {cancellingItemId === cancelConfirmItem.id ? (
                   <>
@@ -1077,7 +1077,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
       {/* Ürün Detay Modal */}
       {selectedItemDetail && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] animate-fade-in">
-          <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
+          <div className="bg-white backdrop-blur-xl border border-pink-200 theme-sultan:border-emerald-200 rounded-2xl p-6 max-w-md w-full mx-4 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-bold gradient-text">Ürün Detayı</h3>
               <button
@@ -1111,7 +1111,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                 <>
                   <div className="border-t border-gray-200 pt-4">
                     <p className="text-sm text-gray-500 mb-1">Siparişi Alan Garson</p>
-                    <p className="text-lg font-semibold text-purple-600 flex items-center space-x-2">
+                    <p className="text-lg font-semibold text-pink-600 theme-sultan:text-emerald-600 flex items-center space-x-2">
                       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                       </svg>
@@ -1372,7 +1372,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
       {showTransferItemsModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[100]" onClick={(e) => e.target === e.currentTarget && !transferring && (setTransferStep(1), setShowTransferItemsModal(false))}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full mx-4 overflow-hidden max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-            <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-6 py-4">
+            <div className="bg-gradient-to-r from-pink-700 theme-sultan:from-emerald-700 to-blue-600 px-6 py-4">
               <h3 className="text-lg font-bold text-white">Ürünleri aktar</h3>
               <p className="text-sm text-white/90 mt-0.5">
                 {transferStep === 1 ? 'Aktarılacak ürünleri ve adetleri seçin (yalnızca ödenmemiş adetler).' : `Hedef ${customerMode ? 'müşteriyi' : 'masayı'} seçin, ardından aktar ve yazdır.`}
@@ -1566,7 +1566,7 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
       {showSplitFractionPanel && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] animate-fade-in" onClick={() => setShowSplitFractionPanel(false)}>
           <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden border border-violet-200" onClick={(e) => e.stopPropagation()}>
-            <div className="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4">
+            <div className="bg-gradient-to-r from-violet-600 to-pink-600 theme-sultan:to-emerald-600 px-6 py-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-lg font-bold text-white">Bölmeli Ödeme Seçenekleri</h3>

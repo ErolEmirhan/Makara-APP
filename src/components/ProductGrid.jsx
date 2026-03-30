@@ -17,8 +17,8 @@ const ProductGrid = ({ products, onAddToCart }) => {
               onClick={() => !isOutOfStock && onAddToCart(product)}
               className={`
                 min-h-[7rem] bg-white rounded-2xl 
-                transition-all duration-300 flex flex-row items-center
-                relative group overflow-hidden p-0 pr-4
+                transition-all duration-300 flex flex-col
+                relative group overflow-hidden p-0
                 ${isOutOfStock 
                   ? 'opacity-50 cursor-not-allowed bg-gray-50' 
                   : 'cursor-pointer'
@@ -37,7 +37,7 @@ const ProductGrid = ({ products, onAddToCart }) => {
                   <div className="absolute inset-0 rounded-2xl border border-gray-200/60 pointer-events-none"></div>
                   
                   {/* Hover Border Efekti */}
-                  <div className="absolute inset-0 rounded-2xl border border-emerald-300/0 group-hover:border-emerald-300/40 transition-all duration-300 pointer-events-none"></div>
+                  <div className="absolute inset-0 rounded-2xl border border-pink-300 theme-sultan:border-emerald-300/0 group-hover:border-pink-300 theme-sultan:group-hover:border-pink-300 theme-sultan:hover:border-pink-300 theme-sultan:border-emerald-300/40 transition-all duration-300 pointer-events-none"></div>
                 </>
               )}
               
@@ -60,24 +60,38 @@ const ProductGrid = ({ products, onAddToCart }) => {
               {!isOutOfStock && (
                 <>
                   {/* Ana Accent Bar - Sade ve Modern */}
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-emerald-500 to-teal-500 rounded-l-2xl"></div>
+                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-pink-500 theme-sultan:from-emerald-500 to-indigo-500 theme-sultan:to-teal-500 rounded-l-2xl"></div>
                   
                   {/* Subtle Inner Shadow - Derinlik Hissi */}
-                  <div className="absolute left-1 top-2 bottom-2 w-px bg-gradient-to-b from-emerald-300/40 to-transparent rounded-full"></div>
+                  <div className="absolute left-1 top-2 bottom-2 w-px bg-gradient-to-b from-pink-300 theme-sultan:from-emerald-300/40 to-transparent rounded-full"></div>
                 </>
               )}
               
+              <div className="relative z-10 flex flex-row items-center w-full pr-4">
               {/* Ürün İsmi - Sol Taraf (tam görünsün, kesilmesin) - min-w-0 ile dar ekranda fiyat alanına yer bırakır */}
               <div className="relative z-10 flex-1 flex items-center pl-6 pr-2 min-h-0 min-w-0 py-3">
-                <h3 className={`
-                  font-bold leading-tight text-left break-words
-                  ${isOutOfStock 
-                    ? 'text-gray-500 text-sm' 
-                    : 'text-gray-900 text-base group-hover:text-purple-700 transition-colors duration-300'
-                  }
-                `}>
-                  {product.name}
-                </h3>
+                <div className="min-w-0">
+                  <h3 className={`
+                    font-bold leading-tight text-left break-words
+                    ${isOutOfStock 
+                      ? 'text-gray-500 text-sm' 
+                      : 'text-gray-900 text-base group-hover:text-pink-800 theme-sultan:group-hover:text-pink-800 theme-sultan:hover:text-pink-800 theme-sultan:text-emerald-800 transition-colors duration-300'
+                    }
+                  `}>
+                    {product.name}
+                    {product.per_person ? (
+                      <span className="block text-[11px] font-semibold text-amber-700 mt-0.5">Kişi başı</span>
+                    ) : null}
+                    {product.gluten_free ? (
+                      <span className="block text-[10px] font-bold text-emerald-700 mt-0.5 uppercase tracking-wide">Glutensiz</span>
+                    ) : null}
+                  </h3>
+                  {product.description ? (
+                    <p className="text-[11px] text-gray-500 leading-snug mt-1 line-clamp-3 text-left" title={product.description}>
+                      {product.description}
+                    </p>
+                  ) : null}
+                </div>
               </div>
               
               {/* Fiyat - Sağ Taraf (kart içinde kalır, taşmaz) */}
@@ -97,13 +111,24 @@ const ProductGrid = ({ products, onAddToCart }) => {
                     transition-all duration-300
                     ${isOutOfStock 
                       ? 'text-gray-500 bg-gray-100 border border-gray-300' 
-                      : 'text-emerald-800 bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 border border-emerald-200/60 shadow-sm group-hover:shadow group-hover:from-emerald-100 group-hover:via-teal-100 group-hover:to-emerald-100 group-hover:border-emerald-300/80'
+                      : 'text-pink-800 theme-sultan:text-emerald-800 bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 via-indigo-50 theme-sultan:via-teal-50 to-pink-50 theme-sultan:to-emerald-50 border border-pink-200 theme-sultan:border-emerald-200/60 shadow-sm group-hover:shadow group-hover:from-pink-100 theme-sultan:group-hover:from-pink-100 theme-sultan:hover:from-pink-100 theme-sultan:from-emerald-100 group-hover:via-indigo-100 theme-sultan:group-hover:via-indigo-100 theme-sultan:hover:via-indigo-100 theme-sultan:via-teal-100 group-hover:to-pink-100 theme-sultan:group-hover:to-pink-100 theme-sultan:hover:to-pink-100 theme-sultan:to-emerald-100 group-hover:border-pink-300 theme-sultan:group-hover:border-pink-300 theme-sultan:hover:border-pink-300 theme-sultan:border-emerald-300/80'
                     }
                   `}>
                     <span className="relative z-10">₺{product.price.toFixed(2)}</span>
                   </span>
                 </div>
               </div>
+              </div>
+
+              {product.image ? (
+                <div className="relative z-10 w-full px-3 pb-2 pt-0">
+                  <img
+                    src={product.image}
+                    alt=""
+                    className="w-full max-h-28 object-cover rounded-xl border border-gray-100"
+                  />
+                </div>
+              ) : null}
               
               {/* Stok Durumu Badge */}
               {isOutOfStock && (
@@ -114,7 +139,7 @@ const ProductGrid = ({ products, onAddToCart }) => {
               
               {/* Hover İndikatör - Alt Çizgi */}
               {!isOutOfStock && (
-                <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-emerald-400 to-teal-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-center rounded-b-2xl"></div>
+                <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-indigo-400 theme-sultan:to-teal-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-center rounded-b-2xl"></div>
               )}
             </div>
           );
@@ -128,10 +153,16 @@ const ProductGrid = ({ products, onAddToCart }) => {
 export default React.memo(ProductGrid, (prevProps, nextProps) => {
   if (prevProps.products.length !== nextProps.products.length) return false;
   if (prevProps.products.length === 0) return true;
-  // İlk ve son ürünün ID'sini karşılaştır (hızlı kontrol)
-  const prevFirst = prevProps.products[0];
-  const nextFirst = nextProps.products[0];
-  const prevLast = prevProps.products[prevProps.products.length - 1];
-  const nextLast = nextProps.products[nextProps.products.length - 1];
-  return prevFirst?.id === nextFirst?.id && prevLast?.id === nextLast?.id;
+  return prevProps.products.every((p, i) => {
+    const n = nextProps.products[i];
+    return (
+      n &&
+      p.id === n.id &&
+      p.name === n.name &&
+      p.price === n.price &&
+      p.image === n.image &&
+      p.trackStock === n.trackStock &&
+      p.stock === n.stock
+    );
+  });
 });

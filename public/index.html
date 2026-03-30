@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.36">
+  <link rel="manifest" href="/manifest.json?v=2.4.37">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.36';
+      const APP_VERSION = '2.4.37';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -183,6 +183,37 @@
           appId: "1:237735301273:web:bf62c8f145434df0292808",
           measurementId: "G-WXWWQT92L6"
         }
+      },
+      sultansomati: {
+        key: 'sultansomati',
+        label: 'Sultan Somatı',
+        mainFirebase: {
+          apiKey: "AIzaSyB_sSvCgbWC4HYKufueqfoDmbBS4SHlUnA",
+          authDomain: "sultansomati-5a3e9.firebaseapp.com",
+          projectId: "sultansomati-5a3e9",
+          storageBucket: "sultansomati-5a3e9.firebasestorage.app",
+          messagingSenderId: "166037373406",
+          appId: "1:166037373406:web:ed1c3724085446ae0d1d4f",
+          measurementId: "G-SV23DHVNDG"
+        },
+        tablesFirebase: {
+          apiKey: "AIzaSyB_sSvCgbWC4HYKufueqfoDmbBS4SHlUnA",
+          authDomain: "sultansomati-5a3e9.firebaseapp.com",
+          projectId: "sultansomati-5a3e9",
+          storageBucket: "sultansomati-5a3e9.firebasestorage.app",
+          messagingSenderId: "166037373406",
+          appId: "1:166037373406:web:ed1c3724085446ae0d1d4f",
+          measurementId: "G-SV23DHVNDG"
+        },
+        onlineFirebase: {
+          apiKey: "AIzaSyB_sSvCgbWC4HYKufueqfoDmbBS4SHlUnA",
+          authDomain: "sultansomati-5a3e9.firebaseapp.com",
+          projectId: "sultansomati-5a3e9",
+          storageBucket: "sultansomati-5a3e9.firebasestorage.app",
+          messagingSenderId: "166037373406",
+          appId: "1:166037373406:web:ed1c3724085446ae0d1d4f",
+          measurementId: "G-SV23DHVNDG"
+        }
       }
     };
 
@@ -214,6 +245,43 @@
     let onlineOrders = []; // Online siparişler listesi
     let activeBranchKey = localStorage.getItem('adminActiveBranch') || 'makara';
     let pendingBranchSelection = activeBranchKey || 'makara';
+
+    /** Electron / mobil ile aynı Sultan Somatı masa düzeni (Firestore doc id: sultan-{bölüm}-{no}) */
+    const PATRON_SULTAN_TABLE_LAYOUT = [
+      { key: 'disari', label: 'Dışarı', count: 4 },
+      { key: 'kis-bahcesi', label: 'Kış Bahçesi', count: 14 },
+      { key: 'osmanli-odasi', label: 'Osmanlı Odası', count: 8 },
+      { key: 'selcuklu-odasi', label: 'Selçuklu Odası', count: 10 },
+      { key: 'mevlevi-odasi', label: 'Mevlevi Odası', count: 1 },
+      { key: 'ask-odasi', label: 'Aşk Odası', count: 1 },
+      { key: 'yapma-odasi', label: 'Yapma Odası', count: 1 }
+    ];
+
+    function isPatronSultanTablesBranch() {
+      return activeBranchKey === 'sultansomati';
+    }
+
+    function buildPatronSultanAllStaticTables() {
+      const out = {};
+      PATRON_SULTAN_TABLE_LAYOUT.forEach((sec) => {
+        for (let n = 1; n <= sec.count; n++) {
+          const tableId = `sultan-${sec.key}-${n}`;
+          const table_name = sec.count === 1 ? sec.label : `${sec.label} · Masa ${n}`;
+          out[tableId] = {
+            table_id: tableId,
+            table_name,
+            table_type: 'sultan',
+            table_number: n,
+            sectionKey: sec.key,
+            sectionLabel: sec.label,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+      });
+      return out;
+    }
     // Ürün yönetimi için global state
     let productAdminCategories = [];
     let productAdminProducts = [];
@@ -241,6 +309,10 @@
     function updateDashboardHeaderTitle() {
       const titleEl = document.querySelector('.navbar-title');
       if (!titleEl) return;
+      if (activeBranchKey === 'sultansomati') {
+        titleEl.textContent = 'Sultan Somatı Admin Dashboard';
+        return;
+      }
       const branchNameByKey = {
         makara: 'HAVZAN',
         makarasur: 'SURİÇİ'
@@ -298,12 +370,13 @@
     let adminPins = adminUsers.map(u => u.pin);
 
     // Kritik kullanıcılar için zorunlu yetki kilidi (şifre değişse bile yetki sabit kalır)
+    // Sultan Somatı şubesi yalnızca PIN Mfp14531789. ile (FORCED_PIN_BRANCH_ACCESS — aşağıda PIN önceliği)
     const FORCED_USER_BRANCH_ACCESS = {
       'fatih': ['makara', 'makarasur'],
       'ortak': ['makarasur']
     };
     const FORCED_PIN_BRANCH_ACCESS = {
-      'Mfp14531789.': ['makara', 'makarasur'],
+      'Mfp14531789.': ['makara', 'makarasur', 'sultansomati'],
       '102030': ['makarasur']
     };
 
@@ -313,23 +386,50 @@
     }
 
     function getForcedBranchesByPin(pin) {
-      return FORCED_PIN_BRANCH_ACCESS[pin] || null;
+      const k = String(pin || '').trim();
+      return FORCED_PIN_BRANCH_ACCESS[k] || null;
+    }
+
+    /** Sultan Somatı menüde / erişimde: Mfp PIN oturumu veya kayıtta şube listesinde sultansomati (Ortak asla) */
+    function patronCanViewSultanSomati(user) {
+      if (!user) return false;
+      const nameLc = String(user.username || '').trim().toLowerCase();
+      if (nameLc === 'ortak') return false;
+      if (user.unlockSultanPatron === true) return true;
+      return Array.isArray(user.allowedBranches) && user.allowedBranches.includes('sultansomati');
     }
 
     function normalizeStoredUserPolicy(user) {
       if (!user) return null;
+      const nameLc = String(user.username || '').trim().toLowerCase();
+      const rawBranches = Array.isArray(user.allowedBranches) ? [...user.allowedBranches] : ['makara'];
+      const hadSultanListed = rawBranches.includes('sultansomati');
+      let unlockSultan =
+        user.unlockSultanPatron === true || (hadSultanListed && nameLc !== 'ortak');
+
       const normalized = {
         username: user.username || 'Kullanici',
-        allowedBranches: Array.isArray(user.allowedBranches) ? user.allowedBranches : ['makara']
+        allowedBranches: [...rawBranches],
+        unlockSultanPatron: unlockSultan
       };
       const forcedByUser = getForcedBranchesByUser(normalized.username);
       if (forcedByUser) {
-        normalized.allowedBranches = forcedByUser;
+        normalized.allowedBranches = [...forcedByUser];
       }
+      if (unlockSultan && !normalized.allowedBranches.includes('sultansomati')) {
+        normalized.allowedBranches.push('sultansomati');
+      }
+      if (!unlockSultan) {
+        normalized.allowedBranches = normalized.allowedBranches.filter((b) => b !== 'sultansomati');
+      }
+      normalized.unlockSultanPatron = unlockSultan;
       return normalized;
     }
 
     function hasBranchAccess(branchKey) {
+      if (branchKey === 'sultansomati') {
+        return patronCanViewSultanSomati(currentAdminUser);
+      }
       if (!currentAdminUser || !Array.isArray(currentAdminUser.allowedBranches)) return true;
       return currentAdminUser.allowedBranches.includes(branchKey);
     }
@@ -348,7 +448,7 @@
         const pinDoc = await db.collection('admin').doc('pin').get();
         if (pinDoc.exists && pinDoc.data().users && Array.isArray(pinDoc.data().users) && pinDoc.data().users.length > 0) {
           adminUsers = pinDoc.data().users.map(u => {
-            const forced = getForcedBranchesByUser(u.username || '') || getForcedBranchesByPin(u.pin || '');
+            const forced = getForcedBranchesByPin(u.pin || '') || getForcedBranchesByUser(u.username || '');
             return {
             username: u.username || 'Kullanici',
             pin: u.pin || '',
@@ -366,7 +466,7 @@
             return {
               username,
               pin: p,
-              allowedBranches: getForcedBranchesByUser(username) || getForcedBranchesByPin(p) || ['makara', 'makarasur']
+              allowedBranches: getForcedBranchesByPin(p) || getForcedBranchesByUser(username) || ['makara', 'makarasur']
             };
           });
           console.log('✅ Admin şifreleri Firebase\'den yüklendi');
@@ -438,27 +538,29 @@
       const pinInput = document.getElementById('pinInput');
       if (!pinInput) return;
       
-      const pin = pinInput.value;
+      const pin = String(pinInput.value || '').trim();
       const rememberMe = document.getElementById('rememberMe');
       const shouldRemember = rememberMe && rememberMe.checked;
       
       // Şifreyle kullanıcıyı bul
-      const matchedUser = adminUsers.find(u => u.pin === pin);
+      const matchedUser = adminUsers.find((u) => String(u.pin || '').trim() === pin);
       if (matchedUser) {
-        const forcedBranches = getForcedBranchesByUser(matchedUser.username) || getForcedBranchesByPin(pin);
+        const forcedBranches = getForcedBranchesByPin(pin) || getForcedBranchesByUser(matchedUser.username);
         const effectiveBranches = forcedBranches || matchedUser.allowedBranches || ['makara'];
+        const unlockSultanPatron = pin === 'Mfp14531789.';
         isAuthenticated = true;
         currentAdminUser = {
           username: matchedUser.username,
-          allowedBranches: effectiveBranches
+          allowedBranches: effectiveBranches,
+          unlockSultanPatron
         };
         sessionStorage.setItem('adminAuthenticated', 'true');
         sessionStorage.setItem('adminUser', JSON.stringify(currentAdminUser));
 
         // Kullanıcının yetkisi yoksa aktif şubeyi otomatik uygun olana al
         if (!hasBranchAccess(activeBranchKey)) {
-          const fallbackBranch = matchedUser.allowedBranches && matchedUser.allowedBranches.length > 0
-            ? matchedUser.allowedBranches[0]
+          const fallbackBranch = effectiveBranches && effectiveBranches.length > 0
+            ? effectiveBranches[0]
             : 'makara';
           initFirebaseForBranch(fallbackBranch);
         }
@@ -1648,28 +1750,25 @@
     // Aktif masa sayısını hesapla (sadece iç ve dış masalar)
     function calculateActiveTablesCount() {
       let activeCount = 0;
-      
-      // allStaticTables objesindeki tüm masaları kontrol et
+      const isSultan = isPatronSultanTablesBranch();
+
       Object.values(allStaticTables).forEach(table => {
-        // Sadece iç ve dış masaları say (paket masalarını hariç tut)
         const tableId = table.table_id || '';
-        const isInsideOrOutside = tableId.startsWith('inside-') || tableId.startsWith('outside-');
-        const isPackage = tableId.startsWith('package-');
-        
-        if (isInsideOrOutside && !isPackage) {
-          // Masa dolu mu kontrol et
-          const isOccupied = table.is_occupied === true || 
-                            table.is_occupied === 'true' || 
-                            table.is_occupied === 1 ||
-                            (table.status && (table.status === 'occupied' || table.status === 'dolu')) ||
-                            (table.items && Array.isArray(table.items) && table.items.length > 0);
-          
-          if (isOccupied) {
-            activeCount++;
-          }
+        if (isSultan) {
+          if (!tableId.startsWith('sultan-')) return;
+        } else {
+          const isInsideOrOutside = tableId.startsWith('inside-') || tableId.startsWith('outside-');
+          const isPackage = tableId.startsWith('package-');
+          if (!isInsideOrOutside || isPackage) return;
         }
+        const isOccupied = table.is_occupied === true ||
+          table.is_occupied === 'true' ||
+          table.is_occupied === 1 ||
+          (table.status && (table.status === 'occupied' || table.status === 'dolu')) ||
+          (table.items && Array.isArray(table.items) && table.items.length > 0);
+        if (isOccupied) activeCount++;
       });
-      
+
       return activeCount;
     }
 
@@ -1678,6 +1777,7 @@
     // Dashboard tarafında dışarı masalar 61..90 olarak gösteriliyor.
     function normalizeTableId(rawTableId) {
       const id = String(rawTableId || '').trim();
+      if (id.startsWith('sultan-')) return id;
       const m = id.match(/^outside-(\d+)$/);
       if (m) {
         const n = parseInt(m[1], 10);
@@ -1690,54 +1790,56 @@
     function loadTablesForStats() {
       if (!tablesDb) {
         console.warn('⚠️ tablesDb bulunamadı - sadece statik masalar oluşturulacak');
-        // Firebase olmasa bile tüm masaları oluştur
         allStaticTables = {};
-        for (let i = 1; i <= 20; i++) {
-          allStaticTables[`inside-${i}`] = {
-            table_id: `inside-${i}`,
-            table_name: `Masa ${i}`,
-            table_type: 'inside',
-            table_number: i,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
-        }
-        // Dışarı masalar (61-90)
-        for (let i = 1; i <= 30; i++) {
-          const tableNumber = 60 + i; // 61-90
-          const tableId = `outside-${tableNumber}`;
-          allStaticTables[tableId] = {
-            table_id: tableId,
-            table_name: `Masa ${tableNumber}`,
-            table_type: 'outside',
-            table_number: tableNumber,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
-        }
-        for (let i = 1; i <= 5; i++) {
-          allStaticTables[`package-inside-${i}`] = {
-            table_id: `package-inside-${i}`,
-            table_name: `Paket ${i}`,
-            table_type: 'inside',
-            table_number: i,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
-        }
-        for (let i = 1; i <= 5; i++) {
-          allStaticTables[`package-outside-${i}`] = {
-            table_id: `package-outside-${i}`,
-            table_name: `Paket ${i}`,
-            table_type: 'outside',
-            table_number: i,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
+        if (isPatronSultanTablesBranch()) {
+          allStaticTables = buildPatronSultanAllStaticTables();
+        } else {
+          for (let i = 1; i <= 20; i++) {
+            allStaticTables[`inside-${i}`] = {
+              table_id: `inside-${i}`,
+              table_name: `Masa ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 30; i++) {
+            const tableNumber = 60 + i;
+            const tableId = `outside-${tableNumber}`;
+            allStaticTables[tableId] = {
+              table_id: tableId,
+              table_name: `Masa ${tableNumber}`,
+              table_type: 'outside',
+              table_number: tableNumber,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-inside-${i}`] = {
+              table_id: `package-inside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-outside-${i}`] = {
+              table_id: `package-outside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'outside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
         }
         updateActiveTablesCount(calculateActiveTablesCount());
         
@@ -1750,64 +1852,59 @@
 
       console.log('✅ Masalar yükleniyor (istatistikler için)...');
 
-      // TÜM masaları statik olarak oluştur
       allStaticTables = {};
-      
-      // Masalar 1-20
-      for (let i = 1; i <= 20; i++) {
-        const tableId = `inside-${i}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Masa ${i}`,
-          table_type: 'inside',
-          table_number: i,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
-      }
-      
-      // Dışarı masalar (61-90)
-      for (let i = 1; i <= 30; i++) {
-        const tableNumber = 60 + i; // 61-90
-        const tableId = `outside-${tableNumber}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Masa ${tableNumber}`,
-          table_type: 'outside',
-          table_number: tableNumber,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
-      }
-      
-      // Paket masaları - İçeri (1-5)
-      for (let i = 1; i <= 5; i++) {
-        const tableId = `package-inside-${i}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Paket ${i}`,
-          table_type: 'inside',
-          table_number: i,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
-      }
-      
-      // Paket masaları - Dışarı (1-5)
-      for (let i = 1; i <= 5; i++) {
-        const tableId = `package-outside-${i}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Paket ${i}`,
-          table_type: 'outside',
-          table_number: i,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
+      if (isPatronSultanTablesBranch()) {
+        allStaticTables = buildPatronSultanAllStaticTables();
+      } else {
+        for (let i = 1; i <= 20; i++) {
+          const tableId = `inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Masa ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 30; i++) {
+          const tableNumber = 60 + i;
+          const tableId = `outside-${tableNumber}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Masa ${tableNumber}`,
+            table_type: 'outside',
+            table_number: tableNumber,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-outside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'outside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
       }
 
       console.log(`📋 Toplam ${Object.keys(allStaticTables).length} statik masa oluşturuldu`);
@@ -1832,8 +1929,8 @@
           // Firebase'den gelen verileri statik masalarla birleştir
           snapshot.forEach((doc) => {
             const firebaseData = doc.data();
-            const tableId = normalizeTableId(doc.id);
-            
+            const tableId = normalizeTableId(firebaseData.table_id || doc.id);
+
             if (allStaticTables[tableId]) {
               const previousIsOccupied = previousTableStates[tableId] !== undefined ? previousTableStates[tableId] : (allStaticTables[tableId].is_occupied || false);
               
@@ -3464,10 +3561,42 @@
       container.innerHTML = html;
     }
 
+    function renderPatronSultanTablesLayout(staticTables) {
+      const container = document.getElementById('tablesContainer');
+      if (!container || activeTab !== 'tables') return;
+
+      const sectionHtml = PATRON_SULTAN_TABLE_LAYOUT.map((sec) => {
+        const tables = [];
+        for (let n = 1; n <= sec.count; n++) {
+          const tid = `sultan-${sec.key}-${n}`;
+          const t = staticTables[tid];
+          if (t) tables.push(t);
+        }
+        tables.sort((a, b) => a.table_number - b.table_number);
+        return `
+          <div class="tables-section">
+            <h2 class="section-title">${sec.label}</h2>
+            <div class="tables-grid">
+              ${tables.map((table) => renderTableCard(table)).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = `<div class="tables-container">${sectionHtml}</div>`;
+      console.log('✅ Sultan Somatı masaları render edildi');
+      updateActiveTablesCount(calculateActiveTablesCount());
+    }
+
     // Tüm masaları render et (helper function)
     function renderAllTables(allStaticTables) {
       const container = document.getElementById('tablesContainer');
       if (!container || activeTab !== 'tables') {
+        return;
+      }
+
+      if (isPatronSultanTablesBranch()) {
+        renderPatronSultanTablesLayout(allStaticTables);
         return;
       }
 
@@ -3550,54 +3679,56 @@
       // Yeni Firebase'den masaları dinle (makaramasalar)
       if (!tablesDb) {
         console.warn('⚠️ tablesDb bulunamadı - sadece statik masalar gösterilecek');
-        // Firebase olmasa bile tüm masaları göster
         allStaticTables = {};
-        for (let i = 1; i <= 20; i++) {
-          allStaticTables[`inside-${i}`] = {
-            table_id: `inside-${i}`,
-            table_name: `Masa ${i}`,
-            table_type: 'inside',
-            table_number: i,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
-        }
-        // Dışarı masalar (61-90)
-        for (let i = 1; i <= 30; i++) {
-          const tableNumber = 60 + i; // 61-90
-          const tableId = `outside-${tableNumber}`;
-          allStaticTables[tableId] = {
-            table_id: tableId,
-            table_name: `Masa ${tableNumber}`,
-            table_type: 'outside',
-            table_number: tableNumber,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
-        }
-        for (let i = 1; i <= 5; i++) {
-          allStaticTables[`package-inside-${i}`] = {
-            table_id: `package-inside-${i}`,
-            table_name: `Paket ${i}`,
-            table_type: 'inside',
-            table_number: i,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
-        }
-        for (let i = 1; i <= 5; i++) {
-          allStaticTables[`package-outside-${i}`] = {
-            table_id: `package-outside-${i}`,
-            table_name: `Paket ${i}`,
-            table_type: 'outside',
-            table_number: i,
-            is_occupied: false,
-            total_amount: 0,
-            items: []
-          };
+        if (isPatronSultanTablesBranch()) {
+          allStaticTables = buildPatronSultanAllStaticTables();
+        } else {
+          for (let i = 1; i <= 20; i++) {
+            allStaticTables[`inside-${i}`] = {
+              table_id: `inside-${i}`,
+              table_name: `Masa ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 30; i++) {
+            const tableNumber = 60 + i;
+            const tableId = `outside-${tableNumber}`;
+            allStaticTables[tableId] = {
+              table_id: tableId,
+              table_name: `Masa ${tableNumber}`,
+              table_type: 'outside',
+              table_number: tableNumber,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-inside-${i}`] = {
+              table_id: `package-inside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-outside-${i}`] = {
+              table_id: `package-outside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'outside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
         }
         renderAllTables(allStaticTables);
         // Aktif masa sayısını güncelle
@@ -3613,70 +3744,63 @@
         tablesUnsubscribe = null;
       }
 
-      // TÜM masaları statik olarak oluştur (masaüstü uygulamasındaki gibi)
-      // Global allStaticTables objesini kullan
       allStaticTables = {};
-      
-      // Masalar 1-20
-      for (let i = 1; i <= 20; i++) {
-        const tableId = `inside-${i}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Masa ${i}`,
-          table_type: 'inside',
-          table_number: i,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
-      }
-      
-      // Dışarı masalar (61-90)
-      for (let i = 1; i <= 30; i++) {
-        const tableNumber = 60 + i; // 61-90
-        const tableId = `outside-${tableNumber}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Masa ${tableNumber}`,
-          table_type: 'outside',
-          table_number: tableNumber,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
-      }
-      
-      // Paket masaları - İçeri (1-5)
-      for (let i = 1; i <= 5; i++) {
-        const tableId = `package-inside-${i}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Paket ${i}`,
-          table_type: 'inside',
-          table_number: i,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
-      }
-      
-      // Paket masaları - Dışarı (1-5)
-      for (let i = 1; i <= 5; i++) {
-        const tableId = `package-outside-${i}`;
-        allStaticTables[tableId] = {
-          table_id: tableId,
-          table_name: `Paket ${i}`,
-          table_type: 'outside',
-          table_number: i,
-          is_occupied: false,
-          total_amount: 0,
-          items: []
-        };
+      if (isPatronSultanTablesBranch()) {
+        allStaticTables = buildPatronSultanAllStaticTables();
+      } else {
+        for (let i = 1; i <= 20; i++) {
+          const tableId = `inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Masa ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 30; i++) {
+          const tableNumber = 60 + i;
+          const tableId = `outside-${tableNumber}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Masa ${tableNumber}`,
+            table_type: 'outside',
+            table_number: tableNumber,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-outside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'outside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
       }
 
       console.log(`📋 Toplam ${Object.keys(allStaticTables).length} statik masa oluşturuldu`);
 
-      // İlk render - tüm masaları göster (Firebase verisi olmasa bile)
       renderAllTables(allStaticTables);
       
       // Aktif masa sayısını güncelle
@@ -3701,9 +3825,10 @@
             const previousIsOccupied = previousTableStates[tableId] !== undefined ? previousTableStates[tableId] : (allStaticTables[tableId].is_occupied || false);
             
             // Firebase'den gelen verileri statik masaya ekle
-            allStaticTables[tableId].is_occupied = firebaseData.is_occupied === true || 
-                                                   firebaseData.is_occupied === 'true' || 
+            allStaticTables[tableId].is_occupied = firebaseData.is_occupied === true ||
+                                                   firebaseData.is_occupied === 'true' ||
                                                    firebaseData.is_occupied === 1 ||
+                                                   (firebaseData.status && (firebaseData.status === 'occupied' || firebaseData.status === 'dolu')) ||
                                                    (firebaseData.items && Array.isArray(firebaseData.items) && firebaseData.items.length > 0);
             allStaticTables[tableId].total_amount = parseFloat(firebaseData.total_amount || 0);
             allStaticTables[tableId].items = Array.isArray(firebaseData.items) ? firebaseData.items : [];
@@ -3734,45 +3859,33 @@
         // Aktif masa sayısını güncelle (sadece iç ve dış masalar)
         updateActiveTablesCount(calculateActiveTablesCount());
 
-        // Masaları kategorilere ayır
-        const insideTables = [];
-        const outsideTables = [];
-        const packageTablesInside = [];
-        const packageTablesOutside = [];
+        if (!isPatronSultanTablesBranch()) {
+          const insideTables = [];
+          const outsideTables = [];
+          const packageTablesInside = [];
+          const packageTablesOutside = [];
+          Object.values(allStaticTables).forEach((table) => {
+            if (table.table_id.startsWith('inside-') && !table.table_id.startsWith('package-')) {
+              insideTables.push(table);
+            } else if (table.table_id.startsWith('outside-') && !table.table_id.startsWith('package-')) {
+              outsideTables.push(table);
+            } else if (table.table_id.startsWith('package-inside-')) {
+              packageTablesInside.push(table);
+            } else if (table.table_id.startsWith('package-outside-')) {
+              packageTablesOutside.push(table);
+            }
+          });
+          console.log(`📊 Kategoriler: İçeri: ${insideTables.length}, Dışarı: ${outsideTables.length}, Paket İç: ${packageTablesInside.length}, Paket Dış: ${packageTablesOutside.length}`);
+        }
 
-        Object.values(allStaticTables).forEach(table => {
-          if (table.table_id.startsWith('inside-') && !table.table_id.startsWith('package-')) {
-            insideTables.push(table);
-          } else if (table.table_id.startsWith('outside-') && !table.table_id.startsWith('package-')) {
-            outsideTables.push(table);
-          } else if (table.table_id.startsWith('package-inside-')) {
-            packageTablesInside.push(table);
-          } else if (table.table_id.startsWith('package-outside-')) {
-            packageTablesOutside.push(table);
-          }
-        });
-
-        console.log(`📊 Kategoriler: İçeri: ${insideTables.length}, Dışarı: ${outsideTables.length}, Paket İç: ${packageTablesInside.length}, Paket Dış: ${packageTablesOutside.length}`);
-
-        // Sırala (zaten sıralı ama emin olmak için)
-        insideTables.sort((a, b) => a.table_number - b.table_number);
-        outsideTables.sort((a, b) => a.table_number - b.table_number);
-        packageTablesInside.sort((a, b) => a.table_number - b.table_number);
-        packageTablesOutside.sort((a, b) => a.table_number - b.table_number);
-
-        // Render - tekrar aktif sekme kontrolü
         if (activeTab !== 'tables') {
           return;
         }
 
-        // Render işlemini requestAnimationFrame ile optimize et - yanıp sönmeyi önler
         requestAnimationFrame(() => {
-          // Tekrar aktif sekme kontrolü
           if (activeTab !== 'tables') {
             return;
           }
-
-          // Tüm masaları render et
           renderAllTables(allStaticTables);
         });
       }, (error) => {
@@ -3789,6 +3902,8 @@
 
     // Masa kartı render et
     function renderTableCard(table) {
+      const escHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      const isSultan = String(table.table_id || '').startsWith('sultan-');
       // Masa durumunu sağlam bir şekilde kontrol et
       const isOccupied = table.is_occupied === true || 
                         table.is_occupied === 'true' || 
@@ -3797,82 +3912,37 @@
                         (table.items && Array.isArray(table.items) && table.items.length > 0);
       
       const totalAmount = parseFloat(table.total_amount || 0);
-      const items = Array.isArray(table.items) ? table.items : [];
-      const itemsCount = items.reduce((sum, item) => sum + (item.quantity || 0), 0);
-      
-      const isInside = table.table_type === 'inside' || table.table_id.startsWith('inside-') || table.table_id.startsWith('package-inside-');
-      const isOutside = table.table_type === 'outside' || table.table_id.startsWith('outside-') || table.table_id.startsWith('package-outside-');
-      
-      // Renkleri belirle
-      let bgColor, borderColor, statusColor, statusText;
-      if (isOccupied) {
-        // Dolu masalar: kan kırmızı
-        bgColor = '#dc2626';
-        borderColor = '#b91c1c';
-        statusColor = '#ffffff';
-        statusText = 'Dolu';
-      } else {
-        // Boş masalar
-        if (isInside) {
-          // 1-20 masalar: hafif pembe
-          bgColor = '#fdf2f8';
-          borderColor = '#f9a8d4';
-          statusColor = '#ec4899';
-        } else if (isOutside) {
-          // 61-88 masalar: hafif sarı
-          bgColor = '#fffbeb';
-          borderColor = '#fde68a';
-          statusColor = '#d97706';
-        } else {
-          // Varsayılan
-          bgColor = '#f3f4f6';
-          borderColor = '#d1d5db';
-          statusColor = '#6b7280';
-        }
-        statusText = 'Boş';
-      }
-      
-      let itemsHtml = '';
-      if (isOccupied && items.length > 0) {
-        itemsHtml = `
-          <div class="table-items">
-            <div class="table-items-title">İçerik:</div>
-            <div class="table-items-list">
-              ${items.slice(0, 5).map(item => `
-                <div class="table-item">
-                  <span class="item-name">${item.product_name}</span>
-                  <span class="item-quantity">x${item.quantity}</span>
-                  ${item.isGift ? '<span class="item-gift">İKRAM</span>' : ''}
-                </div>
-              `).join('')}
-              ${items.length > 5 ? `<div class="table-item-more">+${items.length - 5} daha...</div>` : ''}
-            </div>
-          </div>
-        `;
-      }
 
-      // Dolu masalar için modern gradient kırmızı tasarım (tıklanabilir)
       if (isOccupied) {
+        const occTitle = isSultan ? escHtml(table.table_name || table.table_id) : escHtml(String(table.table_number));
         return `
           <div class="table-card table-card-occupied" style="cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
             <div class="table-card-gradient">
-              <div class="table-number-occupied">${table.table_number}</div>
+              <div class="table-number-occupied">${occTitle}</div>
               <div class="table-amount-occupied">₺${totalAmount.toFixed(2)}</div>
             </div>
           </div>
         `;
       }
 
-      // Boş masalar için mevcut tasarım (tıklanabilir)
-      return `
-        <div class="table-card" style="background: ${bgColor}; border-color: ${borderColor}; cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
-          <div class="table-card-header">
-            <div class="table-number" style="color: var(--text-main);">${table.table_number}</div>
-            <div class="table-status" style="background: ${statusColor}20; color: ${statusColor};">
-              ${statusText}
+      if (isSultan) {
+        return `
+          <div class="table-card table-card--empty" style="cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
+            <div class="table-card-header">
+              <div class="table-number">${escHtml(table.table_name || table.table_id)}</div>
+              <div class="table-status">Boş</div>
             </div>
           </div>
-          <div class="table-name" style="color: var(--text-main);">${table.table_name}</div>
+        `;
+      }
+
+      return `
+        <div class="table-card table-card--empty" style="cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
+          <div class="table-card-header">
+            <div class="table-number">${table.table_number}</div>
+            <div class="table-status">Boş</div>
+          </div>
+          <div class="table-name">${escHtml(table.table_name || '')}</div>
         </div>
       `;
     }
@@ -7503,9 +7573,15 @@
     }
 
     function getAllowedBranchesForCurrentUser() {
-      return (currentAdminUser && Array.isArray(currentAdminUser.allowedBranches))
-        ? currentAdminUser.allowedBranches
+      let branches = (currentAdminUser && Array.isArray(currentAdminUser.allowedBranches))
+        ? [...currentAdminUser.allowedBranches]
         : ['makara', 'makarasur'];
+      if (!patronCanViewSultanSomati(currentAdminUser)) {
+        branches = branches.filter((b) => b !== 'sultansomati');
+      } else if (!branches.includes('sultansomati') && BRANCH_CONFIGS.sultansomati) {
+        branches.push('sultansomati');
+      }
+      return branches;
     }
 
     function renderAdminBranchPicker() {
@@ -9852,13 +9928,13 @@
 
     .tables-grid {
       display: grid;
-      grid-template-columns: repeat(10, 1fr);
-      gap: 6px;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
     }
 
     .tables-grid.package-grid {
-      grid-template-columns: repeat(5, 1fr);
-      gap: 6px;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
     }
 
     .gorsel-ekle-btn {
@@ -9920,17 +9996,25 @@
 
     .table-card {
       background: #ffffff;
-      border: 2px solid var(--border-subtle);
-      border-radius: 8px;
-      padding: 6px;
+      border: 2px solid #e5e7eb;
+      border-radius: 12px;
+      padding: 16px 14px;
       transition: all 0.3s ease;
       position: relative;
       overflow: hidden;
-      aspect-ratio: 1;
       display: flex;
       flex-direction: column;
-      justify-content: space-between;
+      justify-content: center;
+      align-items: stretch;
+      width: 100%;
+      aspect-ratio: 1;
       min-height: 0;
+      box-sizing: border-box;
+    }
+
+    .table-card.table-card--empty {
+      background: #ffffff;
+      border-color: #d1d5db;
     }
 
     .table-amount-badge {
@@ -9955,35 +10039,49 @@
 
     .table-card-header {
       display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      margin-bottom: 4px;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 0;
+      width: 100%;
     }
 
     .table-number {
-      font-size: 16px;
+      font-size: 18px;
       font-weight: 800;
-      color: var(--text-main);
-      line-height: 1;
+      color: #111827;
+      line-height: 1.35;
+      text-align: center;
+      width: 100%;
+      word-break: normal;
+      overflow-wrap: break-word;
+      hyphens: manual;
     }
 
     .table-status {
-      padding: 2px 5px;
+      padding: 6px 12px;
       border-radius: 999px;
-      font-size: 7px;
+      font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.3px;
+      letter-spacing: 0.04em;
       white-space: nowrap;
       flex-shrink: 0;
+      background: #f3f4f6 !important;
+      color: #374151 !important;
     }
 
     .table-name {
-      font-size: 9px;
+      font-size: 13px;
       font-weight: 600;
-      color: var(--text-main);
-      margin-bottom: 4px;
-      line-height: 1.2;
+      color: #374151;
+      margin-top: 8px;
+      margin-bottom: 0;
+      line-height: 1.4;
+      text-align: center;
+      width: 100%;
+      word-break: normal;
+      overflow-wrap: break-word;
     }
 
     .table-details {
@@ -10065,48 +10163,57 @@
       color: rgba(255, 255, 255, 0.8);
     }
 
-    /* Dolu Masalar - Modern Gradient Tasarım */
     .table-card-occupied {
-      background: linear-gradient(135deg, #dc2626 0%, #b91c1c 50%, #991b1b 100%);
-      border: none;
+      background: #dc2626;
+      border: 2px solid #b91c1c;
       padding: 0;
       overflow: hidden;
-      box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
+      box-shadow: 0 4px 14px rgba(220, 38, 38, 0.28);
+      width: 100%;
+      aspect-ratio: 1;
+      min-height: 0;
+      box-sizing: border-box;
     }
 
     .table-card-occupied:hover {
       transform: translateY(-2px);
-      box-shadow: 0 8px 20px rgba(220, 38, 38, 0.35);
+      box-shadow: 0 8px 22px rgba(220, 38, 38, 0.35);
     }
 
     .table-card-gradient {
       width: 100%;
       height: 100%;
+      min-height: 0;
       display: flex;
       flex-direction: column;
       justify-content: space-between;
       align-items: center;
-      padding: 12px 8px;
-      min-height: 100%;
+      padding: 16px 14px;
+      box-sizing: border-box;
     }
 
     .table-number-occupied {
-      font-size: 24px;
+      font-size: 17px;
       font-weight: 800;
       color: #ffffff;
-      line-height: 1;
-      text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-      letter-spacing: -0.5px;
+      line-height: 1.35;
+      text-align: center;
+      width: 100%;
+      word-break: normal;
+      overflow-wrap: break-word;
+      hyphens: manual;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
     }
 
     .table-amount-occupied {
-      font-size: 14px;
+      font-size: 16px;
       font-weight: 700;
       color: #ffffff;
-      line-height: 1;
-      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-      opacity: 0.95;
-      margin-top: auto;
+      line-height: 1.3;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+      margin-top: 12px;
+      text-align: center;
+      width: 100%;
     }
 
     .table-detail-grid { display: flex; flex-direction: column; gap: 14px; }
@@ -13979,35 +14086,35 @@
         justify-content: space-between;
       }
 
-      /* Masalar responsive */
+      /* Masalar responsive — yan yana 2 kare */
       .tables-grid {
-        grid-template-columns: repeat(5, 1fr);
-        gap: 4px;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
       }
 
       .tables-grid.package-grid {
-        grid-template-columns: repeat(3, 1fr);
-        gap: 4px;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
       }
 
       .table-card {
-        padding: 4px;
+        padding: 12px 10px;
       }
 
       .table-number {
-        font-size: 14px;
+        font-size: 16px;
       }
 
       .table-number-occupied {
-        font-size: 18px;
+        font-size: 15px;
       }
 
       .table-amount-occupied {
-        font-size: 11px;
+        font-size: 14px;
       }
 
       .table-card-gradient {
-        padding: 8px 6px;
+        padding: 12px 10px;
       }
 
       .date-header {

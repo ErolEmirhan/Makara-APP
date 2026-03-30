@@ -26,8 +26,8 @@ const Toast = ({ message, type = 'info', onClose, autoHideDuration = 3000 }) => 
     switch (type) {
       case 'success':
         return {
-          gradient: 'from-green-500 to-emerald-500',
-          border: 'border-green-300',
+          gradient: 'from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500',
+          border: 'border-fuchsia-300 theme-sultan:border-green-300',
           icon: (
             <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -37,7 +37,7 @@ const Toast = ({ message, type = 'info', onClose, autoHideDuration = 3000 }) => 
         };
       case 'error':
         return {
-          gradient: 'from-red-500 to-rose-500',
+          gradient: 'from-red-500 to-pink-500 theme-sultan:to-emerald-500',
           border: 'border-red-300',
           icon: (
             <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">

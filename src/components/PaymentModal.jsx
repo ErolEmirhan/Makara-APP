@@ -25,7 +25,7 @@ const PaymentModal = ({ totalAmount, onSelectPayment, onClose, isSubmitting = fa
 
   return (
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-      <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
+      <div className="bg-white backdrop-blur-xl border border-pink-200 theme-sultan:border-emerald-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
         <div className="text-center mb-8">
           <h2 className="text-3xl font-bold mb-2 gradient-text">Ödeme Yöntemi Seçin</h2>
           {selectedCampaign ? (
@@ -35,17 +35,17 @@ const PaymentModal = ({ totalAmount, onSelectPayment, onClose, isSubmitting = fa
                 ₺{totalAmount.toFixed(2)}
               </p>
               <p className="text-gray-600">Kampanya: %{selectedCampaign} İndirim</p>
-              <p className="text-4xl font-bold mt-2 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+              <p className="text-4xl font-bold mt-2 bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-400 theme-sultan:to-emerald-400 bg-clip-text text-transparent">
                 ₺{calculateFinalAmount(selectedCampaign).toFixed(2)}
               </p>
-              <p className="text-sm text-green-600 font-semibold">
+              <p className="text-sm text-fuchsia-600 theme-sultan:text-green-600 font-semibold">
                 İndirim: -₺{calculateDiscount(selectedCampaign).toFixed(2)}
               </p>
             </div>
           ) : (
             <>
               <p className="text-gray-600">Toplam Tutar</p>
-              <p className="text-4xl font-bold mt-2 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+              <p className="text-4xl font-bold mt-2 bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-400 theme-sultan:to-emerald-400 bg-clip-text text-transparent">
                 ₺{totalAmount.toFixed(2)}
               </p>
             </>
@@ -56,7 +56,7 @@ const PaymentModal = ({ totalAmount, onSelectPayment, onClose, isSubmitting = fa
           <button
             onClick={() => !isSubmitting && handlePaymentSelect('Nakit')}
             disabled={isSubmitting}
-            className="w-full p-6 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95 flex items-center justify-center"
+            className="w-full p-6 bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 hover:from-fuchsia-600 theme-sultan:hover:from-fuchsia-600 theme-sultan:from-green-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 disabled:from-gray-400 disabled:to-gray-500 disabled:cursor-not-allowed rounded-2xl text-white font-bold text-xl transition-all duration-300 hover:shadow-2xl hover:scale-105 active:scale-95 flex items-center justify-center"
           >
             <div className="flex items-center justify-center space-x-3">
               {isSubmitting ? (

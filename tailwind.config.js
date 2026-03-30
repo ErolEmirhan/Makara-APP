@@ -1,3 +1,5 @@
+import plugin from 'tailwindcss/plugin';
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -34,6 +36,11 @@ export default {
       }
     },
   },
-  plugins: [],
+  plugins: [
+    plugin(({ addVariant }) => {
+      // Üst öğede .theme-sultan varken yeşil tema (Sultan Somatı şubesi)
+      addVariant('theme-sultan', '.theme-sultan &');
+    }),
+  ],
 }
 

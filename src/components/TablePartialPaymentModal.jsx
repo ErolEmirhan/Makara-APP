@@ -134,13 +134,13 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
       modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
       modal.innerHTML = `
         <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-          <div class="bg-gradient-to-r from-violet-600 to-purple-600 px-6 py-4">
+          <div class="bg-gradient-to-r from-violet-600 to-pink-600 theme-sultan:to-emerald-600 px-6 py-4">
             <h3 class="text-xl font-bold text-white mb-1">Parçalı Ödeme 1/${denominator}</h3>
             <p class="text-sm text-white/90">Tutar: ₺${payAmount} (başlangıç toplamının 1/${denominator}'i, tam lira)</p>
           </div>
           <div class="p-6">
             <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
                 <div class="flex flex-col items-center space-y-2">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                   <span class="text-base">Nakit</span>
@@ -240,7 +240,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
           </div>
           <div class="p-6">
             <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
                 <div class="flex flex-col items-center space-y-2">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -390,7 +390,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
           </div>
           <div class="p-6">
             <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
+              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
                 <div class="flex flex-col items-center space-y-2">
                   <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -641,11 +641,11 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
             </div>
             <div>
               <p className="text-xs text-gray-500 mb-1 font-medium">Ödenen</p>
-              <p className="text-xl font-bold text-green-600">₺{paidAmount.toFixed(2)}</p>
+              <p className="text-xl font-bold text-fuchsia-600 theme-sultan:text-green-600">₺{paidAmount.toFixed(2)}</p>
             </div>
             <div>
               <p className="text-xs text-gray-500 mb-1 font-medium">Kalan</p>
-              <p className={`text-xl font-bold ${remainingAmount > 0.01 ? 'text-orange-600' : 'text-green-600'}`}>
+              <p className={`text-xl font-bold ${remainingAmount > 0.01 ? 'text-orange-600' : 'text-fuchsia-600 theme-sultan:text-green-600'}`}>
                 ₺{remainingAmount.toFixed(2)}
               </p>
             </div>
@@ -661,7 +661,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
           {hasAmountBasedPartialPayment ? (
             <>
               {/* Parçalı ödeme alındı – sadece parçalı ödeme ile devam bildirimi */}
-              <div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-purple-50 p-6 shadow-sm">
+              <div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-pink-50 theme-sultan:to-emerald-50 p-6 shadow-sm">
                 <div className="flex items-start gap-4">
                   <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-violet-100 flex items-center justify-center">
                     <svg className="w-6 h-6 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -808,14 +808,14 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
 
               {/* Ödenen kalemler */}
               <section>
-                <h3 className="text-sm font-bold text-green-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                <h3 className="text-sm font-bold text-fuchsia-700 theme-sultan:text-green-700 uppercase tracking-wide mb-3 flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full bg-fuchsia-500 theme-sultan:bg-fuchsia-50 theme-sultan:bg-green-500" />
                   Ödenen kalemler ({completedItems.length})
                 </h3>
-                <div className="rounded-xl border border-green-200 overflow-hidden bg-green-50/30">
+                <div className="rounded-xl border border-fuchsia-200 theme-sultan:border-green-200 overflow-hidden bg-fuchsia-50 theme-sultan:bg-green-50/30">
                   <table className="w-full text-left text-sm">
                     <thead>
-                      <tr className="bg-green-50 text-gray-600 border-b border-green-100">
+                      <tr className="bg-fuchsia-50 theme-sultan:bg-green-50 text-gray-600 border-b border-fuchsia-100 theme-sultan:border-green-100">
                         <th className="py-3 px-4 font-semibold">Ürün</th>
                         <th className="py-3 px-4 font-semibold text-center w-20">Adet</th>
                         <th className="py-3 px-4 font-semibold text-right w-28">Tutar</th>
@@ -830,9 +830,9 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
                         const paidTotal = roundMoney(item.price * paidQty);
                         const itemTotal = roundMoney(item.price * totalQty);
                         return (
-                          <tr key={item.id} className="border-b border-green-100/50">
-                            <td className="py-3 px-4 font-medium text-green-800">{item.product_name}</td>
-                            <td className="py-3 px-4 text-center text-green-700">
+                          <tr key={item.id} className="border-b border-fuchsia-100 theme-sultan:border-green-100/50">
+                            <td className="py-3 px-4 font-medium text-fuchsia-800 theme-sultan:text-green-800">{item.product_name}</td>
+                            <td className="py-3 px-4 text-center text-fuchsia-700 theme-sultan:text-green-700">
                               {isFullyPaid ? (
                                 totalQty
                               ) : (
@@ -843,7 +843,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
                                 </span>
                               )}
                             </td>
-                            <td className="py-3 px-4 text-right font-medium text-green-700">
+                            <td className="py-3 px-4 text-right font-medium text-fuchsia-700 theme-sultan:text-green-700">
                               {isFullyPaid ? (
                                 `₺${itemTotal.toFixed(2)}`
                               ) : (
@@ -853,7 +853,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
                                 </span>
                               )}
                             </td>
-                            <td className="py-3 px-4 text-green-600 text-sm">{item.paymentMethod || '—'}</td>
+                            <td className="py-3 px-4 text-fuchsia-600 theme-sultan:text-green-600 text-sm">{item.paymentMethod || '—'}</td>
                           </tr>
                         );
                       })}

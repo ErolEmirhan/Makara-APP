@@ -26,9 +26,9 @@ const PrintToast = ({ status, message, onClose, autoHideDuration = 3000 }) => {
   const isPrinting = status === 'printing';
 
   const gradient = isSuccess 
-    ? 'from-green-500 to-emerald-500' 
+    ? 'from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500' 
     : isError 
-    ? 'from-red-500 to-rose-500'
+    ? 'from-red-500 to-pink-500 theme-sultan:to-emerald-500'
     : 'from-blue-500 to-indigo-500';
 
   const handleClose = () => setIsClosing(true);

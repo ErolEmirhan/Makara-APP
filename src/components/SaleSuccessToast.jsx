@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 const paymentColors = {
-  Nakit: 'from-emerald-500 to-lime-500',
+  Nakit: 'from-pink-500 theme-sultan:from-emerald-500 to-lime-500',
   'Kredi Kartı': 'from-sky-500 to-indigo-500',
   'Masaya Kaydedildi': 'from-blue-500 to-cyan-500',
   'Ayrı Ödemeler': 'from-orange-500 to-amber-500',
@@ -27,7 +27,7 @@ const SaleSuccessToast = ({ info, onClose, autoHideDuration = 2500 }) => {
 
   if (!info) return null;
 
-  const gradient = paymentColors[info.paymentMethod] || 'from-purple-500 to-pink-500';
+  const gradient = paymentColors[info.paymentMethod] || 'from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500';
   const animationClass = isClosing ? 'animate-toast-slide-up' : 'animate-toast-slide-down';
 
   const handleClose = () => setIsClosing(true);

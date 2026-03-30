@@ -23,6 +23,17 @@ import SettingsModal from './components/SettingsModal';
 
 const BRANCH_ONBOARDING_KEY = 'makara_pos_branch_onboarded';
 
+/** Sultan Somatı: “Yan Ürünler” yalnızca Makara’da; Firebase’de kayıtlı olsa bile Sultan’da gösterilmez. */
+function filterYanUrunlerCategoriesForSultan(cats) {
+  if (!Array.isArray(cats)) return [];
+  return cats.filter((c) => {
+    const n = Number(c.id);
+    if (n === 999999 || n === -999) return false;
+    const nm = (c?.name || '').trim().toLowerCase();
+    return nm !== 'yan ürünler' && nm !== 'yan urunler';
+  });
+}
+
 function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [selectedBranchKey, setSelectedBranchKey] = useState('');
@@ -101,14 +112,33 @@ function App() {
       key: 'makarasur',
       label: 'MAKARA SURİÇİ',
       subtitle: 'Suriçi şube'
+    },
+    {
+      key: 'sultansomati',
+      label: 'SULTAN SOMATI',
+      subtitle: 'Makara ile ortak katalog yok'
     }
   ]), []);
+  const VALID_BRANCH_KEYS = useMemo(
+    () => new Set(BRANCH_OPTIONS.map((b) => b.key)),
+    [BRANCH_OPTIONS]
+  );
   const systemTitle = useMemo(() => {
     const key = activeBranch?.key || selectedBranchKey;
     if (key === 'makarasur') return 'Makara Suriçi Satış Sistemi';
+    if (key === 'sultansomati') return 'Sultan Somatı Satış Sistemi';
     return 'Makara Havzan Satış Sistemi';
   }, [activeBranch, selectedBranchKey]);
   const isSuriciBranch = (activeBranch?.key || selectedBranchKey) === 'makarasur';
+  const isSultanBranch = useMemo(
+    () => Boolean(isBranchReady && activeBranch?.key === 'sultansomati'),
+    [isBranchReady, activeBranch]
+  );
+
+  useEffect(() => {
+    document.body.classList.toggle('body-theme-sultan', isSultanBranch);
+    return () => document.body.classList.remove('body-theme-sultan');
+  }, [isSultanBranch]);
 
   // Kayıtlı şube: bu cihazda bir kez seçildiyse her açılışta otomatik bağlan
   useEffect(() => {
@@ -133,7 +163,7 @@ function App() {
         }
         const branch = await window.electronAPI.getActiveBranch();
         const key = (branch?.key || '').trim().toLowerCase();
-        if (key !== 'makara' && key !== 'makarasur') {
+        if (!VALID_BRANCH_KEYS.has(key)) {
           if (!cancelled) setBranchGateResolved(true);
           return;
         }
@@ -143,7 +173,7 @@ function App() {
           setActiveBranch(result.branch || branch);
           setSelectedBranchKey(key);
           setIsBranchReady(true);
-          setCurrentView(key === 'makarasur' ? 'tables' : 'pos');
+          setCurrentView(key === 'makarasur' || key === 'sultansomati' ? 'tables' : 'pos');
         }
       } catch (e) {
         console.error('Otomatik şube bağlantısı:', e);
@@ -154,7 +184,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [showSplash, branchBootstrapKey]);
+  }, [showSplash, branchBootstrapKey, VALID_BRANCH_KEYS]);
 
   useEffect(() => {
     // Update event listeners
@@ -189,6 +219,7 @@ function App() {
 
   // Online sipariş düştüğünde ses çal (sadece bu cihaz online sipariş alıyorsa)
   useEffect(() => {
+    if (activeBranch?.key === 'sultansomati') return;
     if (localStorage.getItem('receiveOnlineOrdersOnThisDevice') === 'false') return;
     if (!isBranchReady) return;
     const branchKey = activeBranch?.key || 'makara';
@@ -248,6 +279,7 @@ function App() {
   // Online sipariş: her gün 12:30 aktif, 23:30 pasif (otomatik)
   useEffect(() => {
     if (!isBranchReady) return;
+    if (activeBranch?.key === 'sultansomati') return;
     const branchKey = activeBranch?.key || 'makara';
     const onlineFirebaseConfig = branchKey === 'makarasur'
       ? {
@@ -302,26 +334,34 @@ function App() {
   // PERFORMANS: useCallback ile fonksiyonları memoize et
   const loadCategories = useCallback(async () => {
     const cats = await window.electronAPI.getCategories();
-    const yanUrunlerCategory = {
-      id: YAN_URUNLER_CATEGORY_ID,
-      name: 'Yan Ürünler',
-      order_index: 9999
-    };
-    setCategories([...cats, yanUrunlerCategory]);
-    
-    if (window.electronAPI && window.electronAPI.getYanUrunler) {
-      const yanUrunlerList = await window.electronAPI.getYanUrunler();
-      setYanUrunler(yanUrunlerList);
+    const sultan = activeBranch?.key === 'sultansomati';
+    if (sultan) {
+      const filtered = filterYanUrunlerCategoriesForSultan([...cats]);
+      setCategories(filtered);
+      setYanUrunler([]);
+      if (filtered.length > 0) {
+        setSelectedCategory(filtered[0]);
+      }
+    } else {
+      const yanUrunlerCategory = {
+        id: YAN_URUNLER_CATEGORY_ID,
+        name: 'Yan Ürünler',
+        order_index: 9999
+      };
+      setCategories([...cats, yanUrunlerCategory]);
+      if (window.electronAPI && window.electronAPI.getYanUrunler) {
+        const yanUrunlerList = await window.electronAPI.getYanUrunler();
+        setYanUrunler(yanUrunlerList);
+      }
+      if (cats.length > 0) {
+        setSelectedCategory(cats[0]);
+      }
     }
-    
-    // Eski cihazlarda ilk açılışı hızlandırmak için tüm ürünleri lazy-load et.
+
     window.electronAPI.getProducts(null)
       .then((allProds) => setAllProducts(allProds))
       .catch(() => setAllProducts([]));
-    if (cats.length > 0) {
-      setSelectedCategory(cats[0]);
-    }
-  }, []);
+  }, [activeBranch?.key]);
 
   useEffect(() => {
     if (!isBranchReady) return;
@@ -344,8 +384,8 @@ function App() {
   }, [isBranchReady, loadCategories]);
 
   const loadProducts = useCallback(async (categoryId) => {
-    // Yan Ürünler kategorisi seçildiyse
-    if (categoryId === YAN_URUNLER_CATEGORY_ID) {
+    const sultan = activeBranch?.key === 'sultansomati';
+    if (!sultan && categoryId === YAN_URUNLER_CATEGORY_ID) {
       if (window.electronAPI && window.electronAPI.getYanUrunler) {
         const yanUrunlerList = await window.electronAPI.getYanUrunler();
         const formattedYanUrunler = yanUrunlerList.map(urun => ({
@@ -359,10 +399,10 @@ function App() {
       }
       return;
     }
-    
+
     const prods = await window.electronAPI.getProducts(categoryId);
     setProducts(prods);
-  }, []);
+  }, [activeBranch?.key]);
 
   // useEffect - loadProducts tanımından sonra olmalı
   useEffect(() => {
@@ -374,50 +414,50 @@ function App() {
   // Arama sorgusuna göre ürünleri filtrele
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) {
-      // Arama yoksa sadece seçili kategorinin ürünlerini göster
       return products;
     }
-    // Arama varsa tüm kategorilerden ara (yan ürünler dahil)
     const query = searchQuery.toLowerCase().trim();
-    const allProductsWithYanUrunler = [
-      ...allProducts,
-      ...yanUrunler.map(urun => ({
-        id: `yan_urun_${urun.id}`,
-        name: urun.name,
-        price: urun.price,
-        category_id: YAN_URUNLER_CATEGORY_ID,
-        isYanUrun: true
-      }))
-    ];
-    return allProductsWithYanUrunler.filter(product => 
-      product.name.toLowerCase().includes(query)
-    );
-  }, [products, allProducts, searchQuery, yanUrunler]);
+    const sultan = activeBranch?.key === 'sultansomati';
+    const yanExtras = sultan
+      ? []
+      : yanUrunler.map(urun => ({
+          id: `yan_urun_${urun.id}`,
+          name: urun.name,
+          price: urun.price,
+          category_id: YAN_URUNLER_CATEGORY_ID,
+          isYanUrun: true
+        }));
+    const pool = [...allProducts, ...yanExtras];
+    return pool.filter((product) => product.name.toLowerCase().includes(query));
+  }, [products, allProducts, searchQuery, yanUrunler, activeBranch?.key]);
 
   const refreshProducts = async () => {
-    // Kategorileri yenile
     const cats = await window.electronAPI.getCategories();
-    // Yan Ürünler kategorisini ekle
+    const sultan = activeBranch?.key === 'sultansomati';
     const yanUrunlerCategory = {
       id: YAN_URUNLER_CATEGORY_ID,
       name: 'Yan Ürünler',
       order_index: 9999
     };
-    setCategories([...cats, yanUrunlerCategory]);
-    
-    // Yan ürünleri yenile
-    if (window.electronAPI && window.electronAPI.getYanUrunler) {
-      const yanUrunlerList = await window.electronAPI.getYanUrunler();
-      setYanUrunler(yanUrunlerList);
+
+    if (sultan) {
+      setCategories(filterYanUrunlerCategoriesForSultan([...cats]));
+      setYanUrunler([]);
+    } else {
+      setCategories([...cats, yanUrunlerCategory]);
+      if (window.electronAPI && window.electronAPI.getYanUrunler) {
+        const yanUrunlerList = await window.electronAPI.getYanUrunler();
+        setYanUrunler(yanUrunlerList);
+      }
     }
-    
-    // Tüm ürünleri güncelle (arama için)
+
     const allProds = await window.electronAPI.getProducts(null);
     setAllProducts(allProds);
-    
-    // Seçili kategoriyi koru veya ilk kategoriyi seç
+
     let categoryToLoad = selectedCategory;
-    const allCategories = [...cats, yanUrunlerCategory];
+    const allCategories = sultan
+      ? filterYanUrunlerCategoriesForSultan([...cats])
+      : [...cats, yanUrunlerCategory];
     if (allCategories.length > 0) {
       if (!categoryToLoad || !allCategories.find(c => c.id === categoryToLoad.id)) {
         categoryToLoad = allCategories[0];
@@ -918,17 +958,14 @@ function App() {
     if (exitAction === 'logout') {
       setShowExitSplash(false);
       setIsBranchReady(false);
+      setActiveBranch(null);
+      setSelectedBranchKey('');
       setCurrentView('pos');
       setSelectedTable(null);
       setCart([]);
       setOrderNote('');
-      let onboarded = false;
-      try {
-        onboarded = localStorage.getItem(BRANCH_ONBOARDING_KEY) === '1';
-      } catch (_) {}
-      // Kayıtlı şube: seçim ekranı yerine "bağlanıyor" + otomatik activate
-      setBranchGateResolved(!onboarded);
-      setBranchBootstrapKey((k) => k + 1);
+      // Çıkışta her zaman şube seçim ekranı (otomatik bağlanmayı tetikleme: branchBootstrapKey dokunma)
+      setBranchGateResolved(true);
       return;
     }
 
@@ -979,7 +1016,7 @@ function App() {
       setBranchError('Lutfen bir sube secin.');
       return;
     }
-    if (normalized !== 'makara' && normalized !== 'makarasur') {
+    if (!VALID_BRANCH_KEYS.has(normalized)) {
       setBranchError('Gecersiz sube secimi.');
       return;
     }
@@ -1000,7 +1037,7 @@ function App() {
       setActiveBranch(result.branch || { key: normalized, label: normalized });
       setSelectedBranchKey(normalized);
       setIsBranchReady(true);
-      setCurrentView(normalized === 'makarasur' ? 'tables' : 'pos');
+      setCurrentView(normalized === 'makarasur' || normalized === 'sultansomati' ? 'tables' : 'pos');
       try {
         localStorage.setItem(BRANCH_ONBOARDING_KEY, '1');
       } catch (_) {}
@@ -1013,7 +1050,7 @@ function App() {
 
   const handleBranchChangeFromSettings = async (newKey) => {
     const normalized = String(newKey || '').trim().toLowerCase();
-    if (normalized !== 'makara' && normalized !== 'makarasur') return;
+    if (!VALID_BRANCH_KEYS.has(normalized)) return;
     const cur = (activeBranch?.key || selectedBranchKey || '').toLowerCase();
     if (cur === normalized) {
       showToast('Zaten bu şubedesiniz.', 'info');
@@ -1034,7 +1071,7 @@ function App() {
       } catch (_) {}
       setActiveBranch(result.branch || { key: normalized });
       setSelectedBranchKey(normalized);
-      setCurrentView(normalized === 'makarasur' ? 'tables' : 'pos');
+      setCurrentView(normalized === 'makarasur' || normalized === 'sultansomati' ? 'tables' : 'pos');
       setSelectedTable(null);
       setCart([]);
       setOrderNote('');
@@ -1052,7 +1089,7 @@ function App() {
           <ExitSplash onComplete={handleExitComplete} />
         )}
         <div className="min-h-screen w-full bg-white flex flex-col items-center justify-center gap-4 p-6">
-          <div className="h-12 w-12 rounded-full border-4 border-pink-200 border-t-pink-500 animate-spin" />
+          <div className="h-12 w-12 rounded-full border-4 border-pink-200 border-t-pink-600 animate-spin" />
           <p className="text-slate-600 font-medium text-center">Şube bağlanıyor…</p>
         </div>
       </>
@@ -1083,12 +1120,14 @@ function App() {
             </div>
 
             <div className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {BRANCH_OPTIONS.map((branch) => {
                   const isSelected = selectedBranchKey === branch.key;
                   const branchBgImage = branch.key === 'makara'
                     ? './L_height.webp'
-                    : './meramin-yeni-merkezi-surici-carsisi-003.jpg';
+                    : branch.key === 'makarasur'
+                    ? './meramin-yeni-merkezi-surici-carsisi-003.jpg'
+                    : './logo.png';
                   return (
                     <button
                       key={branch.key}
@@ -1099,7 +1138,7 @@ function App() {
                       }}
                       className={`relative overflow-hidden text-left rounded-3xl border p-6 md:p-8 transition-all duration-200 aspect-square min-h-[280px] md:min-h-[360px] flex ${
                         isSelected
-                          ? 'border-pink-300 shadow-[0_20px_45px_rgba(236,72,153,0.35)] ring-4 ring-pink-200/90 scale-[1.02]'
+                          ? 'border-pink-400 shadow-[0_20px_45px_rgba(236,72,153,0.35)] ring-4 ring-pink-200/90 scale-[1.02]'
                           : 'border-slate-200 hover:border-slate-300 hover:shadow-md'
                       }`}
                       style={{
@@ -1117,7 +1156,7 @@ function App() {
                       )}
                       <div className="relative z-10 w-full h-full flex items-center justify-center text-center">
                         {isSelected && (
-                          <span className="absolute top-5 left-5 px-3 py-1 rounded-full bg-pink-400/90 text-white text-xs md:text-sm font-bold tracking-wide shadow-lg">
+                          <span className="absolute top-5 left-5 px-3 py-1 rounded-full bg-pink-500/90 text-white text-xs md:text-sm font-bold tracking-wide shadow-lg">
                             Seçili
                           </span>
                         )}
@@ -1131,7 +1170,7 @@ function App() {
                         </div>
                         <span
                           className={`absolute top-5 right-5 inline-flex h-7 w-7 items-center justify-center rounded-full border ${
-                            isSelected ? 'border-pink-400 bg-pink-400 shadow-sm' : 'border-white/80 bg-white/15 backdrop-blur'
+                            isSelected ? 'border-pink-400 bg-pink-500 shadow-sm' : 'border-white/80 bg-white/15 backdrop-blur'
                           }`}
                         >
                           {isSelected ? (
@@ -1150,7 +1189,7 @@ function App() {
               <button
                 onClick={handleBranchLogin}
                 disabled={isActivatingBranch || !selectedBranchKey}
-                className="w-full mt-2 py-4 rounded-2xl bg-gradient-to-r from-pink-400 to-pink-500 hover:from-pink-500 hover:to-pink-600 disabled:opacity-60 text-white text-lg font-extrabold tracking-wide transition-all"
+                className="w-full mt-2 py-4 rounded-2xl bg-gradient-to-r from-pink-500 to-fuchsia-600 hover:from-pink-600 hover:to-fuchsia-700 disabled:opacity-60 text-white text-lg font-extrabold tracking-wide transition-all"
               >
                 {isActivatingBranch ? 'Baglaniyor...' : 'Devam Et'}
               </button>
@@ -1174,7 +1213,8 @@ function App() {
       {showExitSplash && (
         <ExitSplash onComplete={handleExitComplete} />
       )}
-      <div className="min-h-screen bg-gradient-to-br from-[#f0f4ff] via-[#e0e7ff] to-[#fce7f3] text-gray-800">
+      <div className={isSultanBranch ? 'theme-sultan' : ''}>
+      <div className="min-h-screen bg-gradient-to-br from-[#f0f4ff] via-[#e0e7ff] to-[#fce7f3] theme-sultan:from-emerald-50 theme-sultan:via-green-50 theme-sultan:to-teal-50 text-gray-800">
         <Navbar 
         currentView={currentView} 
         setCurrentView={(view) => {
@@ -1195,6 +1235,7 @@ function App() {
         onOpenSettings={() => setCurrentView('settings')}
         systemTitle={systemTitle}
         isSuriciBranch={isSuriciBranch}
+        isSultanBranch={isSultanBranch}
       />
       
       {currentView === 'settings' ? (
@@ -1231,7 +1272,7 @@ function App() {
           {/* Sol Panel - Kategoriler ve Ürünler */}
           <div className="w-full lg:flex-1 flex flex-col p-4 overflow-hidden">
             {selectedTable && (
-              <div className="mb-3 p-3 bg-gradient-to-r from-purple-500 to-pink-500 text-white rounded-xl shadow-lg flex items-center justify-between">
+              <div className="mb-3 p-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-fuchsia-600 theme-sultan:to-green-600 text-white rounded-xl shadow-lg flex items-center justify-between">
                 <p className="text-base font-semibold">
                   {isSuriciBranch ? 'Müşteri' : 'Masa'}: {selectedTable.name} için sipariş oluşturuyorsunuz
                 </p>
@@ -1253,13 +1294,13 @@ function App() {
               <CategoryPanel
                 categories={categories}
                 selectedCategory={selectedCategory}
+                isSultanBranch={isSultanBranch}
                 onSelectCategory={(category) => {
                   setSelectedCategory(category);
-                  setSearchQuery(''); // Kategori değiştiğinde aramayı temizle
+                  setSearchQuery('');
                 }}
               />
-              {/* Yan Ürünler Yönetim Butonu - Sadece Yan Ürünler kategorisi seçildiğinde */}
-              {selectedCategory && selectedCategory.id === YAN_URUNLER_CATEGORY_ID && userType === 'Admin' && (
+              {selectedCategory && selectedCategory.id === YAN_URUNLER_CATEGORY_ID && userType === 'Admin' && !isSultanBranch && (
                 <div className="mt-3 mb-3">
                   <button
                     onClick={() => setShowYanUrunlerModal(true)}
@@ -1283,10 +1324,10 @@ function App() {
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Ürün ara..."
-                  className="w-full px-3 py-2 pl-10 bg-white/90 backdrop-blur-xl border-2 border-purple-200 rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800 font-medium placeholder-gray-400 transition-all duration-200 text-sm"
+                  className="w-full px-3 py-2 pl-10 bg-white/90 backdrop-blur-xl border-2 border-pink-200 theme-sultan:border-emerald-200 rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-transparent text-gray-800 font-medium placeholder-gray-400 transition-all duration-200 text-sm"
                 />
                 <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
-                  <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-4 h-4 text-pink-500 theme-sultan:text-pink-50 theme-sultan:text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
                 </div>
@@ -1298,9 +1339,9 @@ function App() {
                         searchInputRef.current.focus();
                       }
                     }}
-                    className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 hover:bg-purple-100 rounded-lg transition-colors"
+                    className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 hover:bg-pink-100 theme-sultan:hover:bg-pink-100 theme-sultan:bg-emerald-100 rounded-lg transition-colors"
                   >
-                    <svg className="w-4 h-4 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-4 h-4 text-pink-500 theme-sultan:text-pink-50 theme-sultan:text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
@@ -1333,7 +1374,7 @@ function App() {
           </div>
 
           {/* Sağ Panel - Sepet */}
-          <div className="w-full lg:w-[420px] bg-gradient-to-b from-purple-50/80 to-pink-50/80 backdrop-blur-xl border-t lg:border-t-0 lg:border-l border-purple-200 p-6 mt-4 lg:mt-0">
+          <div className="w-full lg:w-[420px] bg-gradient-to-b from-pink-50 theme-sultan:from-emerald-50/80 to-fuchsia-50 theme-sultan:to-green-50/80 backdrop-blur-xl border-t lg:border-t-0 lg:border-l border-pink-200 theme-sultan:border-emerald-200 p-6 mt-4 lg:mt-0">
             <Cart
               cart={cart}
               onUpdateQuantity={updateCartItemQuantity}
@@ -1386,7 +1427,7 @@ function App() {
       )}
 
       {/* Yan Ürünler Yönetim Modal */}
-      {showYanUrunlerModal && (
+      {showYanUrunlerModal && !isSultanBranch && (
         <YanUrunlerManagementModal
           yanUrunler={yanUrunler}
           onClose={() => {
@@ -1445,11 +1486,11 @@ function App() {
             window.electronAPI.minimizeWindow();
           }
         }}
-        className="fixed bottom-4 left-4 z-50 w-10 h-10 rounded-full bg-white/80 hover:bg-white border-2 border-purple-300 hover:border-purple-500 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center group"
+        className="fixed bottom-4 left-4 z-50 w-10 h-10 rounded-full bg-white/80 hover:bg-white border-2 border-pink-300 theme-sultan:border-emerald-300 hover:border-pink-500 theme-sultan:hover:border-pink-50 theme-sultan:hover:border-pink-500 theme-sultan:border-emerald-500 shadow-lg hover:shadow-xl transition-all duration-200 flex items-center justify-center group"
         title="Uygulamayı Arka Plana Al (Alt+Tab)"
       >
         <svg 
-          className="w-5 h-5 text-purple-600 group-hover:text-purple-700 transition-colors" 
+          className="w-5 h-5 text-pink-600 theme-sultan:text-emerald-600 group-hover:text-pink-700 theme-sultan:group-hover:text-pink-700 theme-sultan:hover:text-pink-700 theme-sultan:text-emerald-700 transition-colors" 
           fill="none" 
           stroke="currentColor" 
           viewBox="0 0 24 24"
@@ -1480,11 +1521,11 @@ function App() {
             }}
           >
             {/* Dekoratif arka plan efektleri */}
-            <div className="absolute top-0 right-0 w-48 h-48 bg-gradient-to-br from-purple-200/20 to-blue-200/20 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-            <div className="absolute bottom-0 left-0 w-40 h-40 bg-gradient-to-tr from-pink-200/20 to-purple-200/20 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2"></div>
+            <div className="absolute top-0 right-0 w-48 h-48 bg-gradient-to-br from-pink-200 theme-sultan:from-emerald-200/20 to-indigo-200 theme-sultan:to-teal-200/20 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+            <div className="absolute bottom-0 left-0 w-40 h-40 bg-gradient-to-tr from-fuchsia-200 theme-sultan:from-green-200/20 to-pink-200 theme-sultan:to-emerald-200/20 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2"></div>
             
             {/* Header */}
-            <div className="relative bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 text-white p-7 overflow-hidden">
+            <div className="relative bg-gradient-to-r from-pink-700 theme-sultan:from-emerald-700 via-fuchsia-600 theme-sultan:via-green-600 to-indigo-600 theme-sultan:to-teal-600 text-white p-7 overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-2xl -translate-y-1/2 translate-x-1/2"></div>
               <div className="relative z-10 flex items-center gap-4">
                 <div className="w-14 h-14 bg-white/25 backdrop-blur-md rounded-2xl flex items-center justify-center shadow-lg border border-white/30">
@@ -1520,7 +1561,7 @@ function App() {
             <div className="relative z-10 border-t border-slate-200 bg-gradient-to-b from-white to-slate-50 p-6 flex justify-center">
               <button
                 onClick={() => setBroadcastMessage(null)}
-                className="px-12 py-4 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-500 hover:from-indigo-700 hover:via-purple-700 hover:to-pink-600 text-white font-bold rounded-2xl transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 relative overflow-hidden group"
+                className="px-12 py-4 bg-gradient-to-r from-pink-700 theme-sultan:from-emerald-700 via-fuchsia-600 theme-sultan:via-green-600 to-indigo-600 theme-sultan:to-teal-600 hover:from-pink-800 theme-sultan:hover:from-emerald-800 hover:via-fuchsia-700 theme-sultan:hover:via-green-700 hover:to-indigo-700 theme-sultan:hover:to-teal-700 text-white font-bold rounded-2xl transition-all duration-300 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 relative overflow-hidden group"
                 style={{
                   boxShadow: '0 8px 20px rgba(102, 126, 234, 0.4)',
                   letterSpacing: '0.3px'
@@ -1556,7 +1597,7 @@ function App() {
 
       {showSuriciNameModal && (
         <div className="fixed inset-0 z-[120] bg-black/55 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-white rounded-3xl border border-pink-100 shadow-2xl p-7">
+          <div className="w-full max-w-lg bg-white rounded-3xl border border-pink-100 theme-sultan:border-emerald-100 shadow-2xl p-7">
             <div className="mb-5">
               <h3 className="text-2xl font-extrabold text-slate-900">İsim Soyisim</h3>
               <p className="text-sm text-slate-500 mt-1">
@@ -1577,7 +1618,7 @@ function App() {
                 }
               }}
               placeholder="Örn: Ahmet Yılmaz"
-              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-pink-400"
+              className="w-full px-4 py-3 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500"
               autoFocus
             />
             <div className="mt-6 flex items-center justify-end gap-3">
@@ -1601,7 +1642,7 @@ function App() {
                   suriciNameResolverRef.current?.(val);
                   suriciNameResolverRef.current = null;
                 }}
-                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-fuchsia-500 text-white font-bold hover:from-pink-600 hover:to-fuchsia-600"
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-600 to-fuchsia-600 text-white font-bold hover:from-pink-700 hover:to-fuchsia-700 theme-sultan:from-emerald-600 theme-sultan:to-green-600 theme-sultan:hover:from-emerald-700 theme-sultan:hover:to-green-700"
               >
                 Kaydet
               </button>
@@ -1609,6 +1650,7 @@ function App() {
           </div>
         </div>
       )}
+    </div>
     </div>
     </>
   );

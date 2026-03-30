@@ -105,14 +105,14 @@ const PinModal = ({ onClose, onSuccess }) => {
               error
                 ? 'border-red-400 bg-red-50 animate-shake'
                 : success
-                ? 'border-emerald-500 bg-emerald-50 scale-105'
+                ? 'border-pink-500 theme-sultan:border-emerald-500 bg-pink-50 theme-sultan:bg-emerald-50 scale-105'
                 : pin.length > index
                 ? 'border-blue-600 bg-blue-600 shadow-md scale-105'
                 : 'border-gray-200 bg-gray-50'
             }`}
           >
             {pin.length > index && (
-              <div className={`text-2xl font-bold ${success ? 'text-emerald-600' : 'text-white'}`}>
+              <div className={`text-2xl font-bold ${success ? 'text-pink-600 theme-sultan:text-emerald-600' : 'text-white'}`}>
                 {success ? '✓' : '●'}
               </div>
             )}
@@ -159,7 +159,7 @@ const PinModal = ({ onClose, onSuccess }) => {
             error 
               ? 'text-red-600' 
               : success 
-              ? 'text-emerald-600' 
+              ? 'text-pink-600 theme-sultan:text-emerald-600' 
               : 'text-gray-600'
           }`}>
             {error ? 'Hatalı PIN. Lütfen tekrar deneyin.' : success ? 'Giriş başarılı!' : '4 haneli PIN kodunuzu girin'}

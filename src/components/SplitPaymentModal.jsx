@@ -68,7 +68,7 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose,
   return (
     <>
     <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-      <div className="bg-white backdrop-blur-xl border border-purple-200 rounded-3xl p-8 max-w-2xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white backdrop-blur-xl border border-pink-200 theme-sultan:border-emerald-200 rounded-3xl p-8 max-w-2xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-3xl font-bold gradient-text">Parçalı Ödeme</h2>
           <button
@@ -83,26 +83,26 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose,
 
         {/* Toplam ve Kalan Tutar */}
         <div className="grid grid-cols-3 gap-4 mb-6">
-          <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-4 border border-purple-200">
+          <div className="bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 rounded-2xl p-4 border border-pink-200 theme-sultan:border-emerald-200">
             <p className="text-sm text-gray-600 mb-1">Toplam Tutar</p>
-            <p className="text-2xl font-bold text-purple-600">
+            <p className="text-2xl font-bold text-pink-600 theme-sultan:text-emerald-600">
               ₺{totalAmount.toFixed(2)}
             </p>
           </div>
-          <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl p-4 border border-green-200">
+          <div className="bg-gradient-to-r from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 rounded-2xl p-4 border border-fuchsia-200 theme-sultan:border-green-200">
             <p className="text-sm text-gray-600 mb-1">Ödenen</p>
-            <p className="text-2xl font-bold text-green-600">
+            <p className="text-2xl font-bold text-fuchsia-600 theme-sultan:text-green-600">
               ₺{paidAmount.toFixed(2)}
             </p>
           </div>
           <div className={`rounded-2xl p-4 border ${
             remainingAmount > 0.01 
               ? 'bg-gradient-to-r from-orange-50 to-amber-50 border-orange-200' 
-              : 'bg-gradient-to-r from-green-50 to-emerald-50 border-green-200'
+              : 'bg-gradient-to-r from-fuchsia-50 theme-sultan:from-green-50 to-pink-50 theme-sultan:to-emerald-50 border-fuchsia-200 theme-sultan:border-green-200'
           }`}>
             <p className="text-sm text-gray-600 mb-1">Kalan</p>
             <p className={`text-2xl font-bold ${
-              remainingAmount > 0.01 ? 'text-orange-600' : 'text-green-600'
+              remainingAmount > 0.01 ? 'text-orange-600' : 'text-fuchsia-600 theme-sultan:text-green-600'
             }`}>
               ₺{remainingAmount.toFixed(2)}
             </p>
@@ -110,7 +110,7 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose,
         </div>
 
         {/* Ödeme Ekleme Alanı */}
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 rounded-2xl p-6 mb-6 border border-purple-200">
+        <div className="bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 rounded-2xl p-6 mb-6 border border-pink-200 theme-sultan:border-emerald-200">
           <h3 className="text-lg font-bold text-gray-800 mb-4">Yeni Ödeme Ekle</h3>
           
           {/* Ödeme Yöntemi Seçimi */}
@@ -119,8 +119,8 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose,
               onClick={() => setCurrentPaymentMethod('Nakit')}
               className={`p-4 rounded-xl font-semibold transition-all duration-300 ${
                 currentPaymentMethod === 'Nakit'
-                  ? 'bg-gradient-to-r from-green-500 to-emerald-500 text-white shadow-lg scale-105'
-                  : 'bg-white text-gray-700 hover:bg-green-50 border-2 border-gray-200'
+                  ? 'bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg scale-105'
+                  : 'bg-white text-gray-700 hover:bg-fuchsia-50 theme-sultan:hover:bg-fuchsia-50 theme-sultan:bg-green-50 border-2 border-gray-200'
               }`}
             >
               <div className="flex items-center justify-center space-x-2">
@@ -163,12 +163,12 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose,
                 }
               }}
               placeholder="Tutar girin (₺)"
-              className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-purple-500 focus:outline-none text-lg font-semibold"
+              className="flex-1 px-4 py-3 rounded-xl border-2 border-gray-300 focus:border-pink-600 theme-sultan:focus:border-pink-600 theme-sultan:border-emerald-600 focus:outline-none text-lg font-semibold"
             />
             <button
               onClick={handleAddPayment}
               disabled={!currentAmount || parseFloat(currentAmount) <= 0 || parseFloat(currentAmount) > remainingAmount}
-              className="px-6 py-3 bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-lg"
+              className="px-6 py-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 disabled:from-gray-300 disabled:to-gray-400 disabled:cursor-not-allowed rounded-xl text-white font-bold text-lg transition-all duration-300 hover:shadow-lg"
             >
               Ekle
             </button>
@@ -186,12 +186,12 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose,
               {payments.map((payment, index) => (
                 <div
                   key={index}
-                  className="flex items-center justify-between bg-white rounded-xl p-4 border-2 border-gray-200 hover:border-purple-300 transition-all"
+                  className="flex items-center justify-between bg-white rounded-xl p-4 border-2 border-gray-200 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400 transition-all"
                 >
                   <div className="flex items-center space-x-3">
                     <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
                       payment.method === 'Nakit' 
-                        ? 'bg-green-100 text-green-600' 
+                        ? 'bg-fuchsia-100 theme-sultan:bg-green-100 text-fuchsia-600 theme-sultan:text-green-600' 
                         : 'bg-blue-100 text-blue-600'
                     }`}>
                       {payment.method === 'Nakit' ? '₺' : '💳'}
@@ -202,7 +202,7 @@ const SplitPaymentModal = ({ cart, totalAmount, onCompleteSplitPayment, onClose,
                     </div>
                   </div>
                   <div className="flex items-center space-x-3">
-                    <p className="text-xl font-bold text-purple-600">₺{payment.amount.toFixed(2)}</p>
+                    <p className="text-xl font-bold text-pink-600 theme-sultan:text-emerald-600">₺{payment.amount.toFixed(2)}</p>
                     <button
                       onClick={() => handleRemovePayment(index)}
                       className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"

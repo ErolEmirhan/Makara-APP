@@ -53,7 +53,7 @@ const ExpenseModal = ({ onClose, onSave, isSubmitting = false }) => {
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Örn: Kira, Elektrik, Su..."
-                  className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800"
+                  className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:border-transparent text-gray-800"
                   onKeyPress={(e) => {
                     if (e.key === 'Enter') {
                       handleSave();
@@ -73,7 +73,7 @@ const ExpenseModal = ({ onClose, onSave, isSubmitting = false }) => {
                   placeholder="0.00"
                   step="0.01"
                   min="0"
-                  className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800"
+                  className="w-full px-4 py-2.5 border-2 border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:border-transparent text-gray-800"
                   onKeyPress={(e) => {
                     if (e.key === 'Enter') {
                       handleSave();

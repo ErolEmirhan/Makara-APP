@@ -320,6 +320,20 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     [sultanTablesFlat, sultanSectionKey]
   );
 
+  /** Sultan bölüm sekmeleri: dolu / toplam masa (örn. 3/14) */
+  const sultanSectionOccupancy = useMemo(() => {
+    if (!isSultanBranch) return {};
+    const map = {};
+    for (const sec of SULTAN_TABLE_SECTIONS) {
+      const tablesInSec = sultanTablesFlat.filter((t) => t.sectionKey === sec.key);
+      const filled = tablesInSec.filter((t) =>
+        tableOrders.some((o) => o.table_id === t.id && o.status === 'pending')
+      ).length;
+      map[sec.key] = { filled, total: sec.count };
+    }
+    return map;
+  }, [isSultanBranch, sultanTablesFlat, tableOrders]);
+
   // Masa siparişlerini yükle
   useEffect(() => {
     loadTableOrders();
@@ -2205,7 +2219,9 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                       }`}
                     >
                       {sec.label}
-                      <span className="ml-1.5 opacity-90 font-bold text-[0.92em]">({sec.count})</span>
+                      <span className="ml-1.5 opacity-90 font-bold text-[0.92em] tabular-nums">
+                        ({sultanSectionOccupancy[sec.key]?.filled ?? 0}/{sec.count})
+                      </span>
                     </button>
                   ))}
                 </div>

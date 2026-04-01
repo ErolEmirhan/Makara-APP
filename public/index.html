@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.37">
+  <link rel="manifest" href="/manifest.json?v=2.4.38">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.37';
+      const APP_VERSION = '2.4.38';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -306,11 +306,21 @@
       }
     }
 
+    function syncAdminBranchThemeClass() {
+      const isSultan = activeBranchKey === 'sultansomati';
+      document.documentElement.classList.toggle('admin-branch-sultansomati', isSultan);
+      const metaTheme = document.querySelector('meta[name="theme-color"]');
+      if (metaTheme) metaTheme.setAttribute('content', isSultan ? '#ca8a04' : '#dc2626');
+    }
+
     function updateDashboardHeaderTitle() {
+      syncAdminBranchThemeClass();
       const titleEl = document.querySelector('.navbar-title');
+      const subEl = document.querySelector('.navbar-subtitle');
       if (!titleEl) return;
       if (activeBranchKey === 'sultansomati') {
         titleEl.textContent = 'Sultan Somatı Admin Dashboard';
+        if (subEl) subEl.textContent = 'Anlık satış ve masa özeti';
         return;
       }
       const branchNameByKey = {
@@ -319,6 +329,7 @@
       };
       const branchName = branchNameByKey[activeBranchKey] || 'HAVZAN';
       titleEl.textContent = `MAKARA ${branchName} Admin Dashboard`;
+      if (subEl) subEl.textContent = 'Anlık Satış Detayları ve İstatistikler';
     }
 
     function initFirebaseForBranch(branchKey) {
@@ -3583,7 +3594,7 @@
         `;
       }).join('');
 
-      container.innerHTML = `<div class="tables-container">${sectionHtml}</div>`;
+      container.innerHTML = `<div class="tables-container tables-layout-sultan">${sectionHtml}</div>`;
       console.log('✅ Sultan Somatı masaları render edildi');
       updateActiveTablesCount(calculateActiveTablesCount());
     }
@@ -3626,7 +3637,7 @@
 
       // Render: tek bölüm, 1-20 ile 61-88 arasında boşluk (69,70,79,80 hariç)
       let html = `
-        <div class="tables-container">
+        <div class="tables-container tables-layout-makara">
           <div class="tables-section">
             <h2 class="section-title">🪑 Masalar</h2>
             <div class="tables-grid">
@@ -3914,13 +3925,25 @@
       const totalAmount = parseFloat(table.total_amount || 0);
 
       if (isOccupied) {
-        const occTitle = isSultan ? escHtml(table.table_name || table.table_id) : escHtml(String(table.table_number));
-        return `
+        if (isSultan) {
+          const occTitle = escHtml(table.table_name || table.table_id);
+          return `
           <div class="table-card table-card-occupied" style="cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
             <div class="table-card-gradient">
               <div class="table-number-occupied">${occTitle}</div>
               <div class="table-amount-occupied">₺${totalAmount.toFixed(2)}</div>
             </div>
+          </div>
+        `;
+        }
+        return `
+          <div class="table-card table-card--occupied-classic" style="cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
+            <div class="table-card-header">
+              <div class="table-number">${escHtml(String(table.table_number))}</div>
+              <div class="table-status table-status-occupied">Dolu</div>
+            </div>
+            <div class="table-amount-classic">₺${totalAmount.toFixed(2)}</div>
+            <div class="table-name">${escHtml(table.table_name || '')}</div>
           </div>
         `;
       }
@@ -8356,6 +8379,44 @@
       }
     }
 
+    /* Sultan Somatı: üst bar sarı gradient, logo gizli */
+    html.admin-branch-sultansomati .admin-navbar {
+      background: linear-gradient(135deg, #fffbeb 0%, #fef9c3 38%, #fde047 72%, #eab308 100%);
+      border-bottom: 2px solid #b45309;
+      box-shadow: 0 2px 18px rgba(180, 83, 9, 0.14);
+    }
+
+    html.admin-branch-sultansomati .navbar-brand-left .navbar-logo-img,
+    html.admin-branch-sultansomati .navbar-brand-left .navbar-logo {
+      display: none !important;
+    }
+
+    html.admin-branch-sultansomati .navbar-title {
+      color: #422006;
+    }
+
+    html.admin-branch-sultansomati .navbar-subtitle {
+      color: #713f12;
+    }
+
+    html.admin-branch-sultansomati .hamburger-btn {
+      background: rgba(66, 32, 6, 0.08);
+      box-shadow: 0 2px 10px rgba(120, 53, 15, 0.14);
+    }
+
+    html.admin-branch-sultansomati .hamburger-btn span {
+      background: #422006;
+    }
+
+    html.admin-branch-sultansomati .hamburger-btn:hover {
+      background: linear-gradient(135deg, #78350f, #92400e);
+      box-shadow: 0 4px 16px rgba(120, 53, 15, 0.28);
+    }
+
+    html.admin-branch-sultansomati .hamburger-btn:hover span {
+      background: #fffbeb;
+    }
+
     /* İçerik alanları mobil yatay boşluk */
     @media (max-width: 768px) {
       #staffContainer,
@@ -10178,6 +10239,62 @@
     .table-card-occupied:hover {
       transform: translateY(-2px);
       box-shadow: 0 8px 22px rgba(220, 38, 38, 0.35);
+    }
+
+    /* Makara şubeleri: klasik dolu masa kartı (beyaz zemin, kırmızı vurgu) */
+    .table-card--occupied-classic {
+      background: #ffffff;
+      border: 2px solid #fecaca;
+      box-shadow: 0 2px 12px rgba(220, 38, 38, 0.1);
+      padding: 16px 14px;
+    }
+
+    .table-card--occupied-classic:hover {
+      transform: translateY(-2px);
+      border-color: #f87171;
+      box-shadow: 0 8px 22px rgba(220, 38, 38, 0.14);
+    }
+
+    .table-card--occupied-classic .table-status-occupied {
+      background: #fee2e2 !important;
+      color: #991b1b !important;
+    }
+
+    .table-card--occupied-classic .table-amount-classic {
+      font-size: 17px;
+      font-weight: 800;
+      color: #b91c1c;
+      text-align: center;
+      margin-top: 10px;
+      letter-spacing: -0.02em;
+    }
+
+    .table-card--occupied-classic .table-name {
+      color: #6b7280;
+      font-size: 12px;
+      font-weight: 600;
+      margin-top: 6px;
+    }
+
+    /* Sultan: bölüm başlıkları ve dolu kartlar amber ton */
+    .tables-layout-sultan .table-card-occupied {
+      background: linear-gradient(145deg, #b45309 0%, #ca8a04 48%, #d97706 100%);
+      border: 2px solid #92400e;
+      box-shadow: 0 4px 16px rgba(146, 64, 14, 0.32);
+    }
+
+    .tables-layout-sultan .table-card-occupied:hover {
+      box-shadow: 0 8px 24px rgba(120, 53, 15, 0.38);
+    }
+
+    .tables-layout-sultan .section-title {
+      color: #422006;
+      border-bottom-color: rgba(180, 83, 9, 0.28);
+    }
+
+    .tables-layout-sultan .tables-section {
+      border-color: rgba(251, 191, 36, 0.5);
+      box-shadow: 0 1px 0 rgba(254, 243, 199, 0.9) inset;
     }
 
     .table-card-gradient {

@@ -2288,6 +2288,168 @@ ipcMain.handle('get-table-order-items', (event, orderId) => {
   return db.tableOrderItems.filter(oi => oi.order_id === orderId);
 });
 
+function nextTableOrderItemId() {
+  const arr = db.tableOrderItems || [];
+  if (arr.length === 0) return 1;
+  return Math.max(...arr.map((oi) => oi.id)) + 1;
+}
+
+/** groupRowKey son eki: _true / _false — ürün id'si alt çizgi içerebilir. */
+function parseGiftGroupKey(groupKey) {
+  if (typeof groupKey !== 'string' || !groupKey.length) return null;
+  const last = groupKey.lastIndexOf('_');
+  if (last <= 0) return null;
+  const suffix = groupKey.slice(last + 1);
+  if (suffix !== 'true' && suffix !== 'false') return null;
+  const productIdRaw = groupKey.slice(0, last);
+  return { productIdRaw, isGiftSuffix: suffix === 'true' };
+}
+
+/** Bir satırdan giftQty adedi ikram satırına ayırır (veya tüm satırı ikram yapar). */
+function splitTableOrderRowGift(row, giftQty) {
+  const oid = row.order_id;
+  const q = Number(row.quantity) || 0;
+  const take = Math.min(Math.max(0, giftQty), q);
+  if (take <= 0) return 0;
+  if (!db.tableOrderItems) db.tableOrderItems = [];
+  if (take >= q) {
+    row.isGift = true;
+    return take;
+  }
+  row.quantity = q - take;
+  db.tableOrderItems.push({
+    id: nextTableOrderItemId(),
+    order_id: oid,
+    product_id: row.product_id,
+    product_name: row.product_name,
+    quantity: take,
+    price: row.price,
+    isGift: true,
+    staff_id: row.staff_id ?? null,
+    staff_name: row.staff_name ?? null,
+    added_date: row.added_date,
+    added_time: row.added_time,
+    paid_quantity: 0,
+    is_paid: false
+  });
+  return take;
+}
+
+function finalizeTableOrderGiftUpdate(order) {
+  const oid = order.id;
+  const newTotal = (db.tableOrderItems || [])
+    .filter((oi) => oi.order_id === oid)
+    .reduce((s, oi) => s + (oi.isGift ? 0 : Number(oi.price) * Number(oi.quantity)), 0);
+  order.total_amount = Math.round(newTotal * 100) / 100;
+  saveDatabase();
+  syncSingleTableToFirebase(order.table_id).catch((err) => {
+    console.error('Masa Firebase kaydetme hatası (ikram):', err);
+  });
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', {
+      orderId: order.id,
+      tableId: order.table_id
+    });
+  }
+  if (io) {
+    io.emit('table-update', {
+      tableId: order.table_id,
+      hasOrder: tableHasOpenItems(order.table_id)
+    });
+  }
+}
+
+/** Seçilen masa satırlarını ikram (isGift) yapar veya grup başına adet ile kısmi ikram uygular. */
+ipcMain.handle('set-table-order-items-as-gift', (event, orderId, payload) => {
+  const oid = Number(orderId);
+  const order = db.tableOrders.find((o) => o.id === oid);
+  if (!order) {
+    return { success: false, error: 'Sipariş bulunamadı' };
+  }
+  if (order.status !== 'pending') {
+    return { success: false, error: 'Bu sipariş üzerinde ikram yapılamaz' };
+  }
+
+  // Kısmi ikram: { allocations: [{ groupKey, giftQuantity }] }
+  if (payload && typeof payload === 'object' && !Array.isArray(payload) && Array.isArray(payload.allocations)) {
+    let appliedGiftUnits = 0;
+    for (const entry of payload.allocations) {
+      const gk = entry && entry.groupKey;
+      const want = Math.max(0, Math.floor(Number(entry.giftQuantity) || 0));
+      if (!gk || want <= 0) continue;
+      const parsed = parseGiftGroupKey(String(gk));
+      if (!parsed || parsed.isGiftSuffix) continue;
+      const pid = parsed.productIdRaw;
+      const rows = (db.tableOrderItems || [])
+        .filter((oi) => {
+          if (oi.order_id !== oid || oi.isGift) return false;
+          if (String(oi.product_id) !== String(pid)) return false;
+          const paidQty = Number(oi.paid_quantity) || 0;
+          if (paidQty > 0 || oi.is_paid) return false;
+          return true;
+        })
+        .sort((a, b) => a.id - b.id);
+      const maxUnits = rows.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+      let remaining = Math.min(want, maxUnits);
+      for (const row of rows) {
+        if (remaining <= 0) break;
+        const rq = Number(row.quantity) || 0;
+        const take = Math.min(rq, remaining);
+        appliedGiftUnits += splitTableOrderRowGift(row, take);
+        remaining -= take;
+      }
+    }
+    if (appliedGiftUnits <= 0) {
+      return {
+        success: false,
+        error: 'İkram yapılacak uygun satır yok veya adet geçersiz'
+      };
+    }
+    finalizeTableOrderGiftUpdate(order);
+    return {
+      success: true,
+      updatedCount: appliedGiftUnits,
+      appliedGiftUnits,
+      total_amount: order.total_amount
+    };
+  }
+
+  // Eski: tam satır id listesi
+  const ids = Array.isArray(payload)
+    ? payload.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)
+    : [];
+  if (ids.length === 0) {
+    return { success: false, error: 'Ürün seçilmedi' };
+  }
+
+  let updatedRows = 0;
+  let appliedGiftUnits = 0;
+  for (const rawId of ids) {
+    const row = db.tableOrderItems.find((oi) => oi.id === rawId && oi.order_id === oid);
+    if (!row || row.isGift) continue;
+    const paidQty = Number(row.paid_quantity) || 0;
+    if (paidQty > 0 || row.is_paid) continue;
+    row.isGift = true;
+    updatedRows += 1;
+    appliedGiftUnits += Number(row.quantity) || 0;
+  }
+
+  if (updatedRows === 0) {
+    return {
+      success: false,
+      error: 'İkram yapılacak uygun satır yok (kısmi ödenmiş, zaten ikram veya geçersiz)'
+    };
+  }
+
+  finalizeTableOrderGiftUpdate(order);
+  return {
+    success: true,
+    updatedCount: updatedRows,
+    appliedGiftUnits,
+    total_amount: order.total_amount
+  };
+});
+
 /** İptal fişi: kategori yazıcısı → kasa yazıcısı → varsayılan (null). Atama zorunlu değil. */
 function resolveCancelPrinterNameType(categoryId, isYanUrun) {
   if (isYanUrun) {
@@ -2311,6 +2473,22 @@ function resolveCancelPrinterNameType(categoryId, isYanUrun) {
     return { printerName: cp.printerName, printerType: cp.printerType || 'usb' };
   }
   return { printerName: null, printerType: null };
+}
+
+/** Pending siparişte ürün satırı kalmadıysa siparişi siler; masa admin/Firebase’te boş görünür. */
+function removePendingTableOrderIfNoItemsLeft(order) {
+  if (!order || order.status !== 'pending') return;
+  const hasRows = db.tableOrderItems.some((oi) => oi.order_id === order.id);
+  if (hasRows) return;
+  const idx = db.tableOrders.findIndex((o) => o.id === order.id);
+  if (idx !== -1) db.tableOrders.splice(idx, 1);
+}
+
+/** Masada bekleyen sipariş ve en az bir ürün satırı var mı (socket). */
+function tableHasOpenItems(tableId) {
+  const ord = db.tableOrders.find((o) => o.table_id === tableId && o.status === 'pending');
+  if (!ord) return false;
+  return db.tableOrderItems.some((oi) => oi.order_id === ord.id);
 }
 
 // Masa siparişinden ürün iptal etme
@@ -2423,6 +2601,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     item.cancel_date = new Date().toISOString();
   }
 
+  removePendingTableOrderIfNoItemsLeft(order);
   saveDatabase();
 
   // İptal fişi arka planda yazdır (kullanıcı beklemez)
@@ -2484,7 +2663,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
   if (io) {
     io.emit('table-update', {
       tableId: order.table_id,
-      hasOrder: order.total_amount > 0
+      hasOrder: tableHasOpenItems(order.table_id)
     });
   }
 
@@ -2493,7 +2672,9 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     console.error('Masa Firebase kaydetme hatası:', err);
   });
 
-  return { success: true, remainingAmount: order.total_amount };
+  const pendingAfter = db.tableOrders.find((o) => o.id === order.id && o.status === 'pending');
+  const remainingAmount = pendingAfter ? pendingAfter.total_amount : 0;
+  return { success: true, remainingAmount };
 });
 
 // Toplu iptal handler - birden fazla item'ı tek fişte iptal et
@@ -2638,6 +2819,7 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
   // Masa siparişinin toplam tutarını güncelle
   order.total_amount = Math.max(0, order.total_amount - totalCancelAmount);
 
+  removePendingTableOrderIfNoItemsLeft(order);
   saveDatabase();
 
   // Her kategori için tek bir fiş yazdır - arka planda (kullanıcı beklemez)
@@ -2715,7 +2897,7 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
   if (io) {
     io.emit('table-update', {
       tableId: order.table_id,
-      hasOrder: order.total_amount > 0
+      hasOrder: tableHasOpenItems(order.table_id)
     });
   }
 
@@ -2724,7 +2906,9 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
     console.error('Masa Firebase kaydetme hatası:', err);
   });
 
-  return { success: true, remainingAmount: order.total_amount };
+  const pendingBulk = db.tableOrders.find((o) => o.id === order.id && o.status === 'pending');
+  const remainingBulk = pendingBulk ? pendingBulk.total_amount : 0;
+  return { success: true, remainingAmount: remainingBulk };
 });
 
 // Masa siparişini başka bir masaya aktar
@@ -3636,7 +3820,7 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
   if (io) {
     io.emit('table-update', {
       tableId: order.table_id,
-      hasOrder: order.total_amount > 0
+      hasOrder: tableHasOpenItems(order.table_id)
     });
   }
 
@@ -6201,6 +6385,16 @@ ipcMain.handle('remove-printer-assignment', (event, printerName, printerType, ca
   return { success: false, error: 'Atama bulunamadı' };
 });
 
+/** Adisyon: tüm kategori → mutfak yazıcı atamalarını tek seferde kaldırır (kasa yazıcısı değişmez). */
+ipcMain.handle('reset-all-printer-assignments', () => {
+  if (!db.printerAssignments) db.printerAssignments = [];
+  const n = db.printerAssignments.length;
+  db.printerAssignments = [];
+  saveDatabase();
+  console.log(`🖨️ Tüm kategori yazıcı atamaları sıfırlandı (${n} kayıt)`);
+  return { success: true, removedCount: n };
+});
+
 // Kasa yazıcısı ayarları
 ipcMain.handle('set-cashier-printer', (event, printerData) => {
   if (!printerData) {
@@ -7980,8 +8174,10 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     }
     .cart-actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       margin-top: 8px;
+      align-items: stretch;
     }
     .cart-note-btn {
       flex: 0 0 auto;
@@ -8000,8 +8196,45 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     .cart-note-btn:active {
       background: #f8fafc;
     }
+    .cart-ikram-btn {
+      flex: 0 0 auto;
+      padding: 10px 14px;
+      border-radius: 10px;
+      border: 1px solid #fbbf24;
+      background: linear-gradient(135deg, #fffbeb 0%, #fef3c7 100%);
+      color: #92400e;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 1px 3px rgba(245, 158, 11, 0.2);
+    }
+    .cart-ikram-btn:active {
+      background: #fde68a;
+      transform: scale(0.98);
+    }
+    html.sultan-mobile-root .cart-ikram-btn {
+      border-color: #34d399;
+      background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%);
+      color: #065f46;
+      box-shadow: 0 1px 3px rgba(16, 185, 129, 0.2);
+    }
+    html.sultan-mobile-root .cart-ikram-btn:active {
+      background: #a7f3d0;
+    }
+    .cart-item-gift {
+      border-left: 3px solid #f59e0b;
+      background: linear-gradient(90deg, rgba(254, 243, 199, 0.35) 0%, #fff 12px);
+    }
+    html.sultan-mobile-root .cart-item-gift {
+      border-left-color: #10b981;
+      background: linear-gradient(90deg, rgba(209, 250, 229, 0.45) 0%, #fff 12px);
+    }
     .cart-send-btn {
       flex: 1;
+      min-width: 120px;
       padding: 12px 16px;
       border-radius: 10px;
       border: none;
@@ -9199,6 +9432,10 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
           <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z"/></svg>
           <span id="noteButtonText">Not</span>
         </button>
+        <button type="button" class="cart-ikram-btn" onclick="showGiftMarkModal()">
+          <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4.318 6.318a4.5 4.5 0 016.364 0L12 7.636l1.318-1.318a4.5 4.5 0 116.364 6.364L12 20.364l-7.682-7.682a4.5 4.5 0 010-6.364z"/></svg>
+          <span>İkram işaretle</span>
+        </button>
         <button type="button" id="sendOrderBtn" class="cart-send-btn" onclick="sendOrder()">
           <span id="sendOrderBtnContent" style="display: inline-flex; align-items: center; gap: 6px;">
             <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
@@ -9257,6 +9494,26 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       <div style="border-top: 1px solid #e5e7eb; padding: 16px; display: flex; justify-content: flex-end; gap: 12px;">
         <button onclick="hideNoteModal()" style="padding: 12px 24px; background: #f3f4f6; color: #374151; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s;" onmouseover="this.style.background='#e5e7eb';" onmouseout="this.style.background='#f3f4f6';">İptal</button>
         <button onclick="saveNote()" style="padding: 12px 24px; background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%); color: white; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; transition: all 0.3s; box-shadow: 0 4px 12px rgba(168, 85, 247, 0.3);" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 6px 16px rgba(168, 85, 247, 0.4)';" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(168, 85, 247, 0.3)';">Kaydet</button>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Sepette ikram işaretle -->
+  <div id="giftMarkModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2100; align-items: center; justify-content: center; padding: 20px; flex-direction: row;" onclick="if(event.target === this) hideGiftMarkModal()">
+    <div style="background: white; border-radius: 20px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.35); max-height: 85vh;">
+      <div style="background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; padding: 18px 20px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0; font-size: 18px; font-weight: 800;">İkram işaretle</h2>
+          <button type="button" onclick="hideGiftMarkModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; font-size: 22px; font-weight: bold; line-height: 1;">×</button>
+        </div>
+        <p style="margin: 10px 0 0 0; font-size: 13px; opacity: 0.95; line-height: 1.45;">Her satır için kaç adedin ikram olacağını yazın; tümünü ikramlamak zorunda değilsiniz. 0 bıraktığınız satırlar değişmez. Tekrar açıp ek ikram verebilirsiniz.</p>
+      </div>
+      <div id="giftMarkListScroll" style="padding: 16px; overflow-y: auto; flex: 1; min-height: 0;">
+        <div id="giftMarkList"></div>
+      </div>
+      <div style="border-top: 1px solid #e5e7eb; padding: 14px 16px; display: flex; gap: 10px; justify-content: flex-end; background: #fafafa;">
+        <button type="button" onclick="hideGiftMarkModal()" style="padding: 12px 18px; background: #f3f4f6; color: #374151; border: none; border-radius: 12px; font-weight: 700; font-size: 14px; cursor: pointer;">Vazgeç</button>
+        <button type="button" onclick="applyGiftMarks()" style="padding: 12px 20px; background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; border: none; border-radius: 12px; font-weight: 800; font-size: 14px; cursor: pointer; box-shadow: 0 4px 14px rgba(234, 88, 12, 0.35);">Uygula</button>
       </div>
     </div>
   </div>
@@ -9540,6 +9797,7 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     let products = [];
     let yanUrunler = []; // Yan ürünler için ayrı liste
     let cart = [];
+    let nextCartLineId = 1;
     let selectedCategoryId = null;
     let currentStaff = null;
     let socket = null;
@@ -11534,7 +11792,7 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       
       const productName = prefix + option + ' ' + coffeeType;
       
-      const existing = cart.find(item => item.id === pendingTurkishCoffeeProduct.id && item.name === productName);
+      const existing = cart.find(item => item.id === pendingTurkishCoffeeProduct.id && item.name === productName && !item.isGift);
       if (existing) {
         existing.quantity++;
       } else {
@@ -11543,7 +11801,8 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
           name: productName, 
           price: pendingTurkishCoffeeProduct.price, 
           quantity: 1,
-          isGift: false
+          isGift: false,
+          lineId: nextCartLineId++
         });
       }
       
@@ -11583,13 +11842,13 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
         // ID'leri karşılaştırırken string/number uyumluluğunu kontrol et
         const itemId = String(item.id);
         const productIdStr = String(productId);
-        return itemId === productIdStr && item.name === name;
+        return itemId === productIdStr && item.name === name && !item.isGift;
       });
       
       if (existing) {
         existing.quantity++;
       } else {
-        cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun: isYanUrun });
+        cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun: isYanUrun, lineId: nextCartLineId++ });
       }
       updateCart();
       
@@ -11613,6 +11872,11 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       requestAnimationFrame(() => {
         updateCartScheduled = false;
         const itemsDiv = document.getElementById('cartItems');
+      cart.forEach(function(entry) {
+        if (entry.lineId == null || entry.lineId === undefined) {
+          entry.lineId = nextCartLineId++;
+        }
+      });
       // İkram edilen ürünleri toplamdan çıkar
       const total = cart.reduce((sum, item) => {
         if (item.isGift) return sum;
@@ -11624,16 +11888,19 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
         itemsDiv.innerHTML = '<div class="cart-empty">Sepet boş</div>';
       } else {
         itemsDiv.innerHTML = cart.map(item => {
-          const itemIdStr = typeof item.id === 'string' ? '\\'' + item.id + '\\'' : item.id;
-          const lineTotal = (item.price * item.quantity).toFixed(2);
-          return '<div class="cart-item">' +
-            '<div><div class="cart-item-name">' + item.name + '</div>' +
-            '<div class="cart-item-meta">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + lineTotal + ' ₺</div></div>' +
+          const lid = item.lineId;
+          const esc = String(item.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+          const giftCls = item.isGift ? ' cart-item-gift' : '';
+          const metaLine = item.isGift
+            ? '<div class="cart-item-meta"><span style="text-decoration:line-through;color:#94a3b8;">' + item.price.toFixed(2) + ' ₺</span> × ' + item.quantity + ' → <strong style="color:#b45309;">₺0 · İKRAM</strong></div>'
+            : '<div class="cart-item-meta">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + (item.price * item.quantity).toFixed(2) + ' ₺</div>';
+          return '<div class="cart-item' + giftCls + '">' +
+            '<div><div class="cart-item-name">' + esc + '</div>' + metaLine + '</div>' +
             '<div class="cart-item-right">' +
-              '<button type="button" class="cart-qty-btn" onclick="changeQuantity(' + itemIdStr + ', -1)">−</button>' +
+              '<button type="button" class="cart-qty-btn" onclick="changeQuantity(' + lid + ', -1)">−</button>' +
               '<span class="cart-item-qty">' + item.quantity + '</span>' +
-              '<button type="button" class="cart-qty-btn" onclick="changeQuantity(' + itemIdStr + ', 1)">+</button>' +
-              '<button type="button" class="cart-remove-btn" onclick="removeFromCart(' + itemIdStr + ')">×</button>' +
+              '<button type="button" class="cart-qty-btn" onclick="changeQuantity(' + lid + ', 1)">+</button>' +
+              '<button type="button" class="cart-remove-btn" onclick="removeFromCart(' + lid + ')">×</button>' +
             '</div></div>';
         }).join('');
       }
@@ -11647,33 +11914,91 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       });
     }
     
-    function changeQuantity(productId, delta) {
-      // ID karşılaştırması için string/number uyumluluğu
-      const item = cart.find(item => {
-        const itemId = String(item.id);
-        const productIdStr = String(productId);
-        return itemId === productIdStr;
-      });
+    function changeQuantity(lineId, delta) {
+      const lid = Number(lineId);
+      const item = cart.find(function(entry) { return entry.lineId === lid; });
       if (item) { 
         item.quantity += delta; 
         if (item.quantity <= 0) {
-          removeFromCart(productId);
+          removeFromCart(lid);
         } else {
-          // PERFORMANS: Throttle ile sepet güncellemesini optimize et
           throttle('updateCart', updateCart, 50);
         }
       }
     }
     
-    function removeFromCart(productId) {
-      // ID karşılaştırması için string/number uyumluluğu
-      cart = cart.filter(item => {
-        const itemId = String(item.id);
-        const productIdStr = String(productId);
-        return itemId !== productIdStr;
-      });
-      // PERFORMANS: Throttle ile sepet güncellemesini optimize et
+    function removeFromCart(lineId) {
+      const lid = Number(lineId);
+      cart = cart.filter(function(entry) { return entry.lineId !== lid; });
       throttle('updateCart', updateCart, 50);
+    }
+    
+    function showGiftMarkModal() {
+      const candidates = cart.filter(function(i) { return !i.isGift; });
+      if (candidates.length === 0) {
+        showToast('info', 'Sepet', 'İkram işaretlenecek ürün yok.');
+        return;
+      }
+      const listEl = document.getElementById('giftMarkList');
+      listEl.innerHTML = candidates.map(function(item) {
+        var name = String(item.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+        var maxQ = item.quantity;
+        var lid = item.lineId;
+        return '<div class="gift-mark-row" data-line-id="' + lid + '" style="padding:14px;border:2px solid #e5e7eb;border-radius:14px;margin-bottom:10px;background:#fff;box-sizing:border-box;">' +
+          '<div style="font-weight:700;color:#1f2937;font-size:15px;line-height:1.3;">' + name + '</div>' +
+          '<div style="font-size:13px;color:#64748b;margin-top:6px;">Sepette <strong>' + maxQ + '</strong> adet · birim ' + item.price.toFixed(2) + ' ₺</div>' +
+          '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:12px;">' +
+          '<label style="font-size:13px;font-weight:600;color:#374151;white-space:nowrap;">İkram adedi</label>' +
+          '<input type="number" class="gift-mark-qty" min="0" max="' + maxQ + '" value="0" inputmode="numeric" ' +
+          'style="width:76px;padding:8px 10px;border:2px solid #e5e7eb;border-radius:10px;font-size:16px;font-weight:700;text-align:center;box-sizing:border-box;"/>' +
+          '<span style="font-size:12px;color:#64748b;">/ en fazla ' + maxQ + ' (0 = atla)</span></div></div>';
+      }).join('');
+      document.getElementById('giftMarkModal').style.display = 'flex';
+    }
+    
+    function hideGiftMarkModal() {
+      var m = document.getElementById('giftMarkModal');
+      if (m) m.style.display = 'none';
+    }
+    
+    function applyGiftMarks() {
+      var rows = document.querySelectorAll('#giftMarkList .gift-mark-row');
+      var anyApplied = false;
+      for (var i = 0; i < rows.length; i++) {
+        var row = rows[i];
+        var lid = parseInt(row.getAttribute('data-line-id'), 10);
+        var inp = row.querySelector('.gift-mark-qty');
+        var raw = inp ? parseInt(String(inp.value).trim(), 10) : 0;
+        if (isNaN(raw) || raw <= 0) continue;
+        var item = cart.find(function(entry) { return entry.lineId === lid; });
+        if (!item || item.isGift) continue;
+        var maxQ = item.quantity;
+        var q = Math.min(Math.max(0, raw), maxQ);
+        if (q <= 0) continue;
+        anyApplied = true;
+        if (q >= maxQ) {
+          item.isGift = true;
+        } else {
+          item.quantity = maxQ - q;
+          cart.push({
+            id: item.id,
+            name: item.name,
+            price: item.price,
+            quantity: q,
+            isGift: true,
+            isYanUrun: !!item.isYanUrun,
+            lineId: nextCartLineId++
+          });
+        }
+      }
+      if (!anyApplied) {
+        showToast('warning', 'Seçim', 'En az bir satırda ikram adedi girin (1 veya daha fazla).');
+        return;
+      }
+      hideGiftMarkModal();
+      updateCart();
+      schedulePrepareReceipts();
+      showToast('success', 'İkram', 'Belirttiğiniz adetler ₺0 olarak ayrıldı.');
     }
     
     function toggleCart() {
@@ -13521,6 +13846,8 @@ function startAPIServer() {
         item.cancel_date = new Date().toISOString();
       }
 
+      const tableIdForSync = order.table_id;
+      removePendingTableOrderIfNoItemsLeft(order);
       saveDatabase();
 
       // Firebase'e iptal kaydı ekle - arka planda
@@ -13565,17 +13892,22 @@ function startAPIServer() {
         });
       }
 
+      syncSingleTableToFirebase(tableIdForSync).catch((err) => {
+        console.error('Masa Firebase kaydetme hatası (mobil iptal):', err);
+      });
+
       // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
       if (io) {
         io.emit('table-update', {
-          tableId: order.table_id,
-          hasOrder: order.total_amount > 0
+          tableId: tableIdForSync,
+          hasOrder: tableHasOpenItems(tableIdForSync)
         });
       }
 
+      const pendingMobil = db.tableOrders.find((o) => o.id === order.id && o.status === 'pending');
       res.json({ 
         success: true, 
-        remainingAmount: order.total_amount
+        remainingAmount: pendingMobil ? pendingMobil.total_amount : 0
       });
     } catch (error) {
       console.error('Ürün iptal hatası:', error);
@@ -14681,13 +15013,21 @@ async function syncSingleTableToFirebase(tableId) {
     console.log(`📊 Toplam sipariş sayısı: ${tableOrders.length}`);
     console.log(`📦 Toplam item sayısı: ${tableOrderItems.length}`);
 
-    // Masa bilgilerini bul
+    // Masa bilgilerini bul (sipariş var ama satır yoksa boş masa — eski tutarlılık)
     const order = tableOrders.find(o => o.table_id === tableId && o.status === 'pending');
-    
-    if (!order) {
-      console.log(`⚠️ Masa için aktif sipariş bulunamadı: ${tableId} - Boş masa olarak kaydedilecek`);
+    const orderItemsForTable = order
+      ? tableOrderItems.filter((oi) => oi.order_id === order.id)
+      : [];
+    if (order && orderItemsForTable.length === 0) {
+      removePendingTableOrderIfNoItemsLeft(order);
+      saveDatabase();
+    }
+    const effectiveOrder = order && orderItemsForTable.length > 0 ? order : null;
+
+    if (!effectiveOrder) {
+      console.log(`⚠️ Masa için aktif sipariş/ürün yok: ${tableId} - Boş masa olarak kaydedilecek`);
     } else {
-      console.log(`✅ Aktif sipariş bulundu: Order ID: ${order.id}, Tutar: ${order.total_amount}`);
+      console.log(`✅ Aktif sipariş bulundu: Order ID: ${effectiveOrder.id}, Tutar: ${effectiveOrder.total_amount}`);
     }
     
     // Masa numarasını çıkar
@@ -14722,7 +15062,7 @@ async function syncSingleTableToFirebase(tableId) {
       }
     }
 
-    const isOccupied = !!order;
+    const isOccupied = !!effectiveOrder;
     let totalAmount = 0;
     let items = [];
     let orderId = null;
@@ -14730,18 +15070,16 @@ async function syncSingleTableToFirebase(tableId) {
     let orderTime = null;
     let orderNote = null;
 
-    if (order) {
-      orderId = order.id;
-      totalAmount = parseFloat(order.total_amount) || 0;
-      orderDate = order.order_date || null;
-      orderTime = order.order_time || null;
-      orderNote = order.order_note || null;
-      tableName = order.table_name || tableName;
-      tableType = order.table_type || tableType;
+    if (effectiveOrder) {
+      orderId = effectiveOrder.id;
+      totalAmount = parseFloat(effectiveOrder.total_amount) || 0;
+      orderDate = effectiveOrder.order_date || null;
+      orderTime = effectiveOrder.order_time || null;
+      orderNote = effectiveOrder.order_note || null;
+      tableName = effectiveOrder.table_name || tableName;
+      tableType = effectiveOrder.table_type || tableType;
 
-      // Sipariş itemlarını al
-      const orderItems = tableOrderItems.filter(oi => oi.order_id === order.id);
-      items = orderItems.map(item => ({
+      items = orderItemsForTable.map(item => ({
         id: item.id,
         product_id: item.product_id,
         product_name: item.product_name,

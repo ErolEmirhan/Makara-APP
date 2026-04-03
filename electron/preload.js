@@ -21,6 +21,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createTableOrder: (orderData) => ipcRenderer.invoke('create-table-order', orderData),
   getTableOrders: (tableId) => ipcRenderer.invoke('get-table-orders', tableId),
   getTableOrderItems: (orderId) => ipcRenderer.invoke('get-table-order-items', orderId),
+  setTableOrderItemsAsGift: (orderId, payload) =>
+    ipcRenderer.invoke('set-table-order-items-as-gift', orderId, payload),
   cancelTableOrderItem: (itemId, cancelQuantity, cancelReason) => ipcRenderer.invoke('cancel-table-order-item', itemId, cancelQuantity, cancelReason),
   cancelTableOrderItemsBulk: (itemsToCancel, cancelReason) => ipcRenderer.invoke('cancel-table-order-items-bulk', itemsToCancel, cancelReason),
   previewCancelReceipt: (itemId, cancelQuantity) => ipcRenderer.invoke('preview-cancel-receipt', itemId, cancelQuantity),
@@ -69,6 +71,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   assignCategoryToPrinter: (assignmentData) => ipcRenderer.invoke('assign-category-to-printer', assignmentData),
   getPrinterAssignments: () => ipcRenderer.invoke('get-printer-assignments'),
   removePrinterAssignment: (printerName, printerType, categoryId) => ipcRenderer.invoke('remove-printer-assignment', printerName, printerType, categoryId),
+  resetAllPrinterAssignments: () => ipcRenderer.invoke('reset-all-printer-assignments'),
   setCashierPrinter: (printerData) => ipcRenderer.invoke('set-cashier-printer', printerData),
   getCashierPrinter: () => ipcRenderer.invoke('get-cashier-printer'),
   // Table Order Partial Payment API

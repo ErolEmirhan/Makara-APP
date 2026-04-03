@@ -517,6 +517,40 @@ const SettingsModal = ({
     }
   };
 
+  const handleResetAllPrinterAssignments = async () => {
+    if (printerAssignments.length === 0) {
+      showToast('Sıfırlanacak kategori ataması yok', 'info');
+      return;
+    }
+    if (
+      !window.confirm(
+        'Tüm kategorilerin mutfak/yazıcı atamaları kaldırılacak. Kasa yazıcısı ayarı değişmez. Devam edilsin mi?'
+      )
+    ) {
+      return;
+    }
+    try {
+      if (!window.electronAPI?.resetAllPrinterAssignments) {
+        showToast('Bu sürümde sıfırlama desteklenmiyor; uygulamayı güncelleyin.', 'error');
+        return;
+      }
+      const result = await window.electronAPI.resetAllPrinterAssignments();
+      if (result?.success) {
+        await loadPrinterAssignments();
+        const c = result.removedCount ?? 0;
+        showToast(
+          c > 0 ? `${c} kategori ataması sıfırlandı` : 'Kategori atamaları sıfırlandı',
+          'success'
+        );
+      } else {
+        showToast(result?.error || 'Atamalar sıfırlanamadı', 'error');
+      }
+    } catch (error) {
+      console.error('Tüm atamaları sıfırlama hatası:', error);
+      showToast('Atamalar sıfırlanamadı: ' + error.message, 'error');
+    }
+  };
+
   const handlePasswordChange = async () => {
     setPasswordError('');
     setPasswordSuccess(false);
@@ -2311,6 +2345,23 @@ const SettingsModal = ({
           {activeTab === 'printers' && (
             <div className="space-y-6">
               <h3 className="text-xl font-bold text-gray-800 mb-4">Yazıcı Yönetimi</h3>
+
+              <div className="rounded-xl border-2 border-amber-200 bg-amber-50/90 p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="text-sm text-amber-950">
+                  <p className="font-semibold">Kategori atamalarını toplu sıfırla</p>
+                  <p className="text-amber-900/85 mt-1 leading-relaxed">
+                    USB ve ağ yazıcılarına bağlı tüm mutfak adisyon kategori eşlemelerini kaldırır.{' '}
+                    <span className="font-medium">Kasa yazıcısı</span> seçiminiz aynı kalır.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetAllPrinterAssignments}
+                  className="shrink-0 px-4 py-2.5 rounded-lg border-2 border-amber-700 bg-white text-amber-900 text-sm font-semibold hover:bg-amber-100 transition-colors"
+                >
+                  Tüm kategori atamalarını sıfırla
+                </button>
+              </div>
               
               {/* Sub Tabs */}
               <div className="flex space-x-3 mb-6">

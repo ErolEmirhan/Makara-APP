@@ -22,6 +22,8 @@ import Toast from './components/Toast';
 import SettingsModal from './components/SettingsModal';
 
 const BRANCH_ONBOARDING_KEY = 'makara_pos_branch_onboarded';
+/** Açılış splash’inde şube; senkron okuma + getActiveBranch ile güncellenir */
+const LAST_BRANCH_SPLASH_KEY = 'makara_pos_splash_branch_key';
 
 /** Sultan Somatı: “Yan Ürünler” yalnızca Makara’da; Firebase’de kayıtlı olsa bile Sultan’da gösterilmez. */
 function filterYanUrunlerCategoriesForSultan(cats) {
@@ -34,8 +36,17 @@ function filterYanUrunlerCategoriesForSultan(cats) {
   });
 }
 
+function readSplashBranchKeyFromStorage() {
+  try {
+    return (localStorage.getItem(LAST_BRANCH_SPLASH_KEY) || '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 function App() {
   const [showSplash, setShowSplash] = useState(true);
+  const [splashBranchKey, setSplashBranchKey] = useState(readSplashBranchKeyFromStorage);
   const [selectedBranchKey, setSelectedBranchKey] = useState('');
   const [activeBranch, setActiveBranch] = useState(null);
   const [isActivatingBranch, setIsActivatingBranch] = useState(false);
@@ -140,6 +151,26 @@ function App() {
     return () => document.body.classList.remove('body-theme-sultan');
   }, [isSultanBranch]);
 
+  // Açılış splash’i için güncel şube (Electron; ilk karede localStorage yedeği)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!window.electronAPI?.getActiveBranch) return;
+        const b = await window.electronAPI.getActiveBranch();
+        const k = (b?.key || '').trim().toLowerCase();
+        if (cancelled || !VALID_BRANCH_KEYS.has(k)) return;
+        setSplashBranchKey(k);
+        try {
+          localStorage.setItem(LAST_BRANCH_SPLASH_KEY, k);
+        } catch (_) {}
+      } catch (_) {}
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [VALID_BRANCH_KEYS]);
+
   // Kayıtlı şube: bu cihazda bir kez seçildiyse her açılışta otomatik bağlan
   useEffect(() => {
     if (showSplash) return;
@@ -172,6 +203,10 @@ function App() {
         if (result?.success) {
           setActiveBranch(result.branch || branch);
           setSelectedBranchKey(key);
+          setSplashBranchKey(key);
+          try {
+            localStorage.setItem(LAST_BRANCH_SPLASH_KEY, key);
+          } catch (_) {}
           setIsBranchReady(true);
           setCurrentView(key === 'makarasur' || key === 'sultansomati' ? 'tables' : 'pos');
         }
@@ -1040,7 +1075,9 @@ function App() {
       setCurrentView(normalized === 'makarasur' || normalized === 'sultansomati' ? 'tables' : 'pos');
       try {
         localStorage.setItem(BRANCH_ONBOARDING_KEY, '1');
+        localStorage.setItem(LAST_BRANCH_SPLASH_KEY, normalized);
       } catch (_) {}
+      setSplashBranchKey(normalized);
     } catch (error) {
       setBranchError(error?.message || 'Sube aktivasyonunda hata olustu.');
     } finally {
@@ -1068,9 +1105,11 @@ function App() {
       }
       try {
         localStorage.setItem(BRANCH_ONBOARDING_KEY, '1');
+        localStorage.setItem(LAST_BRANCH_SPLASH_KEY, normalized);
       } catch (_) {}
       setActiveBranch(result.branch || { key: normalized });
       setSelectedBranchKey(normalized);
+      setSplashBranchKey(normalized);
       setCurrentView(normalized === 'makarasur' || normalized === 'sultansomati' ? 'tables' : 'pos');
       setSelectedTable(null);
       setCart([]);
@@ -1207,7 +1246,10 @@ function App() {
   return (
     <>
       {showSplash && (
-        <SplashScreen onComplete={() => setShowSplash(false)} />
+        <SplashScreen
+          branchKey={splashBranchKey}
+          onComplete={() => setShowSplash(false)}
+        />
       )}
 
       {showExitSplash && (

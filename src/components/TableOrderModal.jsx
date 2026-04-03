@@ -3,7 +3,7 @@ import Toast from './Toast';
 
 const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
-const TableOrderModal = ({ order, items, customerMode = false, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems }) => {
+const TableOrderModal = ({ order, items, customerMode = false, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems, onGiftApplied }) => {
   const [sessionDuration, setSessionDuration] = useState('');
   const [selectedItemDetail, setSelectedItemDetail] = useState(null);
   const [cancellingItemId, setCancellingItemId] = useState(null);
@@ -29,6 +29,10 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
   const [showAmountPaymentModal, setShowAmountPaymentModal] = useState(false);
   const [amountPaymentValue, setAmountPaymentValue] = useState('');
   const initialOrderTotalRef = useRef(null);
+  const [showGiftSelectModal, setShowGiftSelectModal] = useState(false);
+  /** @type {Record<string, number>} grup anahtarı → ikram adedi (0 = atla) */
+  const [giftQtyByGroupKey, setGiftQtyByGroupKey] = useState({});
+  const [applyingGift, setApplyingGift] = useState(false);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -79,6 +83,75 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
     
     return Array.from(grouped.values());
   }, [items]);
+
+  const groupRowKey = (g) => `${g.product_id}_${g.isGift || false}`;
+
+  const giftEligibleGroups = useMemo(
+    () =>
+      groupedItems.filter(
+        (g) => !g.isGift && !g.is_paid && !(Number(g.paid_quantity) > 0)
+      ),
+    [groupedItems]
+  );
+
+  const setGiftQtyForGroup = (key, maxQty, rawValue) => {
+    const n = parseInt(String(rawValue).trim(), 10);
+    let v = Number.isFinite(n) ? n : 0;
+    if (v < 0) v = 0;
+    if (v > maxQty) v = maxQty;
+    setGiftQtyByGroupKey((prev) => ({ ...prev, [key]: v }));
+  };
+
+  const hasAnyGiftQty = useMemo(
+    () =>
+      giftEligibleGroups.some((g) => {
+        const k = groupRowKey(g);
+        const q = Math.min(
+          Math.max(0, Number(giftQtyByGroupKey[k]) || 0),
+          Number(g.quantity) || 0
+        );
+        return q > 0;
+      }),
+    [giftEligibleGroups, giftQtyByGroupKey]
+  );
+
+  const handleConfirmGiftSelection = async () => {
+    const allocations = giftEligibleGroups
+      .map((g) => {
+        const k = groupRowKey(g);
+        const maxQ = Number(g.quantity) || 0;
+        const raw = Number(giftQtyByGroupKey[k]) || 0;
+        const q = Math.min(Math.max(0, Math.floor(raw)), maxQ);
+        return q > 0 ? { groupKey: k, giftQuantity: q } : null;
+      })
+      .filter(Boolean);
+    if (allocations.length === 0) {
+      showToast('En az bir ürün için ikram adedi girin (1 veya daha fazla)', 'warning');
+      return;
+    }
+    if (!window.electronAPI?.setTableOrderItemsAsGift) {
+      showToast('İkram işlemi bu sürümde kullanılamıyor', 'error');
+      return;
+    }
+    setApplyingGift(true);
+    try {
+      const result = await window.electronAPI.setTableOrderItemsAsGift(order.id, { allocations });
+      if (result?.success) {
+        const n = result.appliedGiftUnits ?? result.updatedCount ?? 0;
+        showToast(`${n} adet ikram olarak işlendi`, 'success');
+        setShowGiftSelectModal(false);
+        setGiftQtyByGroupKey({});
+        if (typeof onGiftApplied === 'function') onGiftApplied();
+      } else {
+        showToast(result?.error || 'İkram uygulanamadı', 'error');
+      }
+    } catch (e) {
+      console.error(e);
+      showToast(e?.message || 'İkram uygulanamadı', 'error');
+    } finally {
+      setApplyingGift(false);
+    }
+  };
 
   // Oturum süresini canlı olarak hesapla
   useEffect(() => {
@@ -586,6 +659,37 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
               )}
             </div>
           </div>
+
+          {order.status === 'pending' && giftEligibleGroups.length > 0 && (
+            <div className="flex justify-center px-2 -mt-2 mb-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setGiftQtyByGroupKey({});
+                  setShowGiftSelectModal(true);
+                }}
+                className="group relative inline-flex items-center justify-center gap-3 px-12 py-4 rounded-2xl font-bold text-base text-white shadow-xl hover:shadow-2xl transition-all duration-300 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 theme-sultan:from-emerald-600 theme-sultan:via-teal-600 theme-sultan:to-cyan-600 hover:scale-[1.02] active:scale-[0.99] ring-2 ring-amber-200/80 theme-sultan:ring-emerald-200/80 border border-white/25 overflow-hidden"
+              >
+                <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/10 to-transparent" />
+                <span className="pointer-events-none absolute -left-1/4 top-0 h-full w-1/2 skew-x-12 bg-white/15 opacity-0 group-hover:opacity-100 group-hover:translate-x-full transition-all duration-700" />
+                <svg
+                  className="w-7 h-7 relative drop-shadow-md"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  aria-hidden
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4.318 6.318a4.5 4.5 0 016.364 0L12 7.636l1.318-1.318a4.5 4.5 0 116.364 6.364L12 20.364l-7.682-7.682a4.5 4.5 0 010-6.364z"
+                  />
+                </svg>
+                <span className="relative tracking-wide text-lg">İkram Seç</span>
+              </button>
+            </div>
+          )}
 
           {/* Ürünler - Corporate Grid Layout */}
           <div>
@@ -1606,6 +1710,86 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
                   );
                 })}
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showGiftSelectModal && (
+        <div
+          className="fixed inset-0 z-[2100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
+          onClick={() => !applyingGift && setShowGiftSelectModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-hidden border border-amber-100 theme-sultan:border-emerald-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="px-6 py-5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 theme-sultan:from-emerald-600 theme-sultan:to-teal-600 text-white">
+              <h3 className="text-xl font-bold">İkram seçimi</h3>
+              <p className="text-sm text-white/90 mt-1 leading-relaxed">
+                Her ürün için ikram adedini girin; tümünü ikramlamak zorunda değilsiniz. 0 bıraktığınız
+                satırlar değişmez. Kısmi ödenmiş veya zaten ikram olan ürünler burada görünmez.
+              </p>
+            </div>
+            <div className="p-5 max-h-[min(50vh,360px)] overflow-y-auto space-y-2">
+              {giftEligibleGroups.map((g) => {
+                const k = groupRowKey(g);
+                const maxQ = Number(g.quantity) || 0;
+                const lineTotal = Number(g.price) * maxQ;
+                const val = Math.min(
+                  Math.max(0, Number(giftQtyByGroupKey[k]) || 0),
+                  maxQ
+                );
+                const active = val > 0;
+                return (
+                  <div
+                    key={k}
+                    className={`p-3.5 rounded-xl border-2 transition-all ${
+                      active
+                        ? 'border-amber-400 bg-amber-50/90 theme-sultan:border-emerald-400 theme-sultan:bg-emerald-50/90 shadow-sm'
+                        : 'border-gray-200 bg-gray-50/50'
+                    }`}
+                  >
+                    <p className="font-semibold text-gray-900 truncate">{g.product_name}</p>
+                    <p className="text-xs text-gray-600 mt-0.5">
+                      Sepette {maxQ} adet · toplam <span className="font-bold">₺{lineTotal.toFixed(2)}</span>
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-3">
+                      <label className="text-xs font-semibold text-gray-700 whitespace-nowrap">İkram adedi</label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={maxQ}
+                        inputMode="numeric"
+                        value={giftQtyByGroupKey[k] ?? ''}
+                        placeholder="0"
+                        disabled={applyingGift}
+                        onChange={(e) => setGiftQtyForGroup(k, maxQ, e.target.value)}
+                        className="w-20 px-2 py-2 rounded-lg border-2 border-gray-200 text-center text-base font-bold text-gray-900 focus:border-amber-500 theme-sultan:focus:border-emerald-500 focus:ring-0 disabled:opacity-50"
+                      />
+                      <span className="text-xs text-gray-500">/ en fazla {maxQ}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-5 pb-5 pt-0 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+              <button
+                type="button"
+                disabled={applyingGift}
+                onClick={() => setShowGiftSelectModal(false)}
+                className="px-5 py-3 rounded-xl font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 transition-colors"
+              >
+                Vazgeç
+              </button>
+              <button
+                type="button"
+                disabled={applyingGift || !hasAnyGiftQty}
+                onClick={handleConfirmGiftSelection}
+                className="px-6 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-amber-600 to-orange-600 theme-sultan:from-emerald-600 theme-sultan:to-teal-600 hover:opacity-95 disabled:opacity-50 shadow-lg transition-all"
+              >
+                {applyingGift ? 'Uygulanıyor…' : 'İkramı uygula'}
+              </button>
             </div>
           </div>
         </div>

@@ -2,7 +2,7 @@
 <html lang="tr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#dc2626">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=2.4.38">
+  <link rel="manifest" href="/manifest.json?v=2.4.39">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '2.4.38';
+      const APP_VERSION = '2.4.39';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -317,9 +317,11 @@
       syncAdminBranchThemeClass();
       const titleEl = document.querySelector('.navbar-title');
       const subEl = document.querySelector('.navbar-subtitle');
+      const eyebrowEl = document.querySelector('.navbar-eyebrow');
       if (!titleEl) return;
       if (activeBranchKey === 'sultansomati') {
-        titleEl.textContent = 'Sultan Somatı Admin Dashboard';
+        if (eyebrowEl) eyebrowEl.textContent = 'Sultan Somatı';
+        titleEl.textContent = 'Admin Dashboard';
         if (subEl) subEl.textContent = 'Anlık satış ve masa özeti';
         return;
       }
@@ -328,8 +330,9 @@
         makarasur: 'SURİÇİ'
       };
       const branchName = branchNameByKey[activeBranchKey] || 'HAVZAN';
-      titleEl.textContent = `MAKARA ${branchName} Admin Dashboard`;
-      if (subEl) subEl.textContent = 'Anlık Satış Detayları ve İstatistikler';
+      if (eyebrowEl) eyebrowEl.textContent = 'MAKARA · ' + branchName;
+      titleEl.textContent = 'Admin Dashboard';
+      if (subEl) subEl.textContent = 'Anlık satış detayları ve istatistikler';
     }
 
     function initFirebaseForBranch(branchKey) {
@@ -523,6 +526,7 @@
     }
 
     function showLogin() {
+      document.body.classList.remove('admin-dashboard-active');
       const loginSection = document.getElementById('loginSection');
       const dashboard = document.getElementById('dashboard');
       if (loginSection) loginSection.style.display = 'block';
@@ -534,6 +538,7 @@
     }
 
     function showDashboard() {
+      document.body.classList.add('admin-dashboard-active');
       const loginSection = document.getElementById('loginSection');
       const dashboard = document.getElementById('dashboard');
       if (loginSection) loginSection.style.display = 'none';
@@ -1214,6 +1219,327 @@
       return getSaleDiscountInfo(sale) != null;
     }
 
+    function getFilteredSalesForHistory(sourceSales) {
+      const src = sourceSales != null ? sourceSales : allSales;
+      let list = filterSalesByDateForHistory(src);
+      if (salesShowDiscountedOnly) list = list.filter(isSaleDiscounted);
+      return list;
+    }
+
+    function normalizeItemsTextForCluster(s) {
+      if (!s || typeof s !== 'string') return '';
+      return s.replace(/\s+/g, ' ').trim();
+    }
+
+    function countSaleItemLines(sale) {
+      if (sale.items_array && sale.items_array.length > 0) return sale.items_array.length;
+      if (sale.items && Array.isArray(sale.items) && sale.items.length > 0) return sale.items.length;
+      const t = sale.itemsText;
+      if (typeof t === 'string' && t.trim()) {
+        const parts = t.split(',').map((x) => x.trim()).filter(Boolean);
+        return parts.length || 1;
+      }
+      return 0;
+    }
+
+    function saleEligibleForPartialCluster(sale) {
+      if (sale.isExpense || sale.payment_method === 'Masraf') return false;
+      if (sale.payment_method && String(sale.payment_method).includes('Online Satış')) return false;
+      return true;
+    }
+
+    function partialClusterKeySameCart(sale) {
+      if (!sale.table_name) return null;
+      if (!saleEligibleForPartialCluster(sale)) return null;
+      const it = normalizeItemsTextForCluster(
+        typeof sale.itemsText === 'string' ? sale.itemsText : String(sale.itemsText || '')
+      );
+      if (!it || it.length < 3) return null;
+      return `A|${sale.table_name}|${sale.sale_date}|${sale.sale_time}|${it}`;
+    }
+
+    function partialClusterKeyPerItemSession(sale) {
+      if (!sale.table_name) return null;
+      if (!saleEligibleForPartialCluster(sale)) return null;
+      if (countSaleItemLines(sale) !== 1) return null;
+      return `B|${sale.table_name}|${sale.sale_date}|${sale.sale_time}`;
+    }
+
+    function clusterNewestFirst(a, b) {
+      const ta = a.created_at ? a.created_at.getTime() : 0;
+      const tb = b.created_at ? b.created_at.getTime() : 0;
+      return tb - ta;
+    }
+
+    function clusterRepresentativeSale(cluster) {
+      return cluster.sales.reduce((best, s) => {
+        const t = s.created_at ? s.created_at.getTime() : 0;
+        const bt = best.created_at ? best.created_at.getTime() : 0;
+        return t > bt ? s : best;
+      }, cluster.sales[0]);
+    }
+
+    /** Aynı sepet metnine sahip veya aynı oturumda ürün bazlı ardışık tahsilatları tek kartta birleştirir. */
+    function buildSalesDisplayClusters(sales) {
+      const used = new Set();
+      const clusters = [];
+
+      const mapA = new Map();
+      sales.forEach((s) => {
+        const k = partialClusterKeySameCart(s);
+        if (!k) return;
+        if (!mapA.has(k)) mapA.set(k, []);
+        mapA.get(k).push(s);
+      });
+      mapA.forEach((group) => {
+        if (group.length < 2) return;
+        group.forEach((s) => used.add(s.id));
+        clusters.push({ kind: 'partialSameCart', sales: [...group].sort(clusterNewestFirst) });
+      });
+
+      const mapB = new Map();
+      sales.forEach((s) => {
+        if (used.has(s.id)) return;
+        const k = partialClusterKeyPerItemSession(s);
+        if (!k) return;
+        if (!mapB.has(k)) mapB.set(k, []);
+        mapB.get(k).push(s);
+      });
+      mapB.forEach((group) => {
+        if (group.length < 2) return;
+        group.forEach((s) => used.add(s.id));
+        clusters.push({ kind: 'partialPerItem', sales: [...group].sort(clusterNewestFirst) });
+      });
+
+      sales.forEach((s) => {
+        if (used.has(s.id)) return;
+        clusters.push({ kind: 'single', sales: [s] });
+      });
+
+      clusters.sort((a, b) => {
+        const ta = Math.max(...a.sales.map((s) => (s.created_at ? s.created_at.getTime() : 0)));
+        const tb = Math.max(...b.sales.map((s) => (s.created_at ? s.created_at.getTime() : 0)));
+        return tb - ta;
+      });
+      return clusters;
+    }
+
+    function classifySameCartAmountTags(sales) {
+      const amounts = sales.map((s) => parseFloat(s.total_amount || 0));
+      if (amounts.length < 2) return ['#TutarlıÖdeme'];
+      const mn = Math.min(...amounts);
+      const mx = Math.max(...amounts);
+      const spread = mx - mn;
+      if (spread <= 1.5) return ['#BölmeliÖdeme'];
+      return ['#TutarlıÖdeme'];
+    }
+
+    function buildSaleHashTagsSingle(sale) {
+      const tags = [];
+      if (sale.payment_method && String(sale.payment_method).includes('Online Satış')) {
+        tags.push('#OnlineSatış');
+        return tags;
+      }
+      if (sale.isExpense || sale.payment_method === 'Masraf') {
+        tags.push('#Masraf');
+        return tags;
+      }
+      if (sale.table_name) {
+        tags.push('#MasaSiparişi', '#TekTahsilat');
+      } else {
+        tags.push('#HızlıSatış');
+      }
+      return tags;
+    }
+
+    function renderHashTagsRow(tags) {
+      if (!tags || !tags.length) return '';
+      return `<div class="sale-hash-tags">${tags.map((t) => `<span class="sale-hash-tag">${t}</span>`).join('')}</div>`;
+    }
+
+    function renderSaleClusterHtml(cluster) {
+      const sales = cluster.sales;
+      const first = sales[0];
+
+      const isExpense = first.isExpense === true ||
+        first.isExpense === 'true' ||
+        first.payment_method === 'Masraf' ||
+        (first.items_array && first.items_array.length > 0 && (
+          first.items_array[0].isExpense === true ||
+          first.items_array[0].isExpense === 'true' ||
+          (first.items_array[0].product_id && String(first.items_array[0].product_id).startsWith('expense-'))
+        ));
+
+      if (cluster.kind === 'single' && isExpense) {
+        const expenseTitle = first.items_array && first.items_array.length > 0
+          ? first.items_array[0].product_name
+          : (first.itemsText || first.items || 'Masraf');
+        const safeTitle = String(expenseTitle || '').replace(/'/g, "\\'");
+        return `
+          <div class="sale-card expense-card">
+            <div class="expense-header">
+              <div class="expense-info">
+                <h3 class="expense-title">${expenseTitle}</h3>
+                <p class="expense-time">${first.sale_time || ''}</p>
+                ${renderHashTagsRow(['#Masraf'])}
+                <span class="badge badge-expense">💰 Masraf</span>
+              </div>
+              <div class="expense-amount">
+                <p class="expense-label">MİKTAR</p>
+                <p class="expense-value">₺${parseFloat(first.total_amount || 0).toFixed(2)}</p>
+              </div>
+            </div>
+            <div class="sale-card-footer">
+              <button type="button" class="sale-delete-btn" onclick="openDeleteSaleConfirm('${first.id}', 'Masraf: ${safeTitle} - ₺${parseFloat(first.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Kalıcı olarak sil">Sil</button>
+            </div>
+          </div>`;
+      }
+
+      if (cluster.kind === 'single') {
+        const sale = first;
+        const itemsHtml = sale.items && sale.items.length > 0
+          ? sale.items.map(item => `
+            <div class="sale-item">
+              <span class="item-name">${item.product_name}</span>
+              <span class="item-quantity">x${item.quantity}</span>
+              ${item.isGift ? '<span class="gift-badge">İKRAM</span>' : ''}
+            </div>
+          `).join('')
+          : `<div class="sale-item"><span class="item-name">${sale.itemsText || 'Ürün bulunamadı'}</span></div>`;
+        const discountInfo = getSaleDiscountInfo(sale);
+        const discountBlock = discountInfo ? `
+            <div class="sale-discount-row">
+              <span class="sale-discount-badge">#${Math.round(discountInfo.percent)}% indirim</span>
+              <span class="sale-old-price">₺${discountInfo.oldPrice.toFixed(2)}</span>
+              <span class="sale-final-price">₺${discountInfo.total.toFixed(2)}</span>
+            </div>
+          ` : '';
+        const hashTags = buildSaleHashTagsSingle(sale);
+        return `
+        <div class="sale-card">
+          <div class="sale-header">
+            <div class="sale-info">
+              <h3 class="sale-id">Satış #${sale.sale_id || sale.id}</h3>
+              <p class="sale-time">${sale.sale_time || ''}</p>
+              ${renderHashTagsRow(hashTags)}
+              <div class="sale-badges">
+                ${sale.payment_method && sale.payment_method.includes('Online Satış')
+                  ? `<span class="badge badge-online">🌐 ${sale.payment_method}</span>`
+                  : `<span class="badge badge-${sale.payment_method === 'Nakit' ? 'cash' : 'card'}">
+                      ${sale.payment_method === 'Nakit' ? '💵 Nakit' : '💳 Kart'}
+                    </span>`
+                }
+                ${sale.staff_name ? `<span class="badge badge-staff">👤 ${sale.staff_name}</span>` : ''}
+                ${sale.table_name ? `<span class="badge badge-table">🪑 ${sale.table_name}${sale.table_type ? ` (${sale.table_type})` : ''}</span>` : ''}
+              </div>
+            </div>
+            <div class="sale-total">
+              ${discountBlock}
+              <p class="total-label">TOPLAM</p>
+              <p class="total-amount">₺${parseFloat(sale.total_amount || 0).toFixed(2)}</p>
+            </div>
+          </div>
+          <div class="sale-items">
+            <p class="items-label">Ürünler:</p>
+            <div class="items-list">${itemsHtml}</div>
+          </div>
+          <div class="sale-card-footer">
+            ${sale.payment_method && sale.payment_method.includes('Online Satış')
+              ? `<button type="button" class="sale-revert-online-btn" onclick="event.stopPropagation(); revertOnlineSale('${sale.id}');" title="Siparişi tekrar onay sepetine gönder">Onayı Geri Al</button>`
+              : ''
+            }
+            <button type="button" class="sale-delete-btn" onclick="openDeleteSaleConfirm('${sale.id}', 'Satış #${(sale.sale_id || sale.id)} - ₺${parseFloat(sale.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Kalıcı olarak sil">Sil</button>
+          </div>
+        </div>`;
+      }
+
+      const rep = clusterRepresentativeSale(cluster);
+      const sumTotal = sales.reduce((s, x) => s + parseFloat(x.total_amount || 0), 0);
+      let extraTags = [];
+      if (cluster.kind === 'partialSameCart') {
+        extraTags = ['#ParçalıÖdeme', '#MasaSiparişi', ...classifySameCartAmountTags(sales)];
+      } else if (cluster.kind === 'partialPerItem') {
+        extraTags = ['#ParçalıÖdeme', '#MasaSiparişi', '#ÜrünBazlıÖdeme'];
+      }
+
+      let itemsSummaryBlock = '';
+      if (cluster.kind === 'partialPerItem') {
+        itemsSummaryBlock = sales
+          .map(
+            (s) => `
+          <div class="sale-item partial-item-line">
+            <span class="item-name">${s.itemsText || (s.items && s.items[0] ? s.items[0].product_name : 'Kalem')}</span>
+            <span class="item-quantity">₺${parseFloat(s.total_amount || 0).toFixed(2)}</span>
+          </div>`
+          )
+          .join('');
+      } else {
+        itemsSummaryBlock =
+          rep.items && rep.items.length > 0
+            ? rep.items
+                .map(
+                  (item) => `
+          <div class="sale-item">
+            <span class="item-name">${item.product_name}</span>
+            <span class="item-quantity">x${item.quantity}</span>
+            ${item.isGift ? '<span class="gift-badge">İKRAM</span>' : ''}
+          </div>`
+                )
+                .join('')
+            : `<div class="sale-item"><span class="item-name">${rep.itemsText || 'Ürün bulunamadı'}</span></div>`;
+      }
+
+      const payRows = sales
+        .map((s) => {
+          const isCash = s.payment_method === 'Nakit';
+          const pm = String(s.payment_method || '')
+            .replace(/</g, '')
+            .replace(/>/g, '');
+          return `
+          <div class="partial-pay-row">
+            <div class="partial-pay-main">
+              <span class="partial-pay-amount">₺${parseFloat(s.total_amount || 0).toFixed(2)}</span>
+              <span class="badge badge-${isCash ? 'cash' : 'card'}">${isCash ? '💵 Nakit' : '💳 ' + (pm || 'Kart')}</span>
+              <span class="partial-pay-sale-ref">#Satış_${s.sale_id || s.id}</span>
+            </div>
+            <button type="button" class="sale-delete-btn sale-delete-btn-sm" onclick="openDeleteSaleConfirm('${s.id}', 'Satış #${s.sale_id || s.id} - ₺${parseFloat(s.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Bu tahsilatı sil">Sil</button>
+          </div>`;
+        })
+        .join('');
+
+      const title =
+        cluster.kind === 'partialSameCart'
+          ? `Parçalı ödeme — ${sales.length} tahsilat (aynı sepet)`
+          : `Parçalı ödeme — ${sales.length} tahsilat (ürün bazlı)`;
+
+      return `
+        <div class="sale-card sale-card-group sale-card-partial">
+          <div class="sale-header">
+            <div class="sale-info">
+              <h3 class="sale-id">${title}</h3>
+              <p class="sale-time">${rep.sale_time || ''} · ${rep.sale_date || ''}</p>
+              ${renderHashTagsRow(extraTags)}
+              <div class="sale-badges">
+                ${rep.table_name ? `<span class="badge badge-table">🪑 ${rep.table_name}${rep.table_type ? ` (${rep.table_type})` : ''}</span>` : ''}
+                ${rep.staff_name ? `<span class="badge badge-staff">👤 ${rep.staff_name}</span>` : ''}
+              </div>
+            </div>
+            <div class="sale-total">
+              <p class="total-label">TAHSİLAT TOPLAMI</p>
+              <p class="total-amount">₺${sumTotal.toFixed(2)}</p>
+            </div>
+          </div>
+          <div class="partial-pay-section">
+            <p class="items-label partial-pay-label">Ödemeler</p>
+            <div class="partial-pay-list">${payRows}</div>
+          </div>
+          <div class="sale-items">
+            <p class="items-label">${cluster.kind === 'partialPerItem' ? 'Ödenen kalemler (aynı masa oturumu):' : 'Sipariş özeti (aynı sepet):'}</p>
+            <div class="items-list">${itemsSummaryBlock}</div>
+          </div>
+        </div>`;
+    }
+
     // Satışları render et (lazy loading ile)
     function renderSales(sales, resetCount = false) {
       const container = document.getElementById('salesContainer');
@@ -1222,12 +1548,6 @@
       // Tarih filtresi değiştiğinde sayacı sıfırla
       if (resetCount) {
         salesDisplayedCount = 150;
-      }
-
-      // Tarih filtresine göre filtrele
-      let filteredSales = filterSalesByDateForHistory(sales);
-      if (salesShowDiscountedOnly) {
-        filteredSales = filteredSales.filter(isSaleDiscounted);
       }
 
       // Header ve tarih filtresi butonu
@@ -1297,6 +1617,8 @@
         </div>
       `;
 
+      const filteredSales = getFilteredSalesForHistory(sales);
+
       if (filteredSales.length === 0) {
         html += `
           <div class="empty-state">
@@ -1309,64 +1631,19 @@
         return;
       }
 
-      // Tüm satışları düz bir listeye çevir (tarih grupları olmadan, lazy loading için)
-      const allSalesFlat = [];
-      filteredSales.forEach(sale => {
-        allSalesFlat.push({
-          ...sale,
-          sale_date_for_group: sale.sale_date || 'Bilinmeyen'
-        });
+      const allClusters = buildSalesDisplayClusters(filteredSales);
+      const clustersToDisplay = allClusters.slice(0, salesDisplayedCount);
+      const hasMore = allClusters.length > salesDisplayedCount;
+
+      const clustersByDate = {};
+      clustersToDisplay.forEach((cluster) => {
+        const rep = clusterRepresentativeSale(cluster);
+        const date = rep.sale_date || 'Bilinmeyen';
+        if (!clustersByDate[date]) clustersByDate[date] = [];
+        clustersByDate[date].push(cluster);
       });
 
-      // Satışları sırala (en yeni önce)
-      allSalesFlat.sort((a, b) => {
-        // Önce tarih
-        const dateA = a.sale_date || 'Bilinmeyen';
-        const dateB = b.sale_date || 'Bilinmeyen';
-        if (dateA !== dateB) {
-          if (dateA === 'Bilinmeyen') return 1;
-          if (dateB === 'Bilinmeyen') return -1;
-          const [dayA, monthA, yearA] = dateA.split('.');
-          const [dayB, monthB, yearB] = dateB.split('.');
-          if (!dayA || !dayB) return 0;
-          const dateObjA = new Date(yearA, monthA - 1, dayA);
-          const dateObjB = new Date(yearB, monthB - 1, dayB);
-          if (dateObjB.getTime() !== dateObjA.getTime()) {
-            return dateObjB.getTime() - dateObjA.getTime();
-          }
-        }
-        
-        // Sonra saat
-        if (a.sale_time && b.sale_time) {
-          const [hA, mA, sA] = a.sale_time.split(':').map(Number);
-          const [hB, mB, sB] = b.sale_time.split(':').map(Number);
-          const timeA = (hA || 0) * 3600 + (mA || 0) * 60 + (sA || 0);
-          const timeB = (hB || 0) * 3600 + (mB || 0) * 60 + (sB || 0);
-          if (timeB !== timeA) return timeB - timeA;
-        }
-        
-        // Son olarak sale_id
-        const idA = parseInt(a.sale_id || a.id || 0);
-        const idB = parseInt(b.sale_id || b.id || 0);
-        return idB - idA;
-      });
-
-      // Lazy loading: Sadece gösterilecek kadar satış al
-      const salesToDisplay = allSalesFlat.slice(0, salesDisplayedCount);
-      const hasMore = allSalesFlat.length > salesDisplayedCount;
-
-      // Gösterilecek satışları tarihe göre grupla
-      const salesByDate = {};
-      salesToDisplay.forEach(sale => {
-        const date = sale.sale_date || 'Bilinmeyen';
-        if (!salesByDate[date]) {
-          salesByDate[date] = [];
-        }
-        salesByDate[date].push(sale);
-      });
-
-      // Tarihleri sırala
-      const sortedDates = Object.keys(salesByDate).sort((a, b) => {
+      const sortedDates = Object.keys(clustersByDate).sort((a, b) => {
         if (a === 'Bilinmeyen') return 1;
         if (b === 'Bilinmeyen') return -1;
         const [dayA, monthA, yearA] = a.split('.');
@@ -1376,32 +1653,33 @@
         const dateB = new Date(yearB, monthB - 1, dayB);
         return dateB - dateA;
       });
-      
-      sortedDates.forEach(date => {
-        let daySales = salesByDate[date];
-        
-        // Her tarih grubu içindeki satışları saat bilgisine göre sırala (en yeni önce)
-        daySales.sort((a, b) => {
-          // Önce saat bilgisine göre sırala
-          if (a.sale_time && b.sale_time) {
-            const [hA, mA, sA] = a.sale_time.split(':').map(Number);
-            const [hB, mB, sB] = b.sale_time.split(':').map(Number);
+
+      sortedDates.forEach((date) => {
+        let dayClusters = clustersByDate[date];
+        dayClusters.sort((a, b) => {
+          const ra = clusterRepresentativeSale(a);
+          const rb = clusterRepresentativeSale(b);
+          if (ra.sale_time && rb.sale_time) {
+            const [hA, mA, sA] = ra.sale_time.split(':').map(Number);
+            const [hB, mB, sB] = rb.sale_time.split(':').map(Number);
             const timeA = (hA || 0) * 3600 + (mA || 0) * 60 + (sA || 0);
             const timeB = (hB || 0) * 3600 + (mB || 0) * 60 + (sB || 0);
-            if (timeB !== timeA) return timeB - timeA; // En yeni saat önce
+            if (timeB !== timeA) return timeB - timeA;
           }
-          
-          // Saat bilgisi yoksa veya eşitse sale_id'ye göre sırala (büyükten küçüğe)
-          const idA = parseInt(a.sale_id || a.id || 0);
-          const idB = parseInt(b.sale_id || b.id || 0);
-          return idB - idA;
+          const ta = Math.max(...a.sales.map((s) => (s.created_at ? s.created_at.getTime() : 0)));
+          const tb = Math.max(...b.sales.map((s) => (s.created_at ? s.created_at.getTime() : 0)));
+          return tb - ta;
         });
-        
-        // Masrafları hariç tut
-        const dayTotal = daySales
-          .filter(sale => !sale.isExpense && sale.payment_method !== 'Masraf')
-          .reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
-        
+
+        const dayTotal = dayClusters.reduce(
+          (sum, cluster) =>
+            sum +
+            cluster.sales
+              .filter((sale) => !sale.isExpense && sale.payment_method !== 'Masraf')
+              .reduce((t, sale) => t + parseFloat(sale.total_amount || 0), 0),
+          0
+        );
+
         html += `
           <div class="date-group">
             <div class="date-header">
@@ -1415,8 +1693,8 @@
               </div>
               <div class="date-stats">
                 <div class="date-stat-item">
-                  <span class="date-stat-label">Satış</span>
-                  <span class="date-stat-value">${daySales.length}</span>
+                  <span class="date-stat-label">Kayıt</span>
+                  <span class="date-stat-value">${dayClusters.length}</span>
                 </div>
                 <div class="date-stat-item">
                   <span class="date-stat-label">Toplam</span>
@@ -1425,111 +1703,17 @@
               </div>
             </div>
             <div class="sales-grid">
-              ${daySales.map(sale => {
-                // Masraf kontrolü - birden fazla yöntemle kontrol et
-                const isExpense = sale.isExpense === true || 
-                                  sale.isExpense === 'true' ||
-                                  sale.payment_method === 'Masraf' ||
-                                  (sale.items_array && sale.items_array.length > 0 && (
-                                    sale.items_array[0].isExpense === true ||
-                                    sale.items_array[0].isExpense === 'true' ||
-                                    (sale.items_array[0].product_id && sale.items_array[0].product_id.toString().startsWith('expense-'))
-                                  ));
-                
-                // Masraf ise farklı görünüm
-                if (isExpense) {
-                  const expenseTitle = sale.items_array && sale.items_array.length > 0 
-                    ? sale.items_array[0].product_name 
-                    : (sale.itemsText || sale.items || 'Masraf');
-                  
-                  return `
-                    <div class="sale-card expense-card">
-                      <div class="expense-header">
-                        <div class="expense-info">
-                          <h3 class="expense-title">${expenseTitle}</h3>
-                          <p class="expense-time">${sale.sale_time || ''}</p>
-                          <span class="badge badge-expense">💰 Masraf</span>
-                        </div>
-                        <div class="expense-amount">
-                          <p class="expense-label">MİKTAR</p>
-                          <p class="expense-value">₺${parseFloat(sale.total_amount || 0).toFixed(2)}</p>
-                        </div>
-                      </div>
-                      <div class="sale-card-footer">
-                        <button type="button" class="sale-delete-btn" onclick="openDeleteSaleConfirm('${sale.id}', 'Masraf: ${(expenseTitle || '').replace(/'/g, "\\'")} - ₺${parseFloat(sale.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Kalıcı olarak sil">Sil</button>
-                      </div>
-                    </div>
-                  `;
-                }
-                
-                // Normal satış görünümü
-                const itemsHtml = sale.items && sale.items.length > 0
-                  ? sale.items.map(item => `
-                    <div class="sale-item">
-                      <span class="item-name">${item.product_name}</span>
-                      <span class="item-quantity">x${item.quantity}</span>
-                      ${item.isGift ? '<span class="gift-badge">İKRAM</span>' : ''}
-                    </div>
-                  `).join('')
-                  : `<div class="sale-item"><span class="item-name">${sale.itemsText || 'Ürün bulunamadı'}</span></div>`;
-                const discountInfo = getSaleDiscountInfo(sale);
-                const discountBlock = discountInfo ? `
-                    <div class="sale-discount-row">
-                      <span class="sale-discount-badge">#${Math.round(discountInfo.percent)}% indirim</span>
-                      <span class="sale-old-price">₺${discountInfo.oldPrice.toFixed(2)}</span>
-                      <span class="sale-final-price">₺${discountInfo.total.toFixed(2)}</span>
-                    </div>
-                  ` : '';
-                return `
-                <div class="sale-card">
-                  <div class="sale-header">
-                    <div class="sale-info">
-                      <h3 class="sale-id">Satış #${sale.sale_id || sale.id}</h3>
-                      <p class="sale-time">${sale.sale_time || ''}</p>
-                      <div class="sale-badges">
-                        ${sale.payment_method && sale.payment_method.includes('Online Satış') 
-                          ? `<span class="badge badge-online">🌐 ${sale.payment_method}</span>`
-                          : `<span class="badge badge-${sale.payment_method === 'Nakit' ? 'cash' : 'card'}">
-                              ${sale.payment_method === 'Nakit' ? '💵 Nakit' : '💳 Kart'}
-                            </span>`
-                        }
-                        ${sale.staff_name ? `<span class="badge badge-staff">👤 ${sale.staff_name}</span>` : ''}
-                        ${sale.table_name ? `<span class="badge badge-table">🪑 ${sale.table_name}${sale.table_type ? ` (${sale.table_type})` : ''}</span>` : ''}
-                      </div>
-                    </div>
-                    <div class="sale-total">
-                      ${discountBlock}
-                      <p class="total-label">TOPLAM</p>
-                      <p class="total-amount">₺${parseFloat(sale.total_amount || 0).toFixed(2)}</p>
-                    </div>
-                  </div>
-                  <div class="sale-items">
-                    <p class="items-label">Ürünler:</p>
-                    <div class="items-list">
-                      ${itemsHtml}
-                    </div>
-                  </div>
-                  <div class="sale-card-footer">
-                    ${sale.payment_method && sale.payment_method.includes('Online Satış') 
-                      ? `<button type="button" class="sale-revert-online-btn" onclick="event.stopPropagation(); revertOnlineSale('${sale.id}');" title="Siparişi tekrar onay sepetine gönder">Onayı Geri Al</button>`
-                      : ''
-                    }
-                    <button type="button" class="sale-delete-btn" onclick="openDeleteSaleConfirm('${sale.id}', 'Satış #${(sale.sale_id || sale.id)} - ₺${parseFloat(sale.total_amount || 0).toFixed(2)}'); event.stopPropagation();" title="Kalıcı olarak sil">Sil</button>
-                  </div>
-                </div>
-              `;
-              }).join('')}
+              ${dayClusters.map((c) => renderSaleClusterHtml(c)).join('')}
             </div>
           </div>
         `;
       });
 
-      // "Daha fazla yükle" butonu veya scroll indicator
       if (hasMore) {
         html += `
           <div id="salesLoadMore" style="text-align: center; padding: 20px; margin-top: 20px;">
             <button onclick="loadMoreSales()" style="padding: 12px 24px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
-              Daha Fazla Yükle (${allSalesFlat.length - salesDisplayedCount} kaldı)
+              Daha Fazla Yükle (${allClusters.length - salesDisplayedCount} kaldı)
             </button>
           </div>
         `;
@@ -1668,8 +1852,8 @@
       
       // 200px kala daha fazla yükle
       if (scrollBottom < 200) {
-        const filteredSales = filterSalesByDateForHistory(allSales);
-        if (salesDisplayedCount < filteredSales.length) {
+        const clusterCount = buildSalesDisplayClusters(getFilteredSalesForHistory(allSales)).length;
+        if (salesDisplayedCount < clusterCount) {
           loadMoreSales();
         }
       }
@@ -2002,7 +2186,7 @@
 
     // Aktif masa sayısını güncelle
     function updateActiveTablesCount(count) {
-      const activeTablesValue = document.querySelector('.stat-card-pink .stat-value');
+      const activeTablesValue = document.getElementById('statsActiveTableCount');
       if (activeTablesValue) {
         activeTablesValue.textContent = count;
       }
@@ -2203,13 +2387,6 @@
       // Günlük ciro 50.000 TL'yi geçtiyse push notification gönder
       checkRevenueNotification(todayRevenue);
       
-      // Günlük masrafları hesapla - iş günü içindeki masraflar (gece 3'ten gece 3'e)
-      const todayExpenses = sales.filter(s => {
-        if (!s.isExpense && s.payment_method !== 'Masraf') return false;
-        return isInCurrentBusinessDay(s.sale_date, s.sale_time);
-      });
-      const todayExpenseTotal = todayExpenses.reduce((sum, s) => sum + parseFloat(s.total_amount || 0), 0);
-      
       const statsGrid = document.getElementById('statsGrid');
       
       // statsGrid yoksa sadece onu atla, fonksiyondan çıkma
@@ -2224,54 +2401,82 @@
       // Böylece "Yenile" butonuna basıldığında istatistikler kaybolmaz
       // Görünürlük renderCurrentView() fonksiyonunda kontrol edilir
       
+      statsGrid.className = 'stats-grid stats-dashboard-kpis';
+      const fmtTry = (n) => '₺' + Math.round(n).toLocaleString('tr-TR');
       statsGrid.innerHTML = `
-        <div class="stat-card stat-card-green">
-          <div class="stat-icon">💰</div>
-          <div class="stat-content">
-            <h3>Günlük Ciro</h3>
-            <div class="stat-value">₺${Math.round(todayRevenue).toLocaleString('tr-TR')}</div>
+        <section class="stats-hero-revenue" aria-label="Günlük ciro özeti">
+          <div class="stats-hero-revenue-inner">
+            <div class="stats-hero-revenue-head">
+              <div class="stats-hero-topline">
+                <span class="stats-hero-eyebrow-pill">İş günü özeti</span>
+              </div>
+              <h2 class="stats-hero-heading">Günlük ciro</h2>
+              <div class="stats-hero-amount-block">
+                <p class="stats-hero-amount" title="Nakit + Kart + Online">${fmtTry(todayRevenue)}</p>
+              </div>
+              <p class="stats-hero-caption">Tamamlanan tahsilatlar • Nakit, kart ve online</p>
+            </div>
+            <div class="stats-hero-payments" role="group" aria-label="Ödeme dağılımı">
+              <div class="stats-pay-pill stats-pay-pill-cash">
+                <span class="stats-pay-pill-icon" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a1 1 0 11-2 0 1 1 0 012 0z"/></svg>
+                </span>
+                <div class="stats-pay-pill-text">
+                  <span class="stats-pay-pill-label">Nakit</span>
+                  <span class="stats-pay-pill-value">${fmtTry(totalCash)}</span>
+                </div>
+              </div>
+              <div class="stats-pay-pill stats-pay-pill-card">
+                <span class="stats-pay-pill-icon" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
+                </span>
+                <div class="stats-pay-pill-text">
+                  <span class="stats-pay-pill-label">Kart</span>
+                  <span class="stats-pay-pill-value">${fmtTry(totalCard)}</span>
+                </div>
+              </div>
+              <div class="stats-pay-pill stats-pay-pill-online">
+                <span class="stats-pay-pill-icon" aria-hidden="true">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
+                </span>
+                <div class="stats-pay-pill-text">
+                  <span class="stats-pay-pill-label">Online</span>
+                  <span class="stats-pay-pill-value">${fmtTry(onlineTotal)}</span>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-        <div class="stat-card stat-card-red">
-          <div class="stat-icon">💸</div>
-          <div class="stat-content">
-            <h3>Günlük Masraf</h3>
-            <div class="stat-value">₺${Math.round(todayExpenseTotal).toLocaleString('tr-TR')}</div>
+        </section>
+        <div class="stats-mini-grid" role="list">
+          <div class="stats-mini-card stats-mini-sales" role="listitem">
+            <div class="stats-mini-icon-wrap stats-mini-icon-sales-bg" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg>
+            </div>
+            <div class="stats-mini-body">
+              <span class="stats-mini-label">Bugünkü satış</span>
+              <span class="stats-mini-value">${todaySales.length}</span>
+              <span class="stats-mini-hint">adet kayıt</span>
+            </div>
           </div>
-        </div>
-        <div class="stat-card stat-card-orange">
-          <div class="stat-icon">⚠️</div>
-          <div class="stat-content">
-            <h3>Günlük İptal</h3>
-            <div class="stat-value">₺${Math.round(todayCancelsTotal).toLocaleString('tr-TR')}</div>
+          <div class="stats-mini-card stats-mini-cancel" role="listitem">
+            <div class="stats-mini-icon-wrap stats-mini-icon-cancel-bg" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            </div>
+            <div class="stats-mini-body">
+              <span class="stats-mini-label">Günlük iptal</span>
+              <span class="stats-mini-value">${fmtTry(todayCancelsTotal)}</span>
+              <span class="stats-mini-hint">iptal tutarı</span>
+            </div>
           </div>
-        </div>
-        <div class="stat-card stat-card-purple">
-          <div class="stat-icon">📊</div>
-          <div class="stat-content">
-            <h3>Bugünkü Satış</h3>
-            <div class="stat-value">${todaySales.length}</div>
-          </div>
-        </div>
-        <div class="stat-card stat-card-pink">
-          <div class="stat-icon">🪑</div>
-          <div class="stat-content">
-            <h3>Aktif Masa</h3>
-            <div class="stat-value">0</div>
-          </div>
-        </div>
-        <div class="payment-breakdown-card">
-          <div class="payment-breakdown-item">
-            <span class="payment-breakdown-label">💵 Nakit:</span>
-            <span class="payment-breakdown-value">₺${Math.round(totalCash).toLocaleString('tr-TR')}</span>
-          </div>
-          <div class="payment-breakdown-item">
-            <span class="payment-breakdown-label">💳 Kart:</span>
-            <span class="payment-breakdown-value">₺${Math.round(totalCard).toLocaleString('tr-TR')}</span>
-          </div>
-          <div class="payment-breakdown-item">
-            <span class="payment-breakdown-label">🌐 Online:</span>
-            <span class="payment-breakdown-value">₺${Math.round(onlineTotal).toLocaleString('tr-TR')}</span>
+          <div class="stats-mini-card stats-mini-tables" role="listitem">
+            <div class="stats-mini-icon-wrap stats-mini-icon-table-bg" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 6a2 2 0 012-2h12a2 2 0 012 2v12a2 2 0 01-2 2H6a2 2 0 01-2-2V6z"/><path stroke-linecap="round" stroke-linejoin="round" d="M4 12h16M12 4v16"/></svg>
+            </div>
+            <div class="stats-mini-body">
+              <span class="stats-mini-label">Aktif masa</span>
+              <span class="stats-mini-value" id="statsActiveTableCount">0</span>
+              <span class="stats-mini-hint">açık adisyon</span>
+            </div>
           </div>
         </div>
       `;
@@ -2351,7 +2556,7 @@
       // Stats grid'i sadece "Satış Geçmişi" sekmesinde göster
       const statsGrid = document.getElementById('statsGrid');
       if (statsGrid) {
-        statsGrid.style.display = activeTab === 'sales' ? 'grid' : 'none';
+        statsGrid.style.display = activeTab === 'sales' ? 'flex' : 'none';
       }
       
       if (activeTab === 'sales') {
@@ -3914,6 +4119,11 @@
     // Masa kartı render et
     function renderTableCard(table) {
       const escHtml = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      const fmtTableTry = (n) => {
+        const x = Number(n);
+        const v = Number.isFinite(x) ? x : 0;
+        return '₺' + v.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      };
       const isSultan = String(table.table_id || '').startsWith('sultan-');
       // Masa durumunu sağlam bir şekilde kontrol et
       const isOccupied = table.is_occupied === true || 
@@ -3931,7 +4141,7 @@
           <div class="table-card table-card-occupied" style="cursor: pointer;" onclick="showTableDetail('${table.table_id}')" title="Detay için tıklayın">
             <div class="table-card-gradient">
               <div class="table-number-occupied">${occTitle}</div>
-              <div class="table-amount-occupied">₺${totalAmount.toFixed(2)}</div>
+              <div class="table-amount-occupied">${fmtTableTry(totalAmount)}</div>
             </div>
           </div>
         `;
@@ -3942,7 +4152,7 @@
               <div class="table-number">${escHtml(String(table.table_number))}</div>
               <div class="table-status table-status-occupied">Dolu</div>
             </div>
-            <div class="table-amount-classic">₺${totalAmount.toFixed(2)}</div>
+            <div class="table-amount-classic">${fmtTableTry(totalAmount)}</div>
             <div class="table-name">${escHtml(table.table_name || '')}</div>
           </div>
         `;
@@ -4662,84 +4872,111 @@
         return;
       }
 
+      const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      const fmtTryCancel = (n) => {
+        const v = Number(n);
+        const x = Number.isFinite(v) ? v : 0;
+        return '₺' + x.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      };
+
       let html = '<div class="cancels-list">';
       
       cancelsToDisplay.forEach((cancel) => {
           const isGroup = cancel.is_group === true;
-          const cancelDate = cancel.cancel_date || 'Bilinmeyen';
+          const cancelDate = cancel.cancel_date || '—';
           const cancelTime = cancel.cancel_time || '';
           const staffName = cancel.staff_name || 'Bilinmiyor';
           const orderStaffName = cancel.order_staff_name || 'Bilinmiyor';
           const staffIsManager = cancel.staff_is_manager || false;
-          const source = cancel.source === 'mobile' ? '📱 Mobil' : '💻 Masaüstü';
+          const sourceLabel = cancel.source === 'mobile' ? 'Mobil' : 'Masaüstü';
           const totalAmount = isGroup
             ? parseFloat(cancel.total_amount || 0)
             : (cancel.price || 0) * (cancel.quantity || 0);
           const productLabel = isGroup
-            ? ('Tüm Masa İptali' + (cancel.table_name ? ' – ' + cancel.table_name : ''))
-            : (cancel.product_name || 'Bilinmeyen Ürün');
-          const detailsHtml = isGroup && Array.isArray(cancel.items_array) && cancel.items_array.length > 0
-            ? `<div class="cancel-detail-row"><span class="cancel-detail-label">İptal edilen ürünler:</span></div>
-               <div class="cancel-detail-value" style="margin-left:0; margin-top:6px; font-size:13px;">
-                 ${cancel.items_array.map(i => '• ' + (i.product_name || '') + ' x' + (i.quantity || 0) + (i.isGift ? ' (İkram)' : '') + ' → ₺' + ((i.price || 0) * (i.quantity || 0)).toFixed(2)).join('<br>')}
-               </div>
-               <div class="cancel-detail-row" style="margin-top:8px;">
-                 <span class="cancel-detail-label">Sipariş Sorumlusu Garson:</span>
-                 <span class="cancel-detail-value">${orderStaffName || 'Bilinmiyor'}</span>
-               </div>`
-            : `<div class="cancel-detail-row">
-                 <span class="cancel-detail-label">Miktar:</span>
-                 <span class="cancel-detail-value">${cancel.quantity || 0} adet</span>
-               </div>
-               <div class="cancel-detail-row">
-                 <span class="cancel-detail-label">Birim Fiyat:</span>
-                 <span class="cancel-detail-value">₺${(cancel.price || 0).toFixed(2)}</span>
-               </div>
-               <div class="cancel-detail-row">
-                 <span class="cancel-detail-label">İptal Eden Personel:</span>
-                 <span class="cancel-detail-value">${staffName || 'Bilinmiyor'}${staffIsManager ? ' (Müdür)' : ''}</span>
-               </div>
-               <div class="cancel-detail-row">
-                 <span class="cancel-detail-label">Sipariş Sorumlusu Garson:</span>
-                 <span class="cancel-detail-value">${orderStaffName || 'Bilinmiyor'}</span>
-               </div>`;
-          
+            ? ('Tüm masa iptali' + (cancel.table_name ? ' — ' + esc(cancel.table_name) : ''))
+            : esc(cancel.product_name || 'Bilinmeyen ürün');
+          const typeLabel = isGroup ? 'Toplu iptal' : 'Kalem iptali';
+          const tableDisp = esc(cancel.table_name || 'Bilinmeyen masa');
+
+          let detailsHtml = '';
+          if (isGroup && Array.isArray(cancel.items_array) && cancel.items_array.length > 0) {
+            const itemsRows = cancel.items_array.map((i) => {
+              const nm = esc(String(i.product_name || ''));
+              const q = Number(i.quantity) || 0;
+              const sub = (Number(i.price) || 0) * q;
+              const gift = i.isGift ? '<span class="cancel-item-gift">İkram</span>' : '';
+              return `<li class="cancel-item-row">
+                <span class="cancel-item-name">${nm}</span>
+                <span class="cancel-item-mid">${gift}<span class="cancel-item-qty">×${q}</span></span>
+                <span class="cancel-item-amt">${fmtTryCancel(sub)}</span>
+              </li>`;
+            }).join('');
+            detailsHtml = `
+              <div class="cancel-detail-block">
+                <div class="cancel-detail-block-title">İptal edilen kalemler</div>
+                <ul class="cancel-items-list">${itemsRows}</ul>
+              </div>
+              <dl class="cancel-dl">
+                <div class="cancel-dl-row"><dt>Sipariş sorumlusu</dt><dd>${esc(orderStaffName)}</dd></div>
+              </dl>`;
+          } else if (isGroup) {
+            detailsHtml = `<dl class="cancel-dl">
+                <div class="cancel-dl-row"><dt>Sipariş sorumlusu</dt><dd>${esc(orderStaffName)}</dd></div>
+              </dl>`;
+          } else {
+            detailsHtml = `<dl class="cancel-dl">
+                <div class="cancel-dl-row"><dt>Miktar</dt><dd>${esc(String(cancel.quantity || 0))} adet</dd></div>
+                <div class="cancel-dl-row"><dt>Birim fiyat</dt><dd>${fmtTryCancel(cancel.price || 0)}</dd></div>
+                <div class="cancel-dl-row"><dt>İptal eden</dt><dd>${esc(staffName)}${staffIsManager ? ' <span class="cancel-role-tag">Müdür</span>' : ''}</dd></div>
+                <div class="cancel-dl-row"><dt>Sipariş sorumlusu</dt><dd>${esc(orderStaffName)}</dd></div>
+              </dl>`;
+          }
+
           html += `
-            <div class="cancel-card">
-              <div class="cancel-header">
-                <div class="cancel-header-left">
-                  <div class="cancel-product-name">${productLabel}</div>
-                  <div class="cancel-meta">
-                    <span class="cancel-meta-item">${cancelDate} ${cancelTime}</span>
-                    <span class="cancel-meta-separator">•</span>
-                    <span class="cancel-meta-item">${cancel.table_name || 'Bilinmeyen Masa'}</span>
-                    <span class="cancel-meta-separator">•</span>
-                    <span class="cancel-meta-item">${source}</span>
+            <article class="cancel-card ${isGroup ? 'cancel-card--group' : 'cancel-card--line'}">
+              <div class="cancel-card-accent" aria-hidden="true"></div>
+              <div class="cancel-card-surface">
+                <header class="cancel-card-head">
+                  <div class="cancel-card-head-text">
+                    <div class="cancel-card-badges">
+                      <span class="cancel-pill cancel-pill--source">${esc(sourceLabel)}</span>
+                      <span class="cancel-pill cancel-pill--type">${esc(typeLabel)}</span>
+                    </div>
+                    <h3 class="cancel-card-title">${productLabel}</h3>
+                    <div class="cancel-card-meta">
+                      <span class="cancel-meta-line">${esc(cancelDate)}${cancelTime ? ' · ' + esc(cancelTime) : ''}</span>
+                      <span class="cancel-meta-sep" aria-hidden="true"></span>
+                      <span class="cancel-meta-line">${tableDisp}</span>
+                    </div>
                   </div>
+                  <div class="cancel-card-total" aria-label="İptal tutarı">
+                    <span class="cancel-card-total-label">İptal tutarı</span>
+                    <span class="cancel-amount">${fmtTryCancel(totalAmount)}</span>
+                  </div>
+                </header>
+                <div class="cancel-card-body">
+                  ${detailsHtml}
                 </div>
-                <div class="cancel-header-right">
-                  <div class="cancel-amount">₺${totalAmount.toFixed(2)}</div>
-                </div>
+                <footer class="cancel-card-foot">
+                  <div class="cancel-reason">
+                    <div class="cancel-reason-label">Açıklama</div>
+                    <p class="cancel-reason-text">${esc(cancel.cancel_reason || 'Belirtilmedi')}</p>
+                  </div>
+                </footer>
               </div>
-              <div class="cancel-details">
-                ${detailsHtml}
-              </div>
-              <div class="cancel-reason">
-                <div class="cancel-reason-label">İptal Açıklaması:</div>
-                <div class="cancel-reason-text">${cancel.cancel_reason || 'Açıklama yok'}</div>
-              </div>
-            </div>
+            </article>
           `;
       });
 
       html += '</div>';
       
-      // "Daha fazla yükle" butonu
       if (hasMore) {
+        const remaining = allCancels.length - cancelsDisplayedCount;
         html += `
-          <div id="cancelsLoadMore" style="text-align: center; padding: 20px; margin-top: 20px;">
-            <button onclick="loadMoreCancels()" style="padding: 12px 24px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
-              Daha Fazla Yükle (${allCancels.length - cancelsDisplayedCount} kaldı)
+          <div id="cancelsLoadMore" class="cancels-load-more-wrap">
+            <button type="button" class="cancels-load-more-btn" onclick="loadMoreCancels()">
+              Daha fazla göster
+              <span class="cancels-load-more-badge">${remaining} kayıt</span>
             </button>
           </div>
         `;
@@ -4758,7 +4995,7 @@
       
       const loadMoreBtn = document.getElementById('cancelsLoadMore');
       if (loadMoreBtn) {
-        loadMoreBtn.innerHTML = '<div style="padding: 12px; color: #6b7280;">Yükleniyor...</div>';
+        loadMoreBtn.innerHTML = '<p class="cancels-load-more-loading">Yükleniyor…</p>';
       }
       
       // 2'şer 2'şer artır
@@ -5715,7 +5952,7 @@
 
       // Container HTML'i oluştur - Minimal ve modern tasarım
       container.innerHTML = `
-        <div style="padding: 24px; max-width: 1200px; margin: 0 auto;">
+        <div style="padding: 12px 0; width: 100%; max-width: none; margin: 0;">
           <!-- Online Sipariş Durum Kontrolü -->
           <div style="background: #ffffff; border-radius: 8px; padding: 16px 20px; margin-bottom: 24px; border: 1px solid #e5e7eb; display: flex; align-items: center; justify-content: space-between; box-shadow: 0 1px 2px rgba(0,0,0,0.05);">
             <div style="display: flex; align-items: center; gap: 12px;">
@@ -7586,12 +7823,23 @@
       const shouldOpen = typeof forceState === 'boolean'
         ? forceState
         : !drawer.classList.contains('open');
+      const ham = document.querySelector('.hamburger-btn');
       if (shouldOpen) {
         pendingBranchSelection = activeBranchKey || 'makara';
         renderAdminBranchPicker();
         drawer.classList.add('open');
+        if (ham) {
+          ham.setAttribute('aria-expanded', 'true');
+          ham.setAttribute('aria-label', 'Menüyü kapat');
+          ham.classList.add('is-open');
+        }
       } else {
         drawer.classList.remove('open');
+        if (ham) {
+          ham.setAttribute('aria-expanded', 'false');
+          ham.setAttribute('aria-label', 'Menüyü aç');
+          ham.classList.remove('is-open');
+        }
       }
     }
 
@@ -7790,6 +8038,8 @@
 
     html, body {
       width: 100%;
+      height: 100%;
+      margin: 0;
       overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
     }
@@ -7797,23 +8047,37 @@
     body {
       font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background: radial-gradient(circle at top, #ffffff 0, #f3f4f6 55%, #e5e7eb 100%);
-      min-height: 100vh;
-      padding: 24px;
+      min-height: 100%;
+      min-height: 100dvh;
+      padding: 0;
       color: var(--text-main);
-      display: flex;
-      justify-content: center;
-      align-items: stretch;
     }
 
+    /* Tam genişlik kabuk — kenar boşluğu yok (çentik için safe-area) */
     .container {
       width: 100%;
-      max-width: 1240px;
+      max-width: none;
+      min-height: 100%;
+      min-height: 100dvh;
       background: var(--bg-container);
-      border-radius: 20px;
-      padding: 20px 22px 24px;
-      box-shadow: var(--shadow-soft);
-      border: 1px solid var(--border-subtle);
+      border-radius: 0;
+      padding: 0;
+      box-shadow: none;
+      border: none;
       animation: fadeIn 0.35s ease-out;
+    }
+
+    /* Dashboard görünürken: üst bar ve gövde tam genişlik (iç içe ekran görünümü yok) */
+    body.admin-dashboard-active .container {
+      padding: 0;
+      border-radius: 0;
+    }
+
+    body.admin-dashboard-active #dashboard {
+      width: 100%;
+      max-width: 100%;
+      margin: 0;
+      overflow-x: hidden;
     }
 
     @keyframes fadeIn {
@@ -8347,48 +8611,97 @@
     }
 
     .dashboard.active {
-      display: block;
+      display: flex;
+      flex-direction: column;
+      min-height: 100%;
+      min-height: 100dvh;
       padding-bottom: env(safe-area-inset-bottom, 0);
     }
 
-    @media (max-width: 768px) {
-      .dashboard.active {
-        padding-left: env(safe-area-inset-left, 0);
-        padding-right: env(safe-area-inset-right, 0);
-      }
+    #dashboard .admin-navbar {
+      flex-shrink: 0;
     }
 
-    /* Modern Navbar */
+    #dashboard .dashboard-main-pad {
+      flex: 1 1 auto;
+      width: 100%;
+      min-width: 0;
+      /* Tek yatay boşluk burada; üst bar (navbar) padding’siz tam genişlikte kalır */
+      padding-left: max(12px, env(safe-area-inset-left, 0px));
+      padding-right: max(12px, env(safe-area-inset-right, 0px));
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+
+    /* Admin üst bar — premium mobil uygulama (cam, derinlik, büyük dokunma alanı) */
     .admin-navbar {
       position: sticky;
       top: 0;
       z-index: 100;
-      background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
-      border-bottom: 2px solid #ec4899;
-      padding: 12px 20px;
-      padding-top: max(12px, env(safe-area-inset-top));
       margin: 0;
-      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
-      backdrop-filter: blur(10px);
+      width: 100%;
+      max-width: 100%;
+      box-sizing: border-box;
+      isolation: isolate;
+      padding: max(12px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 16px max(16px, env(safe-area-inset-left, 0px));
+      background: linear-gradient(180deg, rgba(255, 255, 255, 0.94) 0%, rgba(248, 250, 252, 0.9) 100%);
+      border-bottom: 1px solid rgba(226, 232, 240, 0.85);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.95) inset,
+        0 10px 40px rgba(15, 23, 42, 0.07),
+        0 2px 8px rgba(15, 23, 42, 0.04);
+      backdrop-filter: saturate(200%) blur(24px);
+      -webkit-backdrop-filter: saturate(200%) blur(24px);
     }
 
-    @media (max-width: 480px) {
+    .admin-navbar::before {
+      content: '';
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.95) 45%, rgba(255, 255, 255, 0.4) 100%);
+      opacity: 0.9;
+      pointer-events: none;
+    }
+
+    .admin-navbar::after {
+      content: '';
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      height: 3px;
+      background: linear-gradient(90deg, #ef4444 0%, #dc2626 35%, #b91c1c 70%, #991b1b 100%);
+      opacity: 0.92;
+      pointer-events: none;
+      box-shadow: 0 1px 8px rgba(220, 38, 38, 0.25);
+    }
+
+    @media (min-width: 481px) {
       .admin-navbar {
-        padding-left: max(16px, env(safe-area-inset-left));
-        padding-right: max(16px, env(safe-area-inset-right));
+        padding-left: max(20px, env(safe-area-inset-left, 0px));
+        padding-right: max(20px, env(safe-area-inset-right, 0px));
       }
     }
 
-    /* Sultan Somatı: üst bar sarı gradient, logo gizli */
+    /* Sultan Somatı */
     html.admin-branch-sultansomati .admin-navbar {
-      background: linear-gradient(135deg, #fffbeb 0%, #fef9c3 38%, #fde047 72%, #eab308 100%);
-      border-bottom: 2px solid #b45309;
-      box-shadow: 0 2px 18px rgba(180, 83, 9, 0.14);
+      background: linear-gradient(180deg, rgba(255, 253, 245, 0.97) 0%, rgba(254, 249, 231, 0.93) 50%, rgba(253, 230, 138, 0.22) 100%);
+      border-bottom-color: rgba(180, 83, 9, 0.18);
+      box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.65) inset,
+        0 12px 36px rgba(120, 53, 15, 0.09);
     }
 
-    html.admin-branch-sultansomati .navbar-brand-left .navbar-logo-img,
-    html.admin-branch-sultansomati .navbar-brand-left .navbar-logo {
-      display: none !important;
+    html.admin-branch-sultansomati .admin-navbar::after {
+      background: linear-gradient(90deg, #ca8a04 0%, #b45309 55%, #92400e 100%);
+    }
+
+    html.admin-branch-sultansomati .navbar-logo-wrap {
+      display: none;
+    }
+
+    html.admin-branch-sultansomati .navbar-eyebrow {
+      color: #92400e;
     }
 
     html.admin-branch-sultansomati .navbar-title {
@@ -8400,24 +8713,31 @@
     }
 
     html.admin-branch-sultansomati .hamburger-btn {
-      background: rgba(66, 32, 6, 0.08);
-      box-shadow: 0 2px 10px rgba(120, 53, 15, 0.14);
+      background: rgba(255, 255, 255, 0.65);
+      border-color: rgba(180, 83, 9, 0.28);
+      box-shadow: 0 1px 2px rgba(66, 32, 6, 0.06);
     }
 
-    html.admin-branch-sultansomati .hamburger-btn span {
+    html.admin-branch-sultansomati .hamburger-btn .hamburger-btn-lines span {
       background: #422006;
     }
 
     html.admin-branch-sultansomati .hamburger-btn:hover {
-      background: linear-gradient(135deg, #78350f, #92400e);
-      box-shadow: 0 4px 16px rgba(120, 53, 15, 0.28);
+      background: rgba(255, 255, 255, 0.95);
+      border-color: rgba(120, 53, 15, 0.45);
+      box-shadow: 0 4px 14px rgba(120, 53, 15, 0.12);
     }
 
-    html.admin-branch-sultansomati .hamburger-btn:hover span {
+    html.admin-branch-sultansomati .hamburger-btn.is-open {
+      background: #422006;
+      border-color: #422006;
+    }
+
+    html.admin-branch-sultansomati .hamburger-btn.is-open .hamburger-btn-lines span {
       background: #fffbeb;
     }
 
-    /* İçerik alanları mobil yatay boşluk */
+    /* İçerik: yatay boşluk yok — çentik için safe-area .dashboard-main-pad üzerinden */
     @media (max-width: 768px) {
       #staffContainer,
       #salesContainer,
@@ -8425,12 +8745,8 @@
       #tablesContainer,
       #cancelsContainer,
       #onlineOrdersContainer {
-        padding-left: max(16px, env(safe-area-inset-left));
-        padding-right: max(16px, env(safe-area-inset-right));
-      }
-      .stats-grid {
-        padding-left: max(16px, env(safe-area-inset-left));
-        padding-right: max(16px, env(safe-area-inset-right));
+        padding-left: 0;
+        padding-right: 0;
       }
     }
 
@@ -8440,99 +8756,164 @@
       align-items: center;
       max-width: 100%;
       margin: 0 auto;
+      min-height: 58px;
     }
 
     .navbar-brand {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: 14px;
       flex: 1;
+      min-width: 0;
     }
 
     .navbar-brand-left {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 16px;
       min-width: 0;
+      flex: 1;
+    }
+
+    .navbar-logo-wrap {
+      flex-shrink: 0;
+      border-radius: 18px;
+      padding: 3px;
+      background: linear-gradient(145deg, #ffffff 0%, #f1f5f9 100%);
+      box-shadow:
+        0 2px 8px rgba(15, 23, 42, 0.08),
+        0 0 0 1px rgba(15, 23, 42, 0.06),
+        inset 0 1px 0 rgba(255, 255, 255, 0.95);
     }
 
     .navbar-logo {
-      width: 40px;
-      height: 40px;
-      background: linear-gradient(135deg, #dc2626 0%, #ef4444 100%);
-      border-radius: 12px;
+      width: 50px;
+      height: 50px;
+      background: linear-gradient(145deg, #ef4444 0%, #dc2626 45%, #b91c1c 100%);
+      border-radius: 14px;
       display: flex;
       align-items: center;
       justify-content: center;
       color: white;
       font-weight: 900;
-      font-size: 18px;
-      box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+      font-size: 20px;
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
     }
 
     .navbar-logo-img {
-      width: 40px;
-      height: 40px;
+      display: block;
+      width: 50px;
+      height: 50px;
       object-fit: contain;
-      flex-shrink: 0;
-      border-radius: 12px;
+      border-radius: 14px;
+      background: #ffffff;
     }
 
     .navbar-title-group {
       display: flex;
       flex-direction: column;
-      gap: 2px;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 1px;
+      min-width: 0;
+      text-align: left;
+    }
+
+    .navbar-eyebrow {
+      margin: 0 0 3px 0;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #dc2626;
+      line-height: 1.15;
     }
 
     .navbar-actions {
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      min-width: 56px;
+      min-width: 0;
     }
 
     .hamburger-btn {
-      width: 40px;
-      height: 40px;
-      border-radius: 999px;
-      border: none;
-      background: rgba(15, 23, 42, 0.06);
+      width: 52px;
+      height: 52px;
+      border-radius: 16px;
+      border: 1px solid rgba(226, 232, 240, 0.95);
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      flex-direction: column; /* çizgileri alt alta yerleştir */
       cursor: pointer;
       padding: 0;
-      gap: 4px;
-      transition: all 0.18s ease-out;
-      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.16);
+      flex-shrink: 0;
+      transition: background 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease, transform 0.16s ease;
+      box-shadow:
+        0 1px 2px rgba(15, 23, 42, 0.04),
+        0 4px 16px rgba(15, 23, 42, 0.07),
+        inset 0 1px 0 rgba(255, 255, 255, 0.9);
     }
 
-    .hamburger-btn span {
+    .hamburger-btn:focus-visible {
+      outline: 2px solid #6366f1;
+      outline-offset: 3px;
+    }
+
+    .hamburger-btn-lines {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 24px;
+      height: 20px;
+    }
+
+    .hamburger-btn-lines span {
       display: block;
-      width: 18px;
-      height: 2px;
-      border-radius: 999px;
-      background: #0f172a;
-      transition: all 0.16s ease-out;
-      margin: 2px 0;
+      width: 22px;
+      height: 2.5px;
+      border-radius: 3px;
+      background: #1e293b;
+      transition: transform 0.24s cubic-bezier(0.34, 1.2, 0.64, 1), opacity 0.2s ease, background 0.2s ease;
+      transform-origin: center;
     }
 
     .hamburger-btn:hover {
-      background: linear-gradient(135deg, #111827, #1e293b);
-      transform: translateY(-1px);
-      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.3);
+      background: linear-gradient(180deg, #ffffff 0%, #f1f5f9 100%);
+      border-color: #cbd5e1;
+      box-shadow:
+        0 4px 20px rgba(15, 23, 42, 0.1),
+        inset 0 1px 0 rgba(255, 255, 255, 1);
     }
 
-    .hamburger-btn:hover span {
-      background: #f9fafb;
-      opacity: 1;
+    .hamburger-btn.is-open {
+      background: linear-gradient(180deg, #1e293b 0%, #0f172a 100%);
+      border-color: #0f172a;
+      box-shadow: 0 6px 24px rgba(15, 23, 42, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    }
+
+    .hamburger-btn.is-open .hamburger-btn-lines span {
+      background: #f8fafc;
+    }
+
+    .hamburger-btn.is-open .hamburger-btn-lines span:nth-child(1) {
+      transform: translateY(8.5px) rotate(45deg);
+    }
+
+    .hamburger-btn.is-open .hamburger-btn-lines span:nth-child(2) {
+      opacity: 0;
+      transform: scaleX(0);
+    }
+
+    .hamburger-btn.is-open .hamburger-btn-lines span:nth-child(3) {
+      transform: translateY(-8.5px) rotate(-45deg);
     }
 
     .hamburger-btn:active {
-      transform: translateY(0);
-      box-shadow: 0 2px 8px rgba(15, 23, 42, 0.25);
+      transform: scale(0.96);
     }
 
     /* Admin Drawer */
@@ -8828,20 +9209,21 @@
     /* apply button kaldırıldı: tıklamada anında geçiş */
 
     .navbar-title {
-      font-size: 18px;
-      font-weight: 800;
-      color: #1f2937;
-      line-height: 1.2;
+      font-size: clamp(17px, 4.2vw, 20px);
+      font-weight: 700;
+      color: #0f172a;
+      line-height: 1.22;
       margin: 0;
-      letter-spacing: -0.3px;
+      letter-spacing: -0.035em;
     }
 
     .navbar-subtitle {
-      font-size: 11px;
+      font-size: clamp(11.5px, 2.8vw, 13px);
       font-weight: 500;
       color: #64748b;
-      line-height: 1.2;
-      margin: 0;
+      line-height: 1.4;
+      margin: 4px 0 0 0;
+      max-width: 58ch;
     }
 
     .navbar-actions {
@@ -9025,30 +9407,358 @@
       }
     }
 
-    /* Stats */
+    /* Stats — raporlar sekmesi 2 sütun ızgarası */
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      grid-template-rows: auto auto auto;
       gap: 16px;
       margin-bottom: 24px;
     }
-    
-    /* Günlük ciro ve masraf kartları yan yana, eş boyutta */
-    .stats-grid .stat-card-green {
-      grid-column: 1;
-      grid-row: 1;
+
+    /* Satış geçmişi: kurumsal KPI şeridi */
+    #statsGrid.stats-dashboard-kpis {
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      margin-bottom: 24px;
     }
-    
-    .stats-grid .stat-card-red {
-      grid-column: 2;
-      grid-row: 1;
+
+    .stats-hero-revenue {
+      position: relative;
+      border-radius: 24px;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+      background: linear-gradient(145deg, #020617 0%, #0f172a 38%, #1e293b 72%, #0f172a 100%);
+      box-shadow:
+        0 24px 64px rgba(2, 6, 23, 0.45),
+        0 0 0 1px rgba(255, 255, 255, 0.07) inset,
+        0 1px 0 rgba(255, 255, 255, 0.1) inset;
     }
-    
-    /* Günlük iptal kartı masraf kartının altında */
-    .stats-grid .stat-card-orange {
-      grid-column: 2;
-      grid-row: 2;
+
+    .stats-hero-revenue::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.9) 20%, rgba(236, 72, 153, 0.85) 55%, rgba(52, 211, 153, 0.75) 80%, transparent);
+      opacity: 0.95;
+      pointer-events: none;
+    }
+
+    .stats-hero-revenue::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(ellipse 90% 70% at 100% -10%, rgba(99, 102, 241, 0.18), transparent 52%),
+        radial-gradient(ellipse 70% 55% at -5% 110%, rgba(236, 72, 153, 0.12), transparent 48%),
+        radial-gradient(ellipse 50% 40% at 50% 100%, rgba(16, 185, 129, 0.08), transparent 45%);
+      pointer-events: none;
+    }
+
+    .stats-hero-revenue-inner {
+      position: relative;
+      z-index: 1;
+      padding: 24px 22px 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    @media (min-width: 900px) {
+      .stats-hero-revenue-inner {
+        flex-direction: row;
+        align-items: stretch;
+        justify-content: space-between;
+        gap: 32px;
+        padding: 28px 32px 26px;
+      }
+      .stats-hero-revenue-head {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+      }
+      .stats-hero-payments {
+        flex: 1.05;
+        max-width: 500px;
+        align-self: center;
+      }
+    }
+
+    .stats-hero-topline {
+      margin-bottom: 10px;
+    }
+
+    .stats-hero-eyebrow-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px 6px 10px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: rgba(248, 250, 252, 0.92);
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+    }
+
+    .stats-hero-eyebrow-pill::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #34d399, #10b981);
+      box-shadow: 0 0 10px rgba(52, 211, 153, 0.75);
+      flex-shrink: 0;
+    }
+
+    .stats-hero-heading {
+      font-size: 11px;
+      font-weight: 600;
+      color: rgba(248, 250, 252, 0.72);
+      margin: 0 0 14px 0;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .stats-hero-amount-block {
+      display: inline-block;
+      width: 100%;
+      max-width: 100%;
+      padding: 18px 20px 20px;
+      margin-bottom: 12px;
+      border-radius: 18px;
+      background: linear-gradient(165deg, rgba(255, 255, 255, 0.1) 0%, rgba(255, 255, 255, 0.03) 100%);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.35),
+        0 0 0 1px rgba(0, 0, 0, 0.2) inset,
+        0 1px 0 rgba(255, 255, 255, 0.12) inset;
+      backdrop-filter: blur(14px);
+    }
+
+    @media (min-width: 900px) {
+      .stats-hero-amount-block {
+        padding: 22px 26px 24px;
+      }
+    }
+
+    .stats-hero-amount {
+      font-size: clamp(2.65rem, 12vw, 4.75rem);
+      font-weight: 900;
+      letter-spacing: -0.055em;
+      color: #ffffff;
+      margin: 0;
+      font-variant-numeric: tabular-nums;
+      line-height: 0.98;
+      text-shadow:
+        0 2px 0 rgba(0, 0, 0, 0.25),
+        0 12px 40px rgba(0, 0, 0, 0.5),
+        0 0 80px rgba(99, 102, 241, 0.15);
+      word-break: break-word;
+    }
+
+    .stats-hero-caption {
+      margin: 0;
+      font-size: 12px;
+      color: rgba(226, 232, 240, 0.55);
+      font-weight: 500;
+      max-width: 42ch;
+      line-height: 1.5;
+      letter-spacing: 0.02em;
+    }
+
+    .stats-hero-payments {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    @media (max-width: 640px) {
+      .stats-hero-payments {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .stats-pay-pill {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 14px 14px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      backdrop-filter: blur(8px);
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .stats-pay-pill:hover {
+      background: rgba(255, 255, 255, 0.1);
+      border-color: rgba(255, 255, 255, 0.16);
+      transform: translateY(-1px);
+    }
+
+    .stats-pay-pill-icon {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      flex-shrink: 0;
+    }
+
+    .stats-pay-pill-cash .stats-pay-pill-icon {
+      background: rgba(16, 185, 129, 0.2);
+      color: #6ee7b7;
+    }
+
+    .stats-pay-pill-card .stats-pay-pill-icon {
+      background: rgba(59, 130, 246, 0.22);
+      color: #93c5fd;
+    }
+
+    .stats-pay-pill-online .stats-pay-pill-icon {
+      background: rgba(168, 85, 247, 0.22);
+      color: #d8b4fe;
+    }
+
+    .stats-pay-pill-text {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .stats-pay-pill-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: rgba(248, 250, 252, 0.55);
+    }
+
+    .stats-pay-pill-value {
+      font-size: clamp(0.95rem, 2.8vw, 1.15rem);
+      font-weight: 800;
+      color: #f8fafc;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .stats-mini-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    @media (max-width: 720px) {
+      .stats-mini-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .stats-mini-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      padding: 16px 18px;
+      border-radius: 16px;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.04);
+      transition: box-shadow 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+    }
+
+    .stats-mini-card:hover {
+      border-color: #d1d5db;
+      box-shadow: 0 4px 20px rgba(15, 23, 42, 0.08);
+      transform: translateY(-2px);
+    }
+
+    .stats-mini-icon-wrap {
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .stats-mini-icon-sales-bg {
+      background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+      color: #4f46e5;
+    }
+
+    .stats-mini-icon-cancel-bg {
+      background: linear-gradient(135deg, #fff7ed 0%, #ffedd5 100%);
+      color: #ea580c;
+    }
+
+    .stats-mini-icon-table-bg {
+      background: linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%);
+      color: #db2777;
+    }
+
+    .stats-mini-body {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .stats-mini-label {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #64748b;
+    }
+
+    .stats-mini-value {
+      font-size: 1.35rem;
+      font-weight: 800;
+      color: #0f172a;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.2;
+    }
+
+    .stats-mini-hint {
+      font-size: 12px;
+      color: #94a3b8;
+      font-weight: 500;
+    }
+
+    html.admin-branch-sultansomati .stats-hero-revenue {
+      background: linear-gradient(135deg, #064e3b 0%, #0f766e 45%, #134e4a 100%);
+      border-color: rgba(16, 185, 129, 0.25);
+    }
+
+    html.admin-branch-sultansomati .stats-hero-revenue::before {
+      background: radial-gradient(ellipse 80% 60% at 100% 0%, rgba(253, 224, 71, 0.18), transparent 55%),
+        radial-gradient(ellipse 60% 50% at 0% 100%, rgba(52, 211, 153, 0.2), transparent 50%);
+    }
+
+    html.admin-branch-sultansomati .stats-hero-revenue::after {
+      background: linear-gradient(90deg, transparent, rgba(52, 211, 153, 0.95) 25%, rgba(250, 204, 21, 0.85) 55%, rgba(16, 185, 129, 0.8) 78%, transparent);
+    }
+
+    html.admin-branch-sultansomati .stats-hero-amount {
+      text-shadow:
+        0 2px 0 rgba(0, 0, 0, 0.2),
+        0 12px 40px rgba(0, 0, 0, 0.45),
+        0 0 72px rgba(52, 211, 153, 0.2);
     }
 
     .stat-card {
@@ -9299,6 +10009,10 @@
       .tab-btn-icon {
         font-size: 22px;
       }
+      .tab-btn-icon svg {
+        width: 22px;
+        height: 22px;
+      }
     }
 
     /* Tarih grupları + satış kartları */
@@ -9311,7 +10025,7 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 16px;
-      padding: 0 4px;
+      padding: 0;
       flex-wrap: wrap;
       gap: 12px;
     }
@@ -9570,6 +10284,91 @@
       gap: 4px;
     }
 
+    .sale-hash-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 8px 0 6px 0;
+    }
+
+    .sale-hash-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: #4f46e5;
+      background: #eef2ff;
+      border: 1px solid #c7d2fe;
+      padding: 3px 8px;
+      border-radius: 999px;
+      letter-spacing: 0.02em;
+    }
+
+    .sale-card-group.sale-card-partial {
+      border-left: 4px solid #8b5cf6;
+      background: linear-gradient(180deg, #faf5ff 0%, #ffffff 48px);
+    }
+
+    .partial-pay-section {
+      margin-bottom: 10px;
+      padding: 10px 12px;
+      background: #f8fafc;
+      border-radius: var(--radius-md);
+      border: 1px solid #e2e8f0;
+    }
+
+    .partial-pay-label {
+      margin-bottom: 8px !important;
+    }
+
+    .partial-pay-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .partial-pay-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 8px 10px;
+      background: #fff;
+      border-radius: 10px;
+      border: 1px solid #e5e7eb;
+    }
+
+    .partial-pay-main {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+
+    .partial-pay-amount {
+      font-weight: 800;
+      font-size: 15px;
+      color: #0f172a;
+    }
+
+    .partial-pay-sale-ref {
+      font-size: 11px;
+      font-weight: 700;
+      color: #64748b;
+      font-family: ui-monospace, monospace;
+    }
+
+    .sale-delete-btn-sm {
+      padding: 6px 12px !important;
+      font-size: 12px !important;
+    }
+
+    .partial-item-line .item-quantity {
+      font-weight: 700;
+      color: #059669;
+    }
+
     .badge {
       padding: 4px 9px;
       border-radius: 999px;
@@ -9669,154 +10468,410 @@
       color: #c62828;
     }
 
-    /* İptaller Listesi Stilleri */
+    /* İptaller — kurumsal kart listesi */
     .cancels-list {
       display: flex;
       flex-direction: column;
-      gap: 16px;
-      padding: 20px 0;
+      gap: 14px;
+      padding: 8px 0 4px;
+      max-width: 920px;
+      margin: 0 auto;
     }
 
     .cancel-card {
-      background: linear-gradient(135deg, #ffffff 0%, #fef2f2 100%);
-      border: 2px solid #fecaca;
-      border-radius: 16px;
-      padding: 20px;
-      box-shadow: 0 4px 12px rgba(239, 68, 68, 0.1);
-      transition: all 0.3s ease;
+      position: relative;
+      display: flex;
+      border-radius: 14px;
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 8px 24px rgba(15, 23, 42, 0.06);
+      overflow: hidden;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
     }
 
     .cancel-card:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 20px rgba(239, 68, 68, 0.15);
-      border-color: #fca5a5;
+      border-color: #cbd5e1;
+      box-shadow: 0 2px 4px rgba(15, 23, 42, 0.06), 0 12px 32px rgba(15, 23, 42, 0.08);
     }
 
-    .cancel-header {
+    .cancel-card-accent {
+      width: 4px;
+      flex-shrink: 0;
+      background: linear-gradient(180deg, #f43f5e 0%, #be123c 100%);
+    }
+
+    .cancel-card--group .cancel-card-accent {
+      background: linear-gradient(180deg, #e11d48 0%, #9f1239 100%);
+    }
+
+    .cancel-card-surface {
+      flex: 1;
+      min-width: 0;
+      background: #ffffff;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .cancel-card-head {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      margin-bottom: 16px;
-      padding-bottom: 16px;
-      border-bottom: 2px solid #fee2e2;
+      gap: 16px;
+      padding: 18px 20px 14px;
+      border-bottom: 1px solid #f1f5f9;
     }
 
-    .cancel-header-left {
+    .cancel-card-head-text {
       flex: 1;
+      min-width: 0;
     }
 
-    .cancel-product-name {
-      font-size: 18px;
-      font-weight: 700;
-      color: #1f2937;
-      margin-bottom: 8px;
-    }
-
-    .cancel-meta {
+    .cancel-card-badges {
       display: flex;
-      align-items: center;
-      gap: 8px;
       flex-wrap: wrap;
-      font-size: 13px;
-      color: #6b7280;
+      gap: 6px;
+      margin-bottom: 10px;
     }
 
-    .cancel-meta-item {
-      display: flex;
+    .cancel-pill {
+      display: inline-flex;
       align-items: center;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
     }
 
-    .cancel-meta-separator {
-      color: #d1d5db;
-      margin: 0 4px;
+    .cancel-pill--source {
+      background: #f1f5f9;
+      color: #475569;
+      border: 1px solid #e2e8f0;
     }
 
-    .cancel-header-right {
+    .cancel-pill--type {
+      background: #fff1f2;
+      color: #9f1239;
+      border: 1px solid #fecdd3;
+    }
+
+    .cancel-card-title {
+      margin: 0 0 8px 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.02em;
+      line-height: 1.35;
+    }
+
+    .cancel-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px 10px;
+      font-size: 12px;
+      color: #64748b;
+      font-weight: 500;
+    }
+
+    .cancel-meta-line {
+      line-height: 1.4;
+    }
+
+    .cancel-meta-sep {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: #cbd5e1;
+      flex-shrink: 0;
+    }
+
+    .cancel-card-total {
+      flex-shrink: 0;
       text-align: right;
+      padding: 4px 0 0 8px;
+      border-left: 1px solid #f1f5f9;
+      padding-left: 16px;
+      margin-left: 4px;
+    }
+
+    .cancel-card-total-label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #94a3b8;
+      margin-bottom: 4px;
     }
 
     .cancel-amount {
-      font-size: 22px;
+      font-size: 1.35rem;
       font-weight: 800;
-      color: #dc2626;
-      letter-spacing: -0.5px;
+      color: #be123c;
+      letter-spacing: -0.03em;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.15;
     }
 
-    .cancel-details {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-      gap: 12px;
-      margin-bottom: 16px;
-      padding: 12px;
-      background: #fef2f2;
-      border-radius: 10px;
+    .cancel-card-body {
+      padding: 14px 20px 16px;
+      background: #fafbfc;
+      border-bottom: 1px solid #f1f5f9;
     }
 
-    .cancel-detail-row {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
+    .cancel-detail-block {
+      margin-bottom: 14px;
     }
 
-    .cancel-detail-label {
-      font-size: 12px;
-      font-weight: 600;
-      color: #9ca3af;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
+    .cancel-detail-block:last-child {
+      margin-bottom: 0;
     }
 
-    .cancel-detail-value {
-      font-size: 15px;
+    .cancel-detail-block-title {
+      font-size: 10px;
       font-weight: 700;
-      color: #1f2937;
-    }
-
-    .cancel-reason {
-      padding: 14px;
-      background: #ffffff;
-      border: 2px solid #fee2e2;
-      border-radius: 12px;
-      border-left: 4px solid #ef4444;
-    }
-
-    .cancel-reason-label {
-      font-size: 12px;
-      font-weight: 700;
-      color: #991b1b;
+      letter-spacing: 0.1em;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
+      color: #94a3b8;
       margin-bottom: 8px;
     }
 
+    .cancel-items-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      overflow: hidden;
+      background: #ffffff;
+    }
+
+    .cancel-item-row {
+      display: grid;
+      grid-template-columns: 1fr auto auto;
+      gap: 10px 12px;
+      align-items: baseline;
+      padding: 10px 12px;
+      font-size: 13px;
+      border-bottom: 1px solid #f1f5f9;
+    }
+
+    .cancel-item-row:last-child {
+      border-bottom: none;
+    }
+
+    .cancel-item-name {
+      color: #1e293b;
+      font-weight: 600;
+      min-width: 0;
+      word-break: break-word;
+    }
+
+    .cancel-item-mid {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .cancel-item-qty {
+      color: #64748b;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .cancel-item-gift {
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #059669;
+      background: #ecfdf5;
+      border: 1px solid #a7f3d0;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .cancel-item-amt {
+      font-weight: 700;
+      color: #0f172a;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .cancel-dl {
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px 20px;
+    }
+
+    .cancel-dl-row {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 10px 12px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+    }
+
+    .cancel-dl-row dt {
+      margin: 0;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #94a3b8;
+    }
+
+    .cancel-dl-row dd {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: #0f172a;
+      line-height: 1.4;
+    }
+
+    .cancel-role-tag {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 2px 6px;
+      font-size: 10px;
+      font-weight: 700;
+      border-radius: 4px;
+      background: #eef2ff;
+      color: #4338ca;
+      vertical-align: middle;
+    }
+
+    .cancel-card-foot {
+      padding: 14px 20px 18px;
+      background: #ffffff;
+    }
+
+    .cancel-reason {
+      margin: 0;
+      padding: 12px 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      border-left: 3px solid #f43f5e;
+    }
+
+    .cancel-reason-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #64748b;
+      margin-bottom: 6px;
+    }
+
     .cancel-reason-text {
-      font-size: 15px;
+      margin: 0;
+      font-size: 14px;
       font-weight: 500;
-      color: #374151;
-      line-height: 1.6;
+      color: #334155;
+      line-height: 1.55;
+    }
+
+    .cancels-load-more-wrap {
+      text-align: center;
+      padding: 20px 16px 8px;
+      max-width: 920px;
+      margin: 0 auto;
+    }
+
+    .cancels-load-more-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 8px 12px;
+      padding: 12px 22px;
+      background: #ffffff;
+      color: #0f172a;
+      border: 1px solid #cbd5e1;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+      transition: background 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .cancels-load-more-btn:hover {
+      background: #f8fafc;
+      border-color: #94a3b8;
+      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+    }
+
+    .cancels-load-more-badge {
+      font-size: 12px;
+      font-weight: 700;
+      color: #64748b;
+      background: #f1f5f9;
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+
+    .cancels-load-more-loading {
+      margin: 0;
+      padding: 14px;
+      font-size: 14px;
+      color: #64748b;
+      font-weight: 500;
     }
 
     @media (max-width: 768px) {
-      .cancel-header {
+      .cancel-card-head {
         flex-direction: column;
-        gap: 12px;
+        align-items: stretch;
+        padding: 16px 16px 12px;
       }
 
-      .cancel-header-right {
+      .cancel-card-total {
         text-align: left;
-        width: 100%;
+        border-left: none;
+        padding-left: 0;
+        margin-left: 0;
+        border-top: 1px solid #f1f5f9;
+        padding-top: 12px;
       }
 
-      .cancel-details {
+      .cancel-card-body,
+      .cancel-card-foot {
+        padding-left: 16px;
+        padding-right: 16px;
+      }
+
+      .cancel-dl {
         grid-template-columns: 1fr;
       }
 
-      .cancel-product-name {
-        font-size: 16px;
+      .cancel-item-row {
+        grid-template-columns: 1fr;
+        gap: 6px;
+      }
+
+      .cancel-item-mid,
+      .cancel-item-amt {
+        justify-self: start;
+        text-align: left;
       }
 
       .cancel-amount {
-        font-size: 20px;
+        font-size: 1.25rem;
+      }
+
+      .cancel-card-title {
+        font-size: 1rem;
       }
     }
 
@@ -10241,39 +11296,78 @@
       box-shadow: 0 8px 22px rgba(220, 38, 38, 0.35);
     }
 
-    /* Makara şubeleri: klasik dolu masa kartı (beyaz zemin, kırmızı vurgu) */
+    /* Makara şubeleri: dolu masa — kıpkırmızı; tutar tam görünür, kartı taşmaz */
     .table-card--occupied-classic {
-      background: #ffffff;
-      border: 2px solid #fecaca;
-      box-shadow: 0 2px 12px rgba(220, 38, 38, 0.1);
+      container-type: size;
+      background: linear-gradient(165deg, #ff1a1a 0%, #dc2626 42%, #991b1b 100%);
+      border: 2px solid #7f1d1d;
+      box-shadow: 0 4px 18px rgba(185, 28, 28, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.14);
       padding: 16px 14px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      justify-content: center;
+      text-align: center;
+      gap: 4px;
     }
 
     .table-card--occupied-classic:hover {
       transform: translateY(-2px);
-      border-color: #f87171;
-      box-shadow: 0 8px 22px rgba(220, 38, 38, 0.14);
+      border-color: #450a0a;
+      box-shadow: 0 8px 26px rgba(127, 29, 29, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    }
+
+    .table-card--occupied-classic .table-card-header {
+      gap: 6px;
+      margin-bottom: 0;
+    }
+
+    .table-card--occupied-classic .table-number {
+      color: #ffffff;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
     }
 
     .table-card--occupied-classic .table-status-occupied {
-      background: #fee2e2 !important;
-      color: #991b1b !important;
+      background: rgba(255, 255, 255, 0.24) !important;
+      color: #ffffff !important;
+      border: 1px solid rgba(255, 255, 255, 0.38);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     }
 
     .table-card--occupied-classic .table-amount-classic {
-      font-size: 17px;
+      font-size: clamp(9px, 3.2vmin, 22px);
+      font-size: clamp(9px, 13cqmin, 22px);
       font-weight: 800;
-      color: #b91c1c;
+      color: #ffffff;
       text-align: center;
-      margin-top: 10px;
+      margin-top: 2px;
+      margin-bottom: 0;
       letter-spacing: -0.02em;
+      font-variant-numeric: tabular-nums;
+      line-height: 1.12;
+      width: 100%;
+      max-width: 100%;
+      padding: 0 2px;
+      box-sizing: border-box;
+      text-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+      overflow: hidden;
+      overflow-wrap: anywhere;
+      hyphens: none;
     }
 
     .table-card--occupied-classic .table-name {
-      color: #6b7280;
-      font-size: 12px;
+      color: rgba(255, 255, 255, 0.9);
+      font-size: clamp(7px, 2vmin, 12px);
+      font-size: clamp(7px, 7cqmin, 12px);
       font-weight: 600;
-      margin-top: 6px;
+      margin-top: 2px;
+      line-height: 1.2;
+      max-width: 100%;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
     }
 
     /* Sultan: bölüm başlıkları ve dolu kartlar amber ton */
@@ -10295,6 +11389,102 @@
     .tables-layout-sultan .tables-section {
       border-color: rgba(251, 191, 36, 0.5);
       box-shadow: 0 1px 0 rgba(254, 243, 199, 0.9) inset;
+    }
+
+    /* Makara (Havzan): çok sütunlu kompakt ızgara — iç+dış masalar tek ekranda */
+    .tables-layout-makara .tables-section {
+      padding: 10px 8px;
+      margin-bottom: 8px;
+    }
+
+    .tables-layout-makara .section-title {
+      font-size: 13px;
+      margin-bottom: 8px;
+      padding-bottom: 6px;
+    }
+
+    .tables-layout-makara .tables-grid {
+      grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+      gap: 8px;
+    }
+
+    .tables-layout-makara .tables-grid.package-grid {
+      grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+      gap: 8px;
+    }
+
+    @media (min-width: 900px) {
+      .tables-layout-makara .tables-grid:not(.package-grid) {
+        grid-template-columns: repeat(10, minmax(0, 1fr));
+      }
+
+      .tables-layout-makara .tables-grid.package-grid {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+      }
+    }
+
+    .tables-layout-makara .tables-divider {
+      padding: 8px 0 !important;
+    }
+
+    .tables-layout-makara .table-card {
+      padding: 8px 5px;
+      border-radius: 10px;
+      aspect-ratio: 1;
+    }
+
+    .tables-layout-makara .table-card-header {
+      gap: 4px;
+    }
+
+    .tables-layout-makara .table-number {
+      font-size: 12px;
+      font-weight: 800;
+      line-height: 1.2;
+    }
+
+    .tables-layout-makara .table-status {
+      font-size: 7px;
+      padding: 3px 5px;
+      letter-spacing: 0.03em;
+    }
+
+    .tables-layout-makara .table-name {
+      font-size: 9px;
+      margin-top: 2px;
+      line-height: 1.2;
+    }
+
+    .tables-layout-makara .table-card-gradient {
+      padding: 7px 5px;
+    }
+
+    .tables-layout-makara .table-number-occupied {
+      font-size: 11px;
+      line-height: 1.2;
+    }
+
+    .tables-layout-makara .table-amount-occupied {
+      font-size: 10px;
+      margin-top: 4px;
+      line-height: 1.2;
+    }
+
+    .tables-layout-makara .table-card--occupied-classic .table-name {
+      font-size: clamp(6px, 1.8vmin, 10px);
+      font-size: clamp(6px, 6.5cqmin, 10px);
+      margin-top: 2px;
+    }
+
+    .tables-layout-makara .table-card--occupied-classic .table-amount-classic {
+      font-size: clamp(8px, 2.8vmin, 16px);
+      font-size: clamp(8px, 15cqmin, 16px);
+      line-height: 1.1;
+      margin-top: 0;
+    }
+
+    .tables-layout-makara .table-card--occupied-classic .table-number {
+      color: #ffffff;
     }
 
     .table-card-gradient {
@@ -10694,7 +11884,7 @@
     /* Sekme butonları */
     .tab-buttons-container {
       width: 100%;
-      padding: 0 16px;
+      padding: 0;
       margin-bottom: 20px;
     }
 
@@ -10716,22 +11906,23 @@
     .tab-btn {
       padding: 16px 8px;
       border-radius: 16px;
-      border: 2px solid #e5e7eb;
-      background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+      border: 2px solid #e2e8f0;
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
       font-size: 12px;
       font-weight: 600;
-      color: #64748b;
+      color: #475569;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       gap: 8px;
       cursor: pointer;
-      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+      transition: border-color 0.22s ease, background 0.22s ease, box-shadow 0.22s ease, color 0.22s ease, transform 0.22s ease;
       min-height: 72px;
       position: relative;
       overflow: hidden;
-      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 4px 12px rgba(15, 23, 42, 0.04);
+      box-sizing: border-box;
     }
 
     .tab-btn::before {
@@ -10740,10 +11931,9 @@
       top: 0;
       left: 0;
       right: 0;
-      bottom: 0;
-      background: linear-gradient(135deg, rgba(255, 255, 255, 0.8) 0%, rgba(255, 255, 255, 0.4) 100%);
-      opacity: 0;
-      transition: opacity 0.3s ease;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.95) 40%, transparent);
+      opacity: 0.9;
       pointer-events: none;
     }
 
@@ -10756,16 +11946,31 @@
 
     .tab-btn-icon {
       font-size: 24px;
-      line-height: 1;
-      filter: grayscale(0.3);
-      transition: all 0.3s ease;
+      line-height: 0;
+      color: #64748b;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.22s ease, transform 0.22s ease;
+    }
+
+    .tab-btn-icon svg {
+      width: 24px;
+      height: 24px;
+      flex-shrink: 0;
+      display: block;
     }
 
     .tab-btn-text {
       font-size: 12px;
       font-weight: 600;
-      letter-spacing: 0.2px;
-      transition: all 0.3s ease;
+      letter-spacing: 0.02em;
+      transition: color 0.22s ease, font-weight 0.22s ease;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      max-width: 100%;
+      overflow: hidden;
+      line-height: 1.2;
     }
 
     .tab-btn-indicator {
@@ -10774,19 +11979,16 @@
       left: 0;
       right: 0;
       height: 3px;
-      background: linear-gradient(90deg, #ec4899 0%, #db2777 100%);
+      background: linear-gradient(90deg, #6366f1 0%, #4f46e5 55%, #4338ca 100%);
       transform: scaleX(0);
       transform-origin: left;
-      transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-      border-radius: 0 0 16px 16px;
+      transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+      border-radius: 0 0 14px 14px;
     }
 
     .tab-btn:hover {
-      border-color: #cbd5e1;
-      background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
-      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12), 0 0 0 1px rgba(148, 163, 184, 0.1);
       transform: translateY(-2px);
-      color: #475569;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08), 0 0 0 1px rgba(148, 163, 184, 0.12);
     }
 
     .tab-btn:hover::before {
@@ -10794,40 +11996,243 @@
     }
 
     .tab-btn:hover .tab-btn-icon {
-      filter: grayscale(0);
-      transform: scale(1.1);
+      transform: scale(1.06);
     }
 
     .tab-btn.active {
-      border-color: #ec4899;
-      background: linear-gradient(135deg, #fdf2f8 0%, #fce7f3 100%);
-      color: #db2777;
-      box-shadow: 0 8px 24px rgba(236, 72, 153, 0.2), 0 0 0 1px rgba(236, 72, 153, 0.1);
       transform: translateY(-2px);
     }
 
     .tab-btn.active::before {
-      opacity: 0;
+      opacity: 1;
     }
 
     .tab-btn.active .tab-btn-icon {
-      filter: grayscale(0);
-      transform: scale(1.15);
+      transform: scale(1.08);
     }
 
     .tab-btn.active .tab-btn-text {
-      color: #db2777;
       font-weight: 700;
     }
 
     .tab-btn.active .tab-btn-indicator {
       transform: scaleX(1);
-      background: linear-gradient(90deg, #ec4899 0%, #db2777 100%);
+    }
+
+    /* Sekme renkleri — boyutlar aynı, kurumsal kart stili korunur */
+    .tab-btn[data-tab="sales"] {
+      border-color: #bae6fd;
+      background: linear-gradient(180deg, #ffffff 0%, #f0f9ff 100%);
+      color: #0c4a6e;
+    }
+    .tab-btn[data-tab="sales"] .tab-btn-icon {
+      color: #0284c7;
+    }
+    .tab-btn[data-tab="sales"]:hover {
+      border-color: #7dd3fc;
+      background: linear-gradient(180deg, #ffffff 0%, #e0f2fe 100%);
+      color: #075985;
+      box-shadow: 0 4px 18px rgba(14, 165, 233, 0.14), 0 0 0 1px rgba(56, 189, 248, 0.2);
+    }
+    .tab-btn[data-tab="sales"]:hover .tab-btn-icon {
+      color: #0369a1;
+    }
+    .tab-btn[data-tab="sales"].active {
+      border-color: #38bdf8;
+      background: linear-gradient(180deg, #f0f9ff 0%, #e0f2fe 100%);
+      color: #0c4a6e;
+      box-shadow: 0 6px 22px rgba(14, 165, 233, 0.18), 0 0 0 1px rgba(56, 189, 248, 0.28);
+    }
+    .tab-btn[data-tab="sales"].active .tab-btn-icon {
+      color: #0369a1;
+    }
+    .tab-btn[data-tab="sales"].active .tab-btn-text {
+      color: #075985;
+    }
+    .tab-btn[data-tab="sales"].active .tab-btn-indicator {
+      background: linear-gradient(90deg, #7dd3fc 0%, #0ea5e9 50%, #0284c7 100%);
+    }
+
+    .tab-btn[data-tab="reports"] {
+      border-color: #ddd6fe;
+      background: linear-gradient(180deg, #ffffff 0%, #faf5ff 100%);
+      color: #5b21b6;
+    }
+    .tab-btn[data-tab="reports"] .tab-btn-icon {
+      color: #7c3aed;
+    }
+    .tab-btn[data-tab="reports"]:hover {
+      border-color: #c4b5fd;
+      background: linear-gradient(180deg, #ffffff 0%, #f3e8ff 100%);
+      color: #4c1d95;
+      box-shadow: 0 4px 18px rgba(124, 58, 237, 0.14), 0 0 0 1px rgba(167, 139, 250, 0.22);
+    }
+    .tab-btn[data-tab="reports"]:hover .tab-btn-icon {
+      color: #6d28d9;
+    }
+    .tab-btn[data-tab="reports"].active {
+      border-color: #a78bfa;
+      background: linear-gradient(180deg, #faf5ff 0%, #ede9fe 100%);
+      color: #4c1d95;
+      box-shadow: 0 6px 22px rgba(124, 58, 237, 0.16), 0 0 0 1px rgba(167, 139, 250, 0.3);
+    }
+    .tab-btn[data-tab="reports"].active .tab-btn-icon {
+      color: #6d28d9;
+    }
+    .tab-btn[data-tab="reports"].active .tab-btn-text {
+      color: #5b21b6;
+    }
+    .tab-btn[data-tab="reports"].active .tab-btn-indicator {
+      background: linear-gradient(90deg, #a78bfa 0%, #8b5cf6 50%, #7c3aed 100%);
+    }
+
+    .tab-btn[data-tab="staff"] {
+      border-color: #99f6e4;
+      background: linear-gradient(180deg, #ffffff 0%, #f0fdfa 100%);
+      color: #115e59;
+    }
+    .tab-btn[data-tab="staff"] .tab-btn-icon {
+      color: #0d9488;
+    }
+    .tab-btn[data-tab="staff"]:hover {
+      border-color: #5eead4;
+      background: linear-gradient(180deg, #ffffff 0%, #ccfbf1 100%);
+      color: #134e4a;
+      box-shadow: 0 4px 18px rgba(13, 148, 136, 0.14), 0 0 0 1px rgba(45, 212, 191, 0.22);
+    }
+    .tab-btn[data-tab="staff"]:hover .tab-btn-icon {
+      color: #0f766e;
+    }
+    .tab-btn[data-tab="staff"].active {
+      border-color: #2dd4bf;
+      background: linear-gradient(180deg, #f0fdfa 0%, #ccfbf1 100%);
+      color: #134e4a;
+      box-shadow: 0 6px 22px rgba(13, 148, 136, 0.16), 0 0 0 1px rgba(45, 212, 191, 0.28);
+    }
+    .tab-btn[data-tab="staff"].active .tab-btn-icon {
+      color: #0f766e;
+    }
+    .tab-btn[data-tab="staff"].active .tab-btn-text {
+      color: #115e59;
+    }
+    .tab-btn[data-tab="staff"].active .tab-btn-indicator {
+      background: linear-gradient(90deg, #5eead4 0%, #14b8a6 50%, #0d9488 100%);
+    }
+
+    .tab-btn[data-tab="tables"] {
+      border-color: #fde68a;
+      background: linear-gradient(180deg, #ffffff 0%, #fffbeb 100%);
+      color: #92400e;
+    }
+    .tab-btn[data-tab="tables"] .tab-btn-icon {
+      color: #d97706;
+    }
+    .tab-btn[data-tab="tables"]:hover {
+      border-color: #fcd34d;
+      background: linear-gradient(180deg, #ffffff 0%, #fef3c7 100%);
+      color: #78350f;
+      box-shadow: 0 4px 18px rgba(245, 158, 11, 0.16), 0 0 0 1px rgba(251, 191, 36, 0.28);
+    }
+    .tab-btn[data-tab="tables"]:hover .tab-btn-icon {
+      color: #b45309;
+    }
+    .tab-btn[data-tab="tables"].active {
+      border-color: #fbbf24;
+      background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
+      color: #78350f;
+      box-shadow: 0 6px 22px rgba(245, 158, 11, 0.18), 0 0 0 1px rgba(251, 191, 36, 0.32);
+    }
+    .tab-btn[data-tab="tables"].active .tab-btn-icon {
+      color: #b45309;
+    }
+    .tab-btn[data-tab="tables"].active .tab-btn-text {
+      color: #92400e;
+    }
+    .tab-btn[data-tab="tables"].active .tab-btn-indicator {
+      background: linear-gradient(90deg, #fcd34d 0%, #f59e0b 50%, #d97706 100%);
+    }
+
+    .tab-btn[data-tab="cancels"] {
+      border-color: #fecdd3;
+      background: linear-gradient(180deg, #ffffff 0%, #fff1f2 100%);
+      color: #9f1239;
+    }
+    .tab-btn[data-tab="cancels"] .tab-btn-icon {
+      color: #e11d48;
+    }
+    .tab-btn[data-tab="cancels"]:hover {
+      border-color: #fda4af;
+      background: linear-gradient(180deg, #ffffff 0%, #ffe4e6 100%);
+      color: #881337;
+      box-shadow: 0 4px 18px rgba(244, 63, 94, 0.14), 0 0 0 1px rgba(251, 113, 133, 0.25);
+    }
+    .tab-btn[data-tab="cancels"]:hover .tab-btn-icon {
+      color: #be123c;
+    }
+    .tab-btn[data-tab="cancels"].active {
+      border-color: #fb7185;
+      background: linear-gradient(180deg, #fff1f2 0%, #ffe4e6 100%);
+      color: #881337;
+      box-shadow: 0 6px 22px rgba(244, 63, 94, 0.16), 0 0 0 1px rgba(251, 113, 133, 0.3);
+    }
+    .tab-btn[data-tab="cancels"].active .tab-btn-icon {
+      color: #be123c;
+    }
+    .tab-btn[data-tab="cancels"].active .tab-btn-text {
+      color: #9f1239;
+    }
+    .tab-btn[data-tab="cancels"].active .tab-btn-indicator {
+      background: linear-gradient(90deg, #fb7185 0%, #f43f5e 50%, #e11d48 100%);
+    }
+
+    .tab-btn[data-tab="onlineOrders"] {
+      border-color: #a5f3fc;
+      background: linear-gradient(180deg, #ffffff 0%, #ecfeff 100%);
+      color: #155e75;
+    }
+    .tab-btn[data-tab="onlineOrders"] .tab-btn-icon {
+      color: #0891b2;
+    }
+    .tab-btn[data-tab="onlineOrders"]:hover {
+      border-color: #67e8f9;
+      background: linear-gradient(180deg, #ffffff 0%, #cffafe 100%);
+      color: #164e63;
+      box-shadow: 0 4px 18px rgba(6, 182, 212, 0.14), 0 0 0 1px rgba(34, 211, 238, 0.22);
+    }
+    .tab-btn[data-tab="onlineOrders"]:hover .tab-btn-icon {
+      color: #0e7490;
+    }
+    .tab-btn[data-tab="onlineOrders"].active {
+      border-color: #22d3ee;
+      background: linear-gradient(180deg, #ecfeff 0%, #cffafe 100%);
+      color: #164e63;
+      box-shadow: 0 6px 22px rgba(6, 182, 212, 0.16), 0 0 0 1px rgba(34, 211, 238, 0.28);
+    }
+    .tab-btn[data-tab="onlineOrders"].active .tab-btn-icon {
+      color: #0e7490;
+    }
+    .tab-btn[data-tab="onlineOrders"].active .tab-btn-text {
+      color: #155e75;
+    }
+    .tab-btn[data-tab="onlineOrders"].active .tab-btn-indicator {
+      background: linear-gradient(90deg, #67e8f9 0%, #06b6d4 50%, #0891b2 100%);
+    }
+
+    html.admin-branch-sultansomati .tab-btn[data-tab="sales"].active,
+    html.admin-branch-sultansomati .tab-btn[data-tab="reports"].active,
+    html.admin-branch-sultansomati .tab-btn[data-tab="staff"].active,
+    html.admin-branch-sultansomati .tab-btn[data-tab="tables"].active,
+    html.admin-branch-sultansomati .tab-btn[data-tab="cancels"].active,
+    html.admin-branch-sultansomati .tab-btn[data-tab="onlineOrders"].active {
+      box-shadow: 0 6px 22px rgba(5, 150, 105, 0.12), 0 0 0 1px rgba(16, 185, 129, 0.22);
     }
 
     /* Raporlar */
     .reports-container {
       padding: 10px 0 6px;
+      width: 100%;
+      max-width: none;
+      box-sizing: border-box;
     }
 
     .reports-header {
@@ -13888,11 +15293,12 @@
 
     /* Responsive */
     @media (max-width: 768px) {
-      body {
+      /* Giriş ekranında hafif çerçeve; dashboard’da tam genişlik */
+      body:not(.admin-dashboard-active) {
         padding: 10px;
       }
 
-      .container {
+      body:not(.admin-dashboard-active) .container {
         padding: 14px;
         border-radius: 16px;
       }
@@ -13904,27 +15310,41 @@
       }
 
       .admin-navbar {
-        padding: 10px 16px;
+        padding: max(10px, env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-left, 0px)) 15px max(14px, env(safe-area-inset-right, 0px));
       }
 
       .navbar-content {
-        flex-direction: column;
-        gap: 12px;
-        align-items: stretch;
+        flex-direction: row;
+        align-items: center;
+        gap: 10px;
+        min-height: 56px;
       }
 
       .navbar-brand {
-        justify-content: center;
-        text-align: center;
+        justify-content: space-between;
+        text-align: left;
+        gap: 12px;
+      }
+
+      .navbar-brand-left {
+        gap: 12px;
       }
 
       .navbar-title-group {
-        align-items: center;
+        align-items: flex-start;
+      }
+
+      .navbar-subtitle {
+        font-size: clamp(11px, 3.1vw, 12.5px);
+        max-width: 100%;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
       }
 
       .navbar-actions {
-        justify-content: center;
-        width: 100%;
+        display: none;
       }
 
       .dashboard-header > div {
@@ -14082,7 +15502,7 @@
       }
 
       .tab-buttons-container {
-        padding: 0 12px;
+        padding: 0;
       }
 
       /* Detaylı raporlama: 4 kutu tek ekrana daha rahat sığsın */
@@ -14212,6 +15632,13 @@
       .tables-grid.package-grid {
         grid-template-columns: repeat(2, 1fr);
         gap: 10px;
+      }
+
+      /* Makara masaları: mobilde de çoklu sütun (2 yerine sık ızgara) */
+      .tables-layout-makara .tables-grid,
+      .tables-layout-makara .tables-grid.package-grid {
+        grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+        gap: 6px;
       }
 
       .table-card {
@@ -14608,22 +16035,25 @@
     </div>
 
     <div id="dashboard" class="dashboard">
-      <!-- Modern Navbar -->
-      <nav class="admin-navbar">
+      <!-- Admin üst bar (kurumsal / mobil uygulama stili) -->
+      <nav class="admin-navbar" aria-label="Üst menü">
         <div class="navbar-content">
           <div class="navbar-brand">
             <div class="navbar-brand-left">
-              <img src="logo.png" alt="MAKARA Logo" class="navbar-logo-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-              <div class="navbar-logo" style="display: none;">M</div>
+              <div class="navbar-logo-wrap">
+                <img src="logo.png" alt="" class="navbar-logo-img" width="50" height="50" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                <div class="navbar-logo" style="display: none;" aria-hidden="true">M</div>
+              </div>
               <div class="navbar-title-group">
-                <h1 class="navbar-title">MAKARA Admin Dashboard</h1>
-                <p class="navbar-subtitle">Anlık Satış Detayları ve İstatistikler</p>
+                <p class="navbar-eyebrow">MAKARA</p>
+                <h1 class="navbar-title">Admin Dashboard</h1>
+                <p class="navbar-subtitle">Anlık satış detayları ve istatistikler</p>
               </div>
             </div>
-            <button type="button" class="hamburger-btn" onclick="toggleAdminMenuDrawer()" aria-label="Menü">
-              <span></span>
-              <span></span>
-              <span></span>
+            <button type="button" class="hamburger-btn" onclick="toggleAdminMenuDrawer()" aria-expanded="false" aria-controls="adminMenuDrawer" aria-label="Menüyü aç">
+              <span class="hamburger-btn-lines" aria-hidden="true">
+                <span></span><span></span><span></span>
+              </span>
             </button>
           </div>
           <div class="navbar-actions">
@@ -14744,43 +16174,56 @@
         </div>
       </div>
       
+      <div class="dashboard-main-pad">
       <!-- Tab Butonları - En Üstte Modern ve Kurumsal -->
       <div class="tab-buttons-container">
         <div class="tab-buttons">
-          <button class="tab-btn active" data-tab="sales" onclick="setActiveTab('sales')">
-            <div class="tab-btn-icon">📋</div>
+          <button type="button" class="tab-btn active" data-tab="sales" onclick="setActiveTab('sales')">
+            <div class="tab-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+            </div>
             <div class="tab-btn-text">Satış Geçmişi</div>
             <div class="tab-btn-indicator"></div>
           </button>
-          <button class="tab-btn" data-tab="reports" onclick="setActiveTab('reports')">
-            <div class="tab-btn-icon">📊</div>
+          <button type="button" class="tab-btn" data-tab="reports" onclick="setActiveTab('reports')">
+            <div class="tab-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+            </div>
             <div class="tab-btn-text">Detaylı Raporlama</div>
             <div class="tab-btn-indicator"></div>
           </button>
-          <button class="tab-btn" data-tab="staff" onclick="setActiveTab('staff')">
-            <div class="tab-btn-icon">👥</div>
+          <button type="button" class="tab-btn" data-tab="staff" onclick="setActiveTab('staff')">
+            <div class="tab-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75"/></svg>
+            </div>
             <div class="tab-btn-text">Personel Detayları</div>
             <div class="tab-btn-indicator"></div>
           </button>
-          <button class="tab-btn" data-tab="tables" onclick="setActiveTab('tables')">
-            <div class="tab-btn-icon">🪑</div>
+          <button type="button" class="tab-btn" data-tab="tables" onclick="setActiveTab('tables')">
+            <div class="tab-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>
+            </div>
             <div class="tab-btn-text">Masalar</div>
             <div class="tab-btn-indicator"></div>
           </button>
-          <button class="tab-btn" data-tab="cancels" onclick="setActiveTab('cancels')">
-            <div class="tab-btn-icon">❌</div>
+          <button type="button" class="tab-btn" data-tab="cancels" onclick="setActiveTab('cancels')">
+            <div class="tab-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>
+            </div>
             <div class="tab-btn-text">İptaller</div>
             <div class="tab-btn-indicator"></div>
           </button>
-          <button class="tab-btn" data-tab="onlineOrders" onclick="setActiveTab('onlineOrders')">
-            <div class="tab-btn-icon">🌐</div>
+          <button type="button" class="tab-btn" data-tab="onlineOrders" onclick="setActiveTab('onlineOrders')">
+            <div class="tab-btn-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>
+            </div>
             <div class="tab-btn-text">Online Siparişler</div>
             <div class="tab-btn-indicator"></div>
           </button>
         </div>
       </div>
       
-      <div class="stats-grid" id="statsGrid"></div>
+      <div class="stats-grid stats-dashboard-kpis" id="statsGrid"></div>
       
       <div id="salesContainer" style="min-height: 200px;"></div>
       <div id="reportsContainer" style="min-height: 200px; display: none;"></div>
@@ -14823,6 +16266,7 @@
       </div>
       <div id="cancelsContainer" style="min-height: 200px; display: none;"></div>
       <div id="onlineOrdersContainer" style="min-height: 200px; display: none;"></div>
+      </div>
     </div>
   </div>
 

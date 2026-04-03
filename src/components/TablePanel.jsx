@@ -2472,6 +2472,20 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               }
             }
           }}
+          onGiftApplied={async () => {
+            if (selectedOrder && window.electronAPI?.getTableOrderItems) {
+              try {
+                const updatedItems = await window.electronAPI.getTableOrderItems(selectedOrder.id);
+                setOrderItems(updatedItems || []);
+                const updatedOrders = await window.electronAPI.getTableOrders();
+                const updatedOrder = updatedOrders.find((o) => o.id === selectedOrder.id);
+                if (updatedOrder) setSelectedOrder(updatedOrder);
+                loadTableOrders();
+              } catch (error) {
+                console.error('İkram sonrası sipariş yenilenemedi:', error);
+              }
+            }
+          }}
           onRequestAdisyon={handleRequestAdisyon}
           onAddItems={handleAddItems}
           onCancelEntireTable={() => {

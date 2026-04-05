@@ -61,6 +61,44 @@
   .scrollbar-custom::-webkit-scrollbar-thumb {
     @apply bg-pink-600/50 theme-sultan:bg-emerald-600/50 rounded-full hover:bg-pink-600/70 theme-sultan:hover:bg-emerald-600/70;
   }
+
+  /**
+   * POS katalog (kategori + ürün): farklı DPI ve genişliklerde tutarlı okunabilirlik.
+   * Piksel tabanlı font-size; zoom ile ölçeklenir, relative vw ile küçülmez.
+   */
+  .pos-catalog {
+    --pos-fs-overline: 11px;
+    --pos-fs-meta: 12px;
+    --pos-fs-category: 13px;
+    --pos-fs-input: 14px;
+    --pos-fs-product: 15px;
+    --pos-fs-price: 16px;
+    --pos-radius-sm: 8px;
+    --pos-radius-md: 12px;
+    --pos-radius-lg: 14px;
+    --pos-touch-min: 44px;
+    color: #0f172a;
+  }
+
+  .pos-catalog-scroll {
+    scrollbar-gutter: stable;
+  }
+
+  .pos-category-rail::-webkit-scrollbar {
+    height: 5px;
+  }
+
+  .pos-category-rail::-webkit-scrollbar-track {
+    @apply bg-slate-100 rounded-full;
+  }
+
+  .pos-category-rail::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 rounded-full hover:bg-slate-400;
+  }
+
+  .theme-sultan .pos-category-rail::-webkit-scrollbar-thumb {
+    @apply bg-emerald-300/80 hover:bg-emerald-400/90;
+  }
 }
 
 .gradient-text {

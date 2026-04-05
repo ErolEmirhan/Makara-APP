@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useEffect } from 'react';
 
 function isYanUrunlerCategoryRow(c) {
   const n = Number(c?.id);
@@ -8,79 +8,107 @@ function isYanUrunlerCategoryRow(c) {
 }
 
 const CategoryPanel = ({ categories, selectedCategory, onSelectCategory, isSultanBranch = false }) => {
+  const railRef = useRef(null);
+  const selectedId = selectedCategory?.id;
+
   const visibleCategories = useMemo(() => {
     if (!isSultanBranch) return categories;
     return (categories || []).filter((c) => !isYanUrunlerCategoryRow(c));
   }, [categories, isSultanBranch]);
 
+  useEffect(() => {
+    const grid = railRef.current;
+    if (!grid || selectedId === undefined || selectedId === null) return;
+    const raw = String(selectedId);
+    const esc =
+      typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(raw)
+        : raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    const btn = grid.querySelector(`[data-category-id="${esc}"]`);
+    if (btn && typeof btn.scrollIntoView === 'function') {
+      btn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [selectedId, visibleCategories.length]);
+
   return (
-    <div className="mb-4">
-      <div className="mb-5 pb-4 flex justify-center">
+    <section
+      className={`pos-catalog mb-4 rounded-[var(--pos-radius-lg)] border border-slate-200/90 bg-white/95 shadow-[0_1px_3px_rgba(15,23,42,0.06)] theme-sultan:border-emerald-200/80 theme-sultan:shadow-[0_1px_3px_rgba(6,78,59,0.08)] overflow-hidden`}
+      aria-label="Ürün kategorileri"
+    >
+      <div
+        className={`flex items-stretch gap-0 border-b border-slate-100 theme-sultan:border-emerald-100 ${
+          isSultanBranch ? 'bg-slate-50/80' : 'bg-gradient-to-r from-slate-50/90 via-white to-slate-50/90'
+        }`}
+      >
         <div
-          className={`w-full max-w-md mx-auto text-center py-3 px-4 rounded-xl border shadow-sm ${
-            isSultanBranch
-              ? 'bg-white border-slate-200'
-              : 'bg-gradient-to-r from-slate-50 via-white to-slate-50 border-slate-100'
+          className={`w-1 shrink-0 self-stretch min-h-[52px] ${
+            isSultanBranch ? 'bg-emerald-600' : 'bg-gradient-to-b from-pink-600 to-indigo-600 theme-sultan:from-emerald-600 theme-sultan:to-teal-600'
           }`}
-        >
+          aria-hidden
+        />
+        <div className="flex-1 py-3 px-4 min-w-0">
+          <p
+            className="font-semibold tracking-wide text-slate-500 uppercase"
+            style={{ fontSize: 'var(--pos-fs-overline)', letterSpacing: '0.08em' }}
+          >
+            Katalog
+          </p>
           <h2
-            className={`text-xl font-bold tracking-tight ${
-              isSultanBranch
-                ? 'text-slate-800'
-                : 'bg-gradient-to-r from-slate-700 via-slate-800 to-slate-900 bg-clip-text text-transparent'
-            }`}
+            className="font-bold text-slate-900 tracking-tight mt-0.5 font-display"
+            style={{ fontSize: 'var(--pos-fs-product)' }}
           >
             Kategoriler
           </h2>
-          <div
-            className={`mt-2 h-0.5 w-20 mx-auto rounded-full ${
-              isSultanBranch ? 'bg-slate-200' : 'bg-gradient-to-r from-slate-300 via-slate-500 to-slate-300'
-            }`}
-          />
         </div>
       </div>
-      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 xl:grid-cols-8 2xl:grid-cols-10 gap-2.5">
-        {visibleCategories.map((category, index) => {
-          const isSelected = selectedCategory?.id === category.id;
-          
-          return (
-            <button
-              key={category.id}
-              onClick={() => onSelectCategory(category)}
-              className={`
-                group relative overflow-hidden rounded-lg py-3 px-2.5 transition-all duration-300
-                ${isSelected 
-                  ? 'bg-pink-50 theme-sultan:bg-emerald-50 border border-pink-200 theme-sultan:border-emerald-200 shadow-sm' 
-                  : 'bg-white border border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50 hover:shadow-sm'
-                }
-              `}
-            >
-              {/* Content */}
-              <div className="relative z-10 flex items-center justify-center w-full">
-                {/* Category Name */}
-                <div className="text-center w-full">
-                  <span className={`
-                    font-medium text-xs transition-colors duration-300 leading-tight
-                    ${isSelected ? 'text-pink-700 theme-sultan:text-emerald-700' : 'text-gray-700 group-hover:text-gray-900'}
-                  `} style={{ fontFamily: 'system-ui, -apple-system, sans-serif' }}>
-                    {category.name}
-                  </span>
-                </div>
-              </div>
-              
-              {/* Selected indicator - subtle bottom border */}
-              {isSelected && (
-                <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-pink-300 theme-sultan:bg-emerald-300"></div>
-              )}
-            </button>
-          );
-        })}
+
+      <div className="p-3 sm:p-4">
+        <div
+          ref={railRef}
+          className="pos-category-grid grid gap-2 touch-manipulation [grid-template-columns:repeat(auto-fill,minmax(6.25rem,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(7rem,1fr))] lg:[grid-template-columns:repeat(auto-fill,minmax(7.5rem,1fr))]"
+          role="tablist"
+          aria-label="Kategori listesi"
+        >
+          {visibleCategories.map((category) => {
+            const isSelected = selectedCategory?.id === category.id;
+            return (
+              <button
+                key={category.id}
+                type="button"
+                role="tab"
+                aria-selected={isSelected}
+                data-category-id={String(category.id)}
+                onClick={() => onSelectCategory(category)}
+                className={`
+                  w-full min-w-0 text-center rounded-[var(--pos-radius-md)] border font-semibold
+                  transition-all duration-200 ease-out
+                  min-h-[var(--pos-touch-min)] px-2 py-2.5 sm:px-3 flex flex-col items-center justify-center
+                  focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+                  ${
+                    isSultanBranch
+                      ? 'focus-visible:ring-emerald-500'
+                      : 'focus-visible:ring-pink-500'
+                  }
+                  ${
+                    isSelected
+                      ? isSultanBranch
+                        ? 'border-emerald-600 bg-emerald-50 text-emerald-950 shadow-sm ring-1 ring-emerald-600/25'
+                        : 'border-pink-600 bg-pink-50 text-pink-950 shadow-sm ring-1 ring-pink-600/20'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900'
+                  }
+                `}
+                style={{ fontSize: 'var(--pos-fs-category)', lineHeight: 1.35 }}
+              >
+                <span className="line-clamp-3 break-words hyphens-auto w-full">{category.name}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </section>
   );
 };
 
-// PERFORMANS: React.memo ile gereksiz re-render'ları önle
 export default React.memo(CategoryPanel, (prevProps, nextProps) => {
   return (
     prevProps.selectedCategory?.id === nextProps.selectedCategory?.id &&
@@ -88,4 +116,3 @@ export default React.memo(CategoryPanel, (prevProps, nextProps) => {
     prevProps.isSultanBranch === nextProps.isSultanBranch
   );
 });
-

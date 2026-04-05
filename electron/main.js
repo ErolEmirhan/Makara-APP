@@ -161,6 +161,8 @@ function isYanUrunlerCategoryForFilter(c) {
 }
 
 let activeBranchKey = 'makara';
+/** Aynı oturumda tam katalog bir kez yüklendiyse tekrar Firebase taraması yapma (StrictMode çift effect / çift IPC) */
+let branchCatalogWarmSessionKey = null;
 /** activate-branch IPC çağrılarını sıraya al (paralel iki activate şubeyi ve katalogu bozabiliyor) */
 let activateBranchChain = Promise.resolve();
 let branchSettingsPath = null;
@@ -177,12 +179,19 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function processInChunks(items, chunkSize, handler, pauseMs = 0) {
+async function processInChunks(items, chunkSize, handler, pauseMs = 0, onProgress = null) {
   if (!Array.isArray(items) || items.length === 0) return;
+  const total = items.length;
   for (let i = 0; i < items.length; i += chunkSize) {
     const chunk = items.slice(i, i + chunkSize);
     for (const item of chunk) {
       handler(item);
+    }
+    const processed = Math.min(i + chunk.length, total);
+    if (typeof onProgress === 'function') {
+      try {
+        onProgress(processed, total);
+      } catch (_) {}
     }
     if (pauseMs > 0 && i + chunkSize < items.length) {
       await sleep(pauseMs);
@@ -232,6 +241,19 @@ let apiServer = null;
 let io = null;
 let serverPort = 3000;
 
+function sendCatalogSyncProgress(payload) {
+  try {
+    if (
+      mainWindow &&
+      !mainWindow.isDestroyed() &&
+      mainWindow.webContents &&
+      !mainWindow.webContents.isDestroyed()
+    ) {
+      mainWindow.webContents.send('catalog-sync-progress', payload);
+    }
+  } catch (_) {}
+}
+
 function loadBranchSettings() {
   try {
     branchSettingsPath = path.join(app.getPath('userData'), 'branch-settings.json');
@@ -264,6 +286,11 @@ function saveBranchSettings() {
 async function initializeFirebaseForBranch(branchKey) {
   const branch = BRANCH_CONFIGS[branchKey] || BRANCH_CONFIGS.makara;
   activeBranchKey = branch.key;
+  sendCatalogSyncProgress({
+    percent: 4,
+    phase: 'firebase',
+    message: 'Sunucuya bağlanılıyor…'
+  });
 
   // Önce önceki realtime listenerları kapat
   try { categoriesRealtimeUnsubscribe?.(); } catch (_) {}
@@ -356,8 +383,25 @@ async function activateBranch(branchKey) {
     return { success: false, error: 'Geçersiz şube anahtarı' };
   }
 
+  if (
+    branchCatalogWarmSessionKey === branchKey &&
+    activeBranchKey === branchKey &&
+    Array.isArray(db.categories) &&
+    db.categories.length > 0 &&
+    Array.isArray(db.products) &&
+    db.products.length > 0
+  ) {
+    return {
+      success: true,
+      branch: { key: activeBranchKey, label: BRANCH_CONFIGS[activeBranchKey].label }
+    };
+  }
+
   const ok = await initializeFirebaseForBranch(branchKey);
-  if (!ok) return { success: false, error: 'Firebase bağlantısı kurulamadı' };
+  if (!ok) {
+    sendCatalogSyncProgress({ percent: 100, phase: 'done', message: '' });
+    return { success: false, error: 'Firebase bağlantısı kurulamadı' };
+  }
 
   // Base64 görseller Firestore'da yok; db.products silinmeden önce sakla (sync Firebase ile birleşsin)
   pendingLocalProductDataUrlById = new Map();
@@ -372,6 +416,12 @@ async function activateBranch(branchKey) {
   // Eski şube katalogunu göstermemek için bellek temizliği (disk yazımı senkron bitince)
   db.categories = [];
   db.products = [];
+
+  sendCatalogSyncProgress({
+    percent: 7,
+    phase: 'catalog',
+    message: 'Katalog senkronize ediliyor…'
+  });
 
   saveBranchSettings();
 
@@ -388,6 +438,11 @@ async function activateBranch(branchKey) {
     console.error('Kategori senkronu (activateBranch):', error);
   }
   if (activeBranchKey === 'sultansomati') {
+    sendCatalogSyncProgress({
+      percent: 33,
+      phase: 'bundle',
+      message: 'Menü paketi kontrol ediliyor…'
+    });
     try {
       await maybeInstallSultanMenuBundleOnActivate();
     } catch (e) {
@@ -395,15 +450,30 @@ async function activateBranch(branchKey) {
     }
   }
   if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) {
+    sendCatalogSyncProgress({ percent: 100, phase: 'done', message: '' });
     return { success: false, error: 'Şube eşzamanlı değişti, tekrar deneyin.' };
   }
+
+  // İlk açılışta renderer getProducts çağırdığında dolu katalog olsun (splash sırasında bile yüklenebilsin)
+  try {
+    await syncProductsFromFirebase();
+  } catch (error) {
+    console.error('Ürün senkronu (activateBranch):', error);
+  }
+  if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) {
+    sendCatalogSyncProgress({ percent: 100, phase: 'done', message: '' });
+    return { success: false, error: 'Şube eşzamanlı değişti, tekrar deneyin.' };
+  }
+
+  sendCatalogSyncProgress({
+    percent: 98,
+    phase: 'finalize',
+    message: 'Son hazırlıklar…'
+  });
 
   setImmediate(() => {
     (async () => {
       try {
-        if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) return;
-        await sleep(220);
-        await syncProductsFromFirebase();
         if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) return;
 
         categoriesRealtimeUnsubscribe = setupCategoriesRealtimeListener();
@@ -420,6 +490,14 @@ async function activateBranch(branchKey) {
         console.error('Arka plan branch warmup hatası:', error);
       }
     })();
+  });
+
+  branchCatalogWarmSessionKey = activeBranchKey;
+
+  sendCatalogSyncProgress({
+    percent: 100,
+    phase: 'done',
+    message: 'Katalog hazır'
   });
 
   return {
@@ -1062,6 +1140,11 @@ async function syncCategoriesFromFirebase() {
   
   try {
     console.log('📥 Firebase\'den kategoriler çekiliyor...');
+    sendCatalogSyncProgress({
+      percent: 8,
+      phase: 'categories',
+      message: 'Kategoriler indiriliyor…'
+    });
     const categoriesRef = firebaseCollection(firestore, 'categories');
     const snapshot = await firebaseGetDocs(categoriesRef);
     
@@ -1069,7 +1152,15 @@ async function syncCategoriesFromFirebase() {
     let updatedCount = 0;
     
     const docs = snapshot.docs || [];
-    await processInChunks(docs, 120, (snapshotDoc) => {
+    sendCatalogSyncProgress({
+      percent: 12,
+      phase: 'categories',
+      message: docs.length ? `${docs.length} kategori işleniyor…` : 'Kategoriler işleniyor…'
+    });
+    await processInChunks(
+      docs,
+      120,
+      (snapshotDoc) => {
       const firebaseCategory = snapshotDoc.data();
       const categoryId = typeof firebaseCategory.id === 'string' ? parseInt(firebaseCategory.id) : firebaseCategory.id;
       
@@ -1093,7 +1184,17 @@ async function syncCategoriesFromFirebase() {
         });
         addedCount++;
       }
-    }, 12);
+    },
+      12,
+      (processed, total) => {
+        const pct = 12 + Math.round((processed / Math.max(total, 1)) * 20);
+        sendCatalogSyncProgress({
+          percent: Math.min(32, pct),
+          phase: 'categories',
+          message: `Kategoriler ${processed}/${total}`
+        });
+      }
+    );
     
     // ID'leri sırala ve order_index'e göre sırala
     db.categories.sort((a, b) => {
@@ -1120,6 +1221,11 @@ async function syncProductsFromFirebase() {
 
   try {
     console.log('📥 Firebase\'den ürünler çekiliyor...');
+    sendCatalogSyncProgress({
+      percent: 34,
+      phase: 'products',
+      message: 'Ürünler indiriliyor…'
+    });
     const productsRef = firebaseCollection(firestore, 'products');
     const snapshot = await firebaseGetDocs(productsRef);
     
@@ -1127,7 +1233,15 @@ async function syncProductsFromFirebase() {
     let updatedCount = 0;
     
     const docs = snapshot.docs || [];
-    await processInChunks(docs, 150, (snapshotDoc) => {
+    sendCatalogSyncProgress({
+      percent: 38,
+      phase: 'products',
+      message: docs.length ? `${docs.length} ürün işleniyor…` : 'Ürünler işleniyor…'
+    });
+    await processInChunks(
+      docs,
+      150,
+      (snapshotDoc) => {
       const firebaseProduct = snapshotDoc.data();
       const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id) : firebaseProduct.id;
       // Local database'de bu ürün var mı kontrol et
@@ -1150,7 +1264,17 @@ async function syncProductsFromFirebase() {
         db.products.push(mapped);
         addedCount++;
       }
-    }, 14);
+    },
+      14,
+      (processed, total) => {
+        const pct = 38 + Math.round((processed / Math.max(total, 1)) * 58);
+        sendCatalogSyncProgress({
+          percent: Math.min(97, pct),
+          phase: 'products',
+          message: `Ürünler ${processed}/${total}`
+        });
+      }
+    );
     
     saveDatabase();
     console.log(`✅ Firebase'den ${snapshot.size} ürün çekildi (${addedCount} yeni, ${updatedCount} güncellendi)`);
@@ -1687,45 +1811,20 @@ ipcMain.handle('delete-category', async (event, categoryId) => {
 });
 
 ipcMain.handle('get-products', async (event, categoryId) => {
-  let products = categoryId 
-    ? db.products.filter(p => p.category_id === categoryId)
-    : db.products;
-  
-  // Her ürün için stok bilgisini Firebase'den çek (eğer local'de yoksa)
-  const productsWithStock = await Promise.all(products.map(async (product) => {
-    // Eğer local'de stok bilgisi varsa onu kullan
-    if (product.stock !== undefined) {
-      return product;
-    }
-    
-    // Firebase'den çek
-    const firebaseStock = await getProductStockFromFirebase(product.id);
-    if (firebaseStock !== null) {
-      // Local'e kaydet
-      const productIndex = db.products.findIndex(p => p.id === product.id);
-      if (productIndex !== -1) {
-        db.products[productIndex] = {
-          ...db.products[productIndex],
-          stock: firebaseStock
-        };
-      }
-      return {
-        ...product,
-        stock: firebaseStock
-      };
-    }
-    
-    // Stok bilgisi yoksa 0 olarak döndür
-    return {
-      ...product,
-      stock: 0
-    };
+  const hasCategory =
+    categoryId !== null && categoryId !== undefined && categoryId !== '';
+  const isAllProductsToken = Number(categoryId) === -998;
+  const loadAll = !hasCategory || isAllProductsToken;
+  const products = loadAll
+    ? db.products
+    : db.products.filter((p) => Number(p.category_id) === Number(categoryId));
+
+  // Satış ekranı: Firebase stok taraması N paralel istek = çok yavaş; liste yerel db ile anında döner.
+  // Stok güncellemesi satış / senkron akışlarında zaten yapılır.
+  return products.map((p) => ({
+    ...p,
+    stock: p.stock !== undefined ? p.stock : 0,
   }));
-  
-  // Database'i kaydet (stok bilgileri güncellendi)
-  saveDatabase();
-  
-  return productsWithStock;
 });
 
 // Yan Ürünler IPC Handlers (Local kayıtlı, Firebase'e gitmez)
@@ -2194,7 +2293,8 @@ ipcMain.handle('create-table-order', async (event, orderData) => {
         staff_id: null, // Electron'dan eklenen ürünler için staff bilgisi yok
         staff_name: null,
         added_date: orderDate,
-        added_time: orderTime
+        added_time: orderTime,
+        item_note: (newItem.extraNote && String(newItem.extraNote).trim()) ? String(newItem.extraNote).trim() : null
       });
     });
     // Toplam tutarı güncelle
@@ -2240,7 +2340,8 @@ ipcMain.handle('create-table-order', async (event, orderData) => {
         staff_id: null,
         staff_name: null,
         added_date: orderDate,
-        added_time: orderTime
+        added_time: orderTime,
+        item_note: (item.extraNote && String(item.extraNote).trim()) ? String(item.extraNote).trim() : null
       });
     });
   }
@@ -2329,6 +2430,7 @@ function splitTableOrderRowGift(row, giftQty) {
     staff_name: row.staff_name ?? null,
     added_date: row.added_date,
     added_time: row.added_time,
+    item_note: row.item_note ?? null,
     paid_quantity: 0,
     is_paid: false
   });
@@ -5621,6 +5723,41 @@ function generateProductionReceiptHTML(items, receiptData) {
 function generateMinimalAdisyonReceiptHTML(receiptData) {
   const brand = getReceiptBrandTitle();
   const isSuriciBranch = activeBranchKey === 'makarasur';
+  const isSultanMinimal = activeBranchKey === 'sultansomati';
+  /** Sultan Somatı: 58 mm termalde okunabilirlik için bir kademe daha büyük puntolar */
+  const fs = isSultanMinimal
+    ? {
+        body: 12,
+        title: 15,
+        subtitle: 10,
+        mid: 11,
+        meta: 10,
+        row: 12,
+        rowNote: 10,
+        discount: 10,
+        orderNote: 11,
+        addr: 10,
+        qrCaption: 9,
+        total: 13,
+        bodyPad: '7px 9px 12px',
+        qrSize: 108
+      }
+    : {
+        body: 10,
+        title: 13,
+        subtitle: 9,
+        mid: 9,
+        meta: 8,
+        row: 10,
+        rowNote: 8,
+        discount: 9,
+        orderNote: 9,
+        addr: 8,
+        qrCaption: 7,
+        total: 11,
+        bodyPad: '6px 8px 10px',
+        qrSize: 100
+      };
   const entityLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
   const dateStr = receiptData.sale_date || new Date().toLocaleDateString('tr-TR');
   const timeStr = receiptData.sale_time || getFormattedTime(new Date());
@@ -5644,10 +5781,10 @@ function generateMinimalAdisyonReceiptHTML(receiptData) {
     const lineTotal = isGift ? 0 : (item.price * item.quantity);
     const name = item.name || '';
     const extra = item.extraNote
-      ? `<div style="font-size:8px;color:#444;margin:0 0 3px 0;padding-left:1px;">${item.extraNote}</div>`
+      ? `<div style="font-size:${fs.rowNote}px;color:#444;margin:0 0 3px 0;padding-left:1px;line-height:1.3;">${item.extraNote}</div>`
       : '';
     return `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin:2px 0;font-size:10px;line-height:1.25;">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin:2px 0;font-size:${fs.row}px;line-height:1.28;">
         <span style="flex:1;min-width:0;word-break:break-word;">${qty}× ${name}${isGift ? ' · İKRAM' : ''}</span>
         <span style="white-space:nowrap;font-weight:600;">${isGift ? '₺0' : '₺' + lineTotal.toFixed(2)}</span>
       </div>
@@ -5661,39 +5798,39 @@ function generateMinimalAdisyonReceiptHTML(receiptData) {
   const hasDisc = receiptData.discountInfo && receiptData.discountInfo.applied === true;
 
   const discountBlock = hasDisc ? `
-    <div style="display:flex;justify-content:space-between;font-size:9px;color:#555;margin-top:4px;">
+    <div style="display:flex;justify-content:space-between;font-size:${fs.discount}px;color:#555;margin-top:4px;">
       <span>Ara</span><span>₺${Number(subtotal).toFixed(2)}</span>
     </div>
-    <div style="display:flex;justify-content:space-between;font-size:9px;color:#b91c1c;">
+    <div style="display:flex;justify-content:space-between;font-size:${fs.discount}px;color:#b91c1c;">
       <span>İnd.%${receiptData.discountInfo.discountPercent || 0}</span><span>-₺${(receiptData.discountAmount || 0).toFixed(2)}</span>
     </div>` : '';
 
   const noteBlock = receiptData.orderNote
-    ? `<div style="margin-top:6px;padding-top:5px;border-top:1px dashed #999;font-size:9px;line-height:1.3;"><span style="font-weight:600;">Not:</span> ${receiptData.orderNote}</div>`
+    ? `<div style="margin-top:6px;padding-top:5px;border-top:1px dashed #999;font-size:${fs.orderNote}px;line-height:1.35;"><span style="font-weight:600;">Not:</span> ${receiptData.orderNote}</div>`
     : '';
 
   const onlineAddr = (receiptData.tableType === 'online' && receiptData.customer_address)
-    ? `<div style="font-size:8px;color:#333;margin:3px 0 0;line-height:1.3;word-break:break-word;">${receiptData.customer_address}</div>`
+    ? `<div style="font-size:${fs.addr}px;color:#333;margin:3px 0 0;line-height:1.35;word-break:break-word;">${receiptData.customer_address}</div>`
     : '';
 
   const qrBlock = (receiptData.qrCodeDataURL && receiptData.tableType === 'online')
     ? `<div style="text-align:center;margin-top:8px;padding-top:6px;border-top:1px solid #000;">
-        <img src="${receiptData.qrCodeDataURL}" alt="" style="width:100px;height:100px;image-rendering:pixelated;" />
-        <div style="font-size:7px;margin-top:2px;color:#444;">Adres</div>
+        <img src="${receiptData.qrCodeDataURL}" alt="" style="width:${fs.qrSize}px;height:${fs.qrSize}px;image-rendering:pixelated;" />
+        <div style="font-size:${fs.qrCaption}px;margin-top:2px;color:#444;">Adres</div>
       </div>`
     : '';
 
   return `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
-  @media print { @page { size: 58mm auto; margin: 0; } body { margin: 0; padding: 6px 8px 10px; } }
-  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; width: 58mm; max-width: 58mm; margin: 0; padding: 6px 8px 10px; font-size: 10px; color: #000; }
-  .t { font-weight: 700; font-size: 13px; letter-spacing: 0.02em; text-align: center; margin: 0 0 2px; }
-  .s { font-size: 9px; text-align: center; color: #444; margin: 0 0 5px; text-transform: uppercase; letter-spacing: 0.05em; }
-  .m { font-size: 9px; text-align: center; margin: 0 0 2px; line-height: 1.3; word-break: break-word; }
-  .meta { font-size: 8px; text-align: center; color: #666; margin: 0 0 5px; }
+  @media print { @page { size: 58mm auto; margin: 0; } body { margin: 0; padding: ${fs.bodyPad}; } }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; width: 58mm; max-width: 58mm; margin: 0; padding: ${fs.bodyPad}; font-size: ${fs.body}px; color: #000; }
+  .t { font-weight: 700; font-size: ${fs.title}px; letter-spacing: 0.02em; text-align: center; margin: 0 0 2px; }
+  .s { font-size: ${fs.subtitle}px; text-align: center; color: #444; margin: 0 0 5px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .m { font-size: ${fs.mid}px; text-align: center; margin: 0 0 2px; line-height: 1.3; word-break: break-word; }
+  .meta { font-size: ${fs.meta}px; text-align: center; color: #666; margin: 0 0 5px; }
   hr { border: none; border-top: 1px solid #000; margin: 5px 0; }
-  .tot { display: flex; justify-content: space-between; font-weight: 700; font-size: 11px; margin-top: 5px; padding-top: 4px; border-top: 2px solid #000; }
+  .tot { display: flex; justify-content: space-between; font-weight: 700; font-size: ${fs.total}px; margin-top: 5px; padding-top: 4px; border-top: 2px solid #000; }
 </style></head><body>
   <p class="t">${brand}</p>
   <p class="s">Adisyon</p>
@@ -9498,6 +9635,38 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     </div>
   </div>
   
+  <!-- Sultan Somatı: not hedefi (genel / ürün satırları) — kategori fişinde ürün altında -->
+  <div id="noteModalSultan" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2000; align-items: center; justify-content: center; padding: 20px;" onclick="if(event.target === this) hideNoteModalSultan()">
+    <div style="background: white; border-radius: 20px; width: 100%; max-width: 420px; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+      <div style="background: linear-gradient(135deg, #059669 0%, #0d9488 100%); color: white; padding: 18px 20px; flex-shrink: 0;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0; font-size: 18px; font-weight: 800;">Sipariş notu</h2>
+          <button type="button" onclick="hideNoteModalSultan()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 34px; height: 34px; border-radius: 10px; cursor: pointer; font-size: 22px; font-weight: bold; line-height: 1;">×</button>
+        </div>
+        <p style="margin: 10px 0 0; font-size: 13px; opacity: 0.95; line-height: 1.45;">Notun nerede görüneceğini seçin: <strong>genel sipariş notu</strong> veya <strong>sepetteki ürün satırları</strong> (mutfak fişinde ilgili ürünün altında).</p>
+      </div>
+      <div style="padding: 16px 18px; overflow-y: auto; flex: 1; min-height: 0;">
+        <p style="margin: 0 0 10px; font-size: 12px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.04em;">Hedef</p>
+        <label style="display:flex;align-items:flex-start;gap:10px;padding:12px;border:2px solid #d1fae5;border-radius:14px;margin-bottom:12px;cursor:pointer;background:#ecfdf5;">
+          <input type="checkbox" id="sultanNoteGeneral" style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#059669;" />
+          <span style="font-size:14px;font-weight:700;color:#065f46;line-height:1.35;">Genel not<br/><span style="font-size:12px;font-weight:600;color:#047857;">Tüm siparişe (fişte sipariş notu bölümü)</span></span>
+        </label>
+        <div id="sultanNoteLineList"></div>
+        <p style="margin: 16px 0 8px; font-size: 12px; font-weight: 700; color: #64748b;">Hızlı notlar</p>
+        <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
+          <button type="button" onclick="appendQuickNoteSultan('Çay tatlıyla birlikte')" style="padding: 8px 12px; background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer;">Çay tatlıyla</button>
+          <button type="button" onclick="appendQuickNoteSultan('Soğuk su')" style="padding: 8px 12px; background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer;">Soğuk su</button>
+          <button type="button" onclick="appendQuickNoteSultan('Acele')" style="padding: 8px 12px; background: #ecfdf5; color: #047857; border: 1px solid #6ee7b7; border-radius: 10px; font-size: 12px; font-weight: 700; cursor: pointer;">Acele</button>
+        </div>
+        <textarea id="noteInputSultan" placeholder="Notunuzu yazın… Boş bırakıp kaydederseniz seçili hedeflerdeki not silinir." style="width: 100%; min-height: 96px; padding: 12px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 15px; font-family: inherit; resize: vertical; outline: none;" onfocus="this.style.borderColor='#059669';" onblur="this.style.borderColor='#e5e7eb';"></textarea>
+      </div>
+      <div style="border-top: 1px solid #e5e7eb; padding: 14px 18px; display: flex; justify-content: flex-end; gap: 10px; flex-shrink: 0; background: #fafafa;">
+        <button type="button" onclick="hideNoteModalSultan()" style="padding: 12px 20px; background: #f3f4f6; color: #374151; border: none; border-radius: 12px; font-weight: 700; cursor: pointer;">İptal</button>
+        <button type="button" onclick="saveNoteSultan()" style="padding: 12px 22px; background: linear-gradient(135deg, #059669 0%, #0d9488 100%); color: white; border: none; border-radius: 12px; font-weight: 800; cursor: pointer; box-shadow: 0 4px 12px rgba(5,150,105,0.35);">Kaydet</button>
+      </div>
+    </div>
+  </div>
+  
   <!-- Sepette ikram işaretle -->
   <div id="giftMarkModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2100; align-items: center; justify-content: center; padding: 20px; flex-direction: row;" onclick="if(event.target === this) hideGiftMarkModal()">
     <div style="background: white; border-radius: 20px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.35); max-height: 85vh;">
@@ -9999,7 +10168,16 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            items: cart.map(function(item) { return { id: item.id, name: item.name, price: item.price, quantity: item.quantity, isGift: item.isGift || false }; }),
+            items: cart.map(function(item) {
+              return {
+                id: item.id,
+                name: item.name,
+                price: item.price,
+                quantity: item.quantity,
+                isGift: item.isGift || false,
+                extraNote: (item.extraNote && String(item.extraNote).trim()) ? String(item.extraNote).trim() : null
+              };
+            }),
             tableName: selectedTable.name,
             tableType: selectedTable.type,
             orderNote: orderNote || null,
@@ -10582,6 +10760,12 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
           const itemTotal = (item.price * item.quantity).toFixed(2);
           const giftClass = item.isGift ? ' gift' : '';
           const itemStaffName = item.staff_name || 'Bilinmiyor';
+          const itemNoteRaw = item.item_note && String(item.item_note).trim() ? String(item.item_note).trim() : '';
+          const itemNoteBlock = itemNoteRaw
+            ? '<div style="margin-top:8px;padding:8px 10px;background:#ecfdf5;border-radius:8px;border-left:3px solid #059669;font-size:12px;color:#065f46;font-weight:600;line-height:1.4;">📝 ' +
+              itemNoteRaw.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;').replace(/\\n/g, '<br/>') +
+              '</div>'
+            : '';
           return '<div class="order-item" style="position: relative;">' +
             '<div class="order-item-name' + giftClass + '">' + item.product_name + '</div>' +
             '<div class="order-item-details" style="display: flex; align-items: center; justify-content: space-between; gap: 8px;">' +
@@ -10593,6 +10777,7 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
                 ? '<button id="cancelBtn_' + item.id + '" onclick="showCancelItemModal(' + item.id + ', ' + item.quantity + ', \\'' + item.product_name.replace(/'/g, "\\'") + '\\')" style="padding: 6px 12px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px;" onmouseover="if(!this.disabled) { this.style.transform=\\'scale(1.05)\\'; this.style.boxShadow=\\'0 4px 12px rgba(239, 68, 68, 0.4)\\'; }" onmouseout="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; this.style.boxShadow=\\'0 2px 8px rgba(239, 68, 68, 0.3)\\'; }" ontouchstart="if(!this.disabled) { this.style.transform=\\'scale(0.95)\\'; }" ontouchend="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; }" class="cancel-item-btn"><span id="cancelBtnText_' + item.id + '">İptal</span><svg id="cancelBtnSpinner_' + item.id + '" style="display: none; width: 14px; height: 14px; animation: spin 1s linear infinite;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>'
                 : '<button onclick="showManagerRequiredMessage()" style="padding: 6px 12px; background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(107, 114, 128, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px; opacity: 0.7;" onmouseover="this.style.opacity=\\'0.9\\';" onmouseout="this.style.opacity=\\'0.7\\';"><span>İptal</span></button>') +
             '</div>' +
+          itemNoteBlock +
           '</div>' +
           '<div style="font-size: 11px; color: #9ca3af; margin-top: 4px; margin-bottom: 8px; padding-left: 4px;">👤 ' + itemStaffName + ' • ' + (item.added_date || '') + ' ' + (item.added_time || '') + '</div>';
         }).join('');
@@ -11894,8 +12079,13 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
           const metaLine = item.isGift
             ? '<div class="cart-item-meta"><span style="text-decoration:line-through;color:#94a3b8;">' + item.price.toFixed(2) + ' ₺</span> × ' + item.quantity + ' → <strong style="color:#b45309;">₺0 · İKRAM</strong></div>'
             : '<div class="cart-item-meta">' + item.price.toFixed(2) + ' ₺ × ' + item.quantity + ' = ' + (item.price * item.quantity).toFixed(2) + ' ₺</div>';
+          var lineNoteHtml = '';
+          if (isSultanMobile && item.extraNote && String(item.extraNote).trim()) {
+            var en = String(item.extraNote).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+            lineNoteHtml = '<div style="font-size:11px;color:#047857;font-weight:600;margin-top:6px;line-height:1.35;">📝 ' + en + '</div>';
+          }
           return '<div class="cart-item' + giftCls + '">' +
-            '<div><div class="cart-item-name">' + esc + '</div>' + metaLine + '</div>' +
+            '<div><div class="cart-item-name">' + esc + '</div>' + metaLine + lineNoteHtml + '</div>' +
             '<div class="cart-item-right">' +
               '<button type="button" class="cart-qty-btn" onclick="changeQuantity(' + lid + ', -1)">−</button>' +
               '<span class="cart-item-qty">' + item.quantity + '</span>' +
@@ -11987,7 +12177,8 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
             quantity: q,
             isGift: true,
             isYanUrun: !!item.isYanUrun,
-            lineId: nextCartLineId++
+            lineId: nextCartLineId++,
+            extraNote: item.extraNote || null
           });
         }
       }
@@ -12307,8 +12498,64 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       }
     }
 
-    // Not Modal İşlemleri
+    // Not Modal İşlemleri (Sultan: hedef seçimi + genel / satır bazlı extraNote)
+    function hideNoteModalSultan() {
+      var m = document.getElementById('noteModalSultan');
+      if (m) m.style.display = 'none';
+    }
+    function appendQuickNoteSultan(text) {
+      var el = document.getElementById('noteInputSultan');
+      if (!el) return;
+      var cur = el.value.trim();
+      el.value = cur ? cur + ', ' + text : text;
+      el.focus();
+    }
+    function saveNoteSultan() {
+      var text = (document.getElementById('noteInputSultan') && document.getElementById('noteInputSultan').value || '').trim();
+      var gen = document.getElementById('sultanNoteGeneral') && document.getElementById('sultanNoteGeneral').checked;
+      var lineChecks = document.querySelectorAll('.sultan-note-line-cb:checked');
+      if (!gen && lineChecks.length === 0) {
+        showToast('error', 'Seçim gerekli', 'Genel not veya en az bir ürün işaretleyin.');
+        return;
+      }
+      if (gen) {
+        orderNote = text || '';
+      }
+      for (var i = 0; i < lineChecks.length; i++) {
+        var lid = parseInt(lineChecks[i].getAttribute('data-line-id'), 10);
+        var row = cart.find(function(e) { return e.lineId === lid; });
+        if (row) {
+          row.extraNote = text || null;
+        }
+      }
+      hideNoteModalSultan();
+      updateNoteButton();
+      throttle('updateCart', updateCart, 50);
+      schedulePrepareReceipts();
+    }
     function showNoteModal() {
+      if (isSultanMobile) {
+        var listEl = document.getElementById('sultanNoteLineList');
+        if (listEl) {
+          if (cart.length === 0) {
+            listEl.innerHTML = '<p style="font-size:13px;color:#64748b;margin:0 0 8px;">Sepette ürün yok; yalnızca <strong>genel not</strong> ekleyebilirsiniz.</p>';
+          } else {
+            listEl.innerHTML = cart.map(function(item) {
+              var name = String(item.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+              return '<label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:8px;cursor:pointer;background:#fff;">' +
+                '<input type="checkbox" class="sultan-note-line-cb" data-line-id="' + item.lineId + '" style="width:20px;height:20px;margin-top:2px;flex-shrink:0;accent-color:#059669;" />' +
+                '<span style="font-size:14px;font-weight:600;color:#1f2937;line-height:1.35;">' + name +
+                ' <span style="font-weight:500;color:#64748b;">×' + item.quantity + '</span></span></label>';
+            }).join('');
+          }
+        }
+        var genCb = document.getElementById('sultanNoteGeneral');
+        if (genCb) genCb.checked = false;
+        var ta = document.getElementById('noteInputSultan');
+        if (ta) ta.value = '';
+        document.getElementById('noteModalSultan').style.display = 'flex';
+        return;
+      }
       document.getElementById('noteInput').value = orderNote;
       document.getElementById('noteModal').style.display = 'flex';
     }
@@ -12626,7 +12873,8 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     
     function updateNoteButton() {
       const noteButtonText = document.getElementById('noteButtonText');
-      if (orderNote) {
+      var hasLineNotes = cart.some(function(i) { return i.extraNote && String(i.extraNote).trim(); });
+      if (orderNote || (isSultanMobile && hasLineNotes)) {
         noteButtonText.textContent = 'Not Düzenle';
       } else {
         noteButtonText.textContent = 'Not Ekle';
@@ -12659,7 +12907,8 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
           price: item.price,
           quantity: item.quantity,
           isGift: item.isGift || false,
-          isYanUrun: item.isYanUrun || (typeof item.id === 'string' && item.id.startsWith('yan_urun_'))
+          isYanUrun: item.isYanUrun || (typeof item.id === 'string' && item.id.startsWith('yan_urun_')),
+          extraNote: (item.extraNote && String(item.extraNote).trim()) ? String(item.extraNote).trim() : null
         })), 
         totalAmount, 
         tableId: selectedTable.id, 
@@ -13962,7 +14211,8 @@ function startAPIServer() {
       price: item.price,
       isGift: item.isGift || false,
       staff_name: item.staff_name || null,
-      category_id: null
+      category_id: null,
+      extraNote: (item.item_note && String(item.item_note).trim()) ? String(item.item_note).trim() : null
     }));
     const subtotal = items.reduce((s, i) => s + (i.isGift ? 0 : i.price * i.quantity), 0);
     const di = order.firstOrderDiscount;
@@ -14311,7 +14561,8 @@ function startAPIServer() {
             staff_id: staffId || null,
             staff_name: itemStaffName,
             added_date: addedDate,
-            added_time: addedTime
+            added_time: addedTime,
+            item_note: (newItem.extraNote && String(newItem.extraNote).trim()) ? String(newItem.extraNote).trim() : null
           });
         });
         const existingTotal = existingOrder.total_amount || 0;
@@ -14361,7 +14612,8 @@ function startAPIServer() {
             staff_id: staffId || null,
             staff_name: staffName || null,
             added_date: orderDate,
-            added_time: orderTime
+            added_time: orderTime,
+            item_note: (item.extraNote && String(item.extraNote).trim()) ? String(item.extraNote).trim() : null
           });
         });
       }

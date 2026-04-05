@@ -54,6 +54,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, info) => callback(info)),
   onUpdateError: (callback) => ipcRenderer.on('update-error', (event, error) => callback(error)),
   onUpdateProgress: (callback) => ipcRenderer.on('update-download-progress', (event, progress) => callback(progress)),
+  /** Katalog (kategori/ürün) Firebase senkronu ilerlemesi — activateBranch sırasında */
+  onCatalogSyncProgress: (callback) => {
+    const channel = 'catalog-sync-progress';
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on(channel, listener);
+    return () => {
+      ipcRenderer.removeListener(channel, listener);
+    };
+  },
   // Integration API
   getIntegrationSettings: () => ipcRenderer.invoke('get-integration-settings'),
   saveIntegrationSettings: (settings) => ipcRenderer.invoke('save-integration-settings', settings),

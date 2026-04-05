@@ -14,6 +14,7 @@ import RoleSplash from './components/RoleSplash';
 import SaleSuccessToast from './components/SaleSuccessToast';
 import PrintToast from './components/PrintToast';
 import SplashScreen from './components/SplashScreen';
+import CatalogSyncProgressBar from './components/CatalogSyncProgressBar';
 import ExitSplash from './components/ExitSplash';
 import UpdateModal from './components/UpdateModal';
 import ExpenseModal from './components/ExpenseModal';
@@ -69,6 +70,8 @@ function App() {
   const [yanUrunler, setYanUrunler] = useState([]); // Yan Ürünler listesi
   const [showYanUrunlerModal, setShowYanUrunlerModal] = useState(false); // Yan Ürünler yönetim modalı
   const YAN_URUNLER_CATEGORY_ID = -999; // Özel kategori ID'si
+  /** Sanal kategori: tüm katalog (getProducts(null)); IPC'de -998 = tümü */
+  const ALL_PRODUCTS_CATEGORY_ID = -998;
   const [cart, setCart] = useState([]);
   const [orderNote, setOrderNote] = useState('');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -97,6 +100,7 @@ function App() {
   const [showSuriciNameModal, setShowSuriciNameModal] = useState(false);
   const [suriciGuestName, setSuriciGuestName] = useState('');
   const suriciNameResolverRef = useRef(null);
+  const catalogSyncHideTimerRef = useRef(null);
   const searchInputRef = useRef(null);
   const preparedReceiptsRef = useRef({}); // Sepetteyken hazırlanan fişler (metin)
   const preparedPrintJobIdRef = useRef(null); // Sepetteyken hazırlanan fiş job id — Adisyon Yazdır / Masaya Kaydet anında yazdırılır
@@ -112,6 +116,7 @@ function App() {
     setTimeout(() => setActiveRoleSplash(null), 1300);
   };
 
+  const [catalogSyncProgress, setCatalogSyncProgress] = useState(null);
   const [broadcastMessage, setBroadcastMessage] = useState(null);
   const BRANCH_OPTIONS = useMemo(() => ([
     {
@@ -171,9 +176,8 @@ function App() {
     };
   }, [VALID_BRANCH_KEYS]);
 
-  // Kayıtlı şube: bu cihazda bir kez seçildiyse her açılışta otomatik bağlan
+  // Kayıtlı şube: splash görünürken bile hemen bağlan — katalog splash bitmeden memory’de hazır olsun
   useEffect(() => {
-    if (showSplash) return;
     let cancelled = false;
     (async () => {
       let onboarded = false;
@@ -219,7 +223,31 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [showSplash, branchBootstrapKey, VALID_BRANCH_KEYS]);
+  }, [branchBootstrapKey, VALID_BRANCH_KEYS]);
+
+  useEffect(() => {
+    if (!window.electronAPI?.onCatalogSyncProgress) return undefined;
+    const cleanup = window.electronAPI.onCatalogSyncProgress((data) => {
+      if (catalogSyncHideTimerRef.current) {
+        clearTimeout(catalogSyncHideTimerRef.current);
+        catalogSyncHideTimerRef.current = null;
+      }
+      setCatalogSyncProgress(data);
+      if (data?.phase === 'done' || (data?.percent != null && data.percent >= 100)) {
+        catalogSyncHideTimerRef.current = setTimeout(() => {
+          setCatalogSyncProgress(null);
+          catalogSyncHideTimerRef.current = null;
+        }, 650);
+      }
+    });
+    return () => {
+      if (catalogSyncHideTimerRef.current) {
+        clearTimeout(catalogSyncHideTimerRef.current);
+        catalogSyncHideTimerRef.current = null;
+      }
+      cleanup?.();
+    };
+  }, []);
 
   useEffect(() => {
     // Update event listeners
@@ -367,59 +395,15 @@ function App() {
   }, [isBranchReady, activeBranch]);
 
   // PERFORMANS: useCallback ile fonksiyonları memoize et
-  const loadCategories = useCallback(async () => {
-    const cats = await window.electronAPI.getCategories();
-    const sultan = activeBranch?.key === 'sultansomati';
-    if (sultan) {
-      const filtered = filterYanUrunlerCategoriesForSultan([...cats]);
-      setCategories(filtered);
-      setYanUrunler([]);
-      if (filtered.length > 0) {
-        setSelectedCategory(filtered[0]);
-      }
-    } else {
-      const yanUrunlerCategory = {
-        id: YAN_URUNLER_CATEGORY_ID,
-        name: 'Yan Ürünler',
-        order_index: 9999
-      };
-      setCategories([...cats, yanUrunlerCategory]);
-      if (window.electronAPI && window.electronAPI.getYanUrunler) {
-        const yanUrunlerList = await window.electronAPI.getYanUrunler();
-        setYanUrunler(yanUrunlerList);
-      }
-      if (cats.length > 0) {
-        setSelectedCategory(cats[0]);
-      }
-    }
-
-    window.electronAPI.getProducts(null)
-      .then((allProds) => setAllProducts(allProds))
-      .catch(() => setAllProducts([]));
-  }, [activeBranch?.key]);
-
-  useEffect(() => {
-    if (!isBranchReady) return;
-    let cancelled = false;
-    // Ana süreçte şube katalogu kademeli dolduğu için ilk çağrıda [] gelebilir; kısa aralıklarla tekrar dene.
-    (async () => {
-      let attempts = 0;
-      const maxAttempts = 90;
-      while (!cancelled && attempts < maxAttempts) {
-        const cats = await window.electronAPI.getCategories();
-        if (cats.length > 0) break;
-        attempts += 1;
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (!cancelled) await loadCategories();
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isBranchReady, loadCategories]);
-
   const loadProducts = useCallback(async (categoryId) => {
     const sultan = activeBranch?.key === 'sultansomati';
+    if (categoryId === ALL_PRODUCTS_CATEGORY_ID) {
+      const prods = await window.electronAPI.getProducts(null);
+      const list = Array.isArray(prods) ? prods : [];
+      setProducts(list);
+      setAllProducts(list);
+      return;
+    }
     if (!sultan && categoryId === YAN_URUNLER_CATEGORY_ID) {
       if (window.electronAPI && window.electronAPI.getYanUrunler) {
         const yanUrunlerList = await window.electronAPI.getYanUrunler();
@@ -431,6 +415,8 @@ function App() {
           isYanUrun: true
         }));
         setProducts(formattedYanUrunler);
+      } else {
+        setProducts([]);
       }
       return;
     }
@@ -439,19 +425,87 @@ function App() {
     setProducts(prods);
   }, [activeBranch?.key]);
 
-  // useEffect - loadProducts tanımından sonra olmalı
-  useEffect(() => {
-    if (selectedCategory) {
-      loadProducts(selectedCategory.id);
+  const loadCategories = useCallback(async () => {
+    const cats = await window.electronAPI.getCategories();
+    const sultan = activeBranch?.key === 'sultansomati';
+    const allProductsCategoryObj = {
+      id: ALL_PRODUCTS_CATEGORY_ID,
+      name: 'Tüm ürünler',
+      order_index: -1
+    };
+    const yanUrunlerCategory = {
+      id: YAN_URUNLER_CATEGORY_ID,
+      name: 'Yan Ürünler',
+      order_index: 9999
+    };
+    const categoryToSelect = allProductsCategoryObj;
+
+    if (sultan) {
+      const filtered = filterYanUrunlerCategoriesForSultan([...cats]);
+      setCategories([allProductsCategoryObj, ...filtered]);
+      setYanUrunler([]);
+    } else {
+      setCategories([allProductsCategoryObj, ...cats, yanUrunlerCategory]);
+      if (window.electronAPI && window.electronAPI.getYanUrunler) {
+        const yanUrunlerList = await window.electronAPI.getYanUrunler();
+        setYanUrunler(yanUrunlerList);
+      }
     }
-  }, [selectedCategory, loadProducts]);
+
+    setSelectedCategory(allProductsCategoryObj);
+    await loadProducts(ALL_PRODUCTS_CATEGORY_ID);
+  }, [activeBranch?.key, loadProducts]);
+
+  useEffect(() => {
+    if (!isBranchReady) return;
+    let cancelled = false;
+    (async () => {
+      await loadCategories();
+      let attempts = 0;
+      const maxAttempts = 40;
+      while (!cancelled && attempts < maxAttempts) {
+        const cats = await window.electronAPI.getCategories();
+        if (cats.length > 0) {
+          await loadCategories();
+          break;
+        }
+        attempts += 1;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isBranchReady, loadCategories]);
+
+  // Arama aktifken tüm katalog hâlâ boşsa, yazmayı bıraktıktan sonra katalog yükle (tuş başına istek yok)
+  useEffect(() => {
+    if (!isBranchReady || !searchQuery.trim()) return;
+    if (allProducts.length > 0) return;
+    if (!window.electronAPI?.getProducts) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      (async () => {
+        try {
+          const all = await window.electronAPI.getProducts(null);
+          if (!cancelled) setAllProducts(Array.isArray(all) ? all : []);
+        } catch {
+          /* sessiz */
+        }
+      })();
+    }, 350);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [isBranchReady, searchQuery, allProducts.length]);
 
   // Arama sorgusuna göre ürünleri filtrele
   const filteredProducts = useMemo(() => {
     if (!searchQuery.trim()) {
       return products;
     }
-    const query = searchQuery.toLowerCase().trim();
+    const query = searchQuery.trim().toLocaleLowerCase('tr-TR');
     const sultan = activeBranch?.key === 'sultansomati';
     const yanExtras = sultan
       ? []
@@ -462,13 +516,29 @@ function App() {
           category_id: YAN_URUNLER_CATEGORY_ID,
           isYanUrun: true
         }));
-    const pool = [...allProducts, ...yanExtras];
-    return pool.filter((product) => product.name.toLowerCase().includes(query));
+    const seen = new Set();
+    const pool = [];
+    for (const p of [...allProducts, ...yanExtras]) {
+      const id = p?.id;
+      if (id === undefined || id === null || seen.has(id)) continue;
+      seen.add(id);
+      pool.push(p);
+    }
+    return pool.filter((product) =>
+      String(product?.name ?? '')
+        .toLocaleLowerCase('tr-TR')
+        .includes(query)
+    );
   }, [products, allProducts, searchQuery, yanUrunler, activeBranch?.key]);
 
   const refreshProducts = async () => {
     const cats = await window.electronAPI.getCategories();
     const sultan = activeBranch?.key === 'sultansomati';
+    const allProductsCategoryObj = {
+      id: ALL_PRODUCTS_CATEGORY_ID,
+      name: 'Tüm ürünler',
+      order_index: -1
+    };
     const yanUrunlerCategory = {
       id: YAN_URUNLER_CATEGORY_ID,
       name: 'Yan Ürünler',
@@ -476,10 +546,10 @@ function App() {
     };
 
     if (sultan) {
-      setCategories(filterYanUrunlerCategoriesForSultan([...cats]));
+      setCategories([allProductsCategoryObj, ...filterYanUrunlerCategoriesForSultan([...cats])]);
       setYanUrunler([]);
     } else {
-      setCategories([...cats, yanUrunlerCategory]);
+      setCategories([allProductsCategoryObj, ...cats, yanUrunlerCategory]);
       if (window.electronAPI && window.electronAPI.getYanUrunler) {
         const yanUrunlerList = await window.electronAPI.getYanUrunler();
         setYanUrunler(yanUrunlerList);
@@ -487,12 +557,13 @@ function App() {
     }
 
     const allProds = await window.electronAPI.getProducts(null);
-    setAllProducts(allProds);
+    const allList = Array.isArray(allProds) ? allProds : [];
+    setAllProducts(allList);
 
     let categoryToLoad = selectedCategory;
     const allCategories = sultan
-      ? filterYanUrunlerCategoriesForSultan([...cats])
-      : [...cats, yanUrunlerCategory];
+      ? [allProductsCategoryObj, ...filterYanUrunlerCategoriesForSultan([...cats])]
+      : [allProductsCategoryObj, ...cats, yanUrunlerCategory];
     if (allCategories.length > 0) {
       if (!categoryToLoad || !allCategories.find(c => c.id === categoryToLoad.id)) {
         categoryToLoad = allCategories[0];
@@ -506,9 +577,12 @@ function App() {
         }
       }
       
-      // Seçili kategorinin ürünlerini yenile
       if (categoryToLoad) {
-        await loadProducts(categoryToLoad.id);
+        if (categoryToLoad.id === ALL_PRODUCTS_CATEGORY_ID) {
+          setProducts(allList);
+        } else {
+          await loadProducts(categoryToLoad.id);
+        }
       }
     }
   };
@@ -563,7 +637,9 @@ function App() {
     setCurrentView('pos'); // Masa seçildiğinde pos view'a geç
     // İlk kategoriyi yükle
     if (categories.length > 0 && !selectedCategory) {
-      setSelectedCategory(categories[0]);
+      const first = categories[0];
+      setSelectedCategory(first);
+      loadProducts(first.id);
     }
   };
 
@@ -1121,9 +1197,13 @@ function App() {
     }
   };
 
+  const catalogProgressSultan =
+    (splashBranchKey || activeBranch?.key || selectedBranchKey || '').toLowerCase() === 'sultansomati';
+
   if (!showSplash && !isBranchReady && !branchGateResolved) {
     return (
       <>
+        <CatalogSyncProgressBar progress={catalogSyncProgress} sultanTheme={catalogProgressSultan} />
         {showExitSplash && (
           <ExitSplash onComplete={handleExitComplete} />
         )}
@@ -1138,6 +1218,7 @@ function App() {
   if (!showSplash && !isBranchReady && branchGateResolved) {
     return (
       <>
+        <CatalogSyncProgressBar progress={catalogSyncProgress} sultanTheme={catalogProgressSultan} />
         {showExitSplash && (
           <ExitSplash onComplete={handleExitComplete} />
         )}
@@ -1245,6 +1326,7 @@ function App() {
 
   return (
     <>
+      <CatalogSyncProgressBar progress={catalogSyncProgress} sultanTheme={catalogProgressSultan} />
       {showSplash && (
         <SplashScreen
           branchKey={splashBranchKey}
@@ -1311,20 +1393,32 @@ function App() {
         </div>
       ) : currentView === 'pos' ? (
         <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)]">
-          {/* Sol Panel - Kategoriler ve Ürünler */}
-          <div className="w-full lg:flex-1 flex flex-col p-4 overflow-hidden">
+          {/* Sol Panel — katalog (sabit tipografi, kurumsal düzen) */}
+          <div className="pos-catalog w-full lg:flex-1 flex flex-col px-3 py-3 sm:px-4 sm:py-4 lg:px-5 overflow-hidden">
             {selectedTable && (
-              <div className="mb-3 p-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-fuchsia-600 theme-sultan:to-green-600 text-white rounded-xl shadow-lg flex items-center justify-between">
-                <p className="text-base font-semibold">
-                  {isSuriciBranch ? 'Müşteri' : 'Masa'}: {selectedTable.name} için sipariş oluşturuyorsunuz
+              <div className="mb-3 rounded-[var(--pos-radius-lg)] border border-slate-200 bg-slate-900 text-white shadow-[0_4px_14px_rgba(15,23,42,0.18)] flex items-center justify-between gap-3 px-4 py-3 theme-sultan:border-emerald-900/40 theme-sultan:bg-emerald-950">
+                <p
+                  className="font-semibold min-w-0 leading-snug"
+                  style={{ fontSize: 'var(--pos-fs-input)' }}
+                >
+                  <span className="text-white/70 font-medium">
+                    {isSuriciBranch ? 'Müşteri' : 'Masa'}
+                  </span>
+                  <span className="mx-1.5 text-white/40">·</span>
+                  <span className="break-words">{selectedTable.name}</span>
+                  <span className="block sm:inline sm:ml-1 text-white/80 font-normal mt-0.5 sm:mt-0">
+                    için sipariş
+                  </span>
                 </p>
                 <button
+                  type="button"
                   onClick={() => {
                     setSelectedTable(null);
                     clearCart();
                   }}
-                  className="ml-4 p-1.5 hover:bg-white/20 rounded-lg transition-colors"
+                  className="shrink-0 min-h-[var(--pos-touch-min)] min-w-[var(--pos-touch-min)] flex items-center justify-center rounded-[var(--pos-radius-sm)] bg-white/10 hover:bg-white/20 transition-colors touch-manipulation"
                   title="Masa seçimini iptal et"
+                  aria-label="Masa seçimini iptal et"
                 >
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1332,7 +1426,7 @@ function App() {
                 </button>
               </div>
             )}
-            <div>
+            <div className="shrink-0">
               <CategoryPanel
                 categories={categories}
                 selectedCategory={selectedCategory}
@@ -1340,78 +1434,88 @@ function App() {
                 onSelectCategory={(category) => {
                   setSelectedCategory(category);
                   setSearchQuery('');
+                  loadProducts(category.id);
                 }}
               />
               {selectedCategory && selectedCategory.id === YAN_URUNLER_CATEGORY_ID && userType === 'Admin' && !isSultanBranch && (
-                <div className="mt-3 mb-3">
+                <div className="mt-3 mb-1">
                   <button
+                    type="button"
                     onClick={() => setShowYanUrunlerModal(true)}
-                    className="w-full px-4 py-2.5 bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-600 hover:to-amber-600 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center justify-center gap-2"
+                    className="w-full min-h-[var(--pos-touch-min)] px-4 rounded-[var(--pos-radius-md)] border-2 border-amber-300 bg-amber-50 text-amber-950 font-semibold hover:bg-amber-100 hover:border-amber-400 transition-colors flex items-center justify-center gap-2 shadow-sm"
+                    style={{ fontSize: 'var(--pos-fs-input)' }}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                     </svg>
-                    <span>Yan Ürünler Yönetimi</span>
+                    <span>Yan ürünler yönetimi</span>
                   </button>
                 </div>
               )}
             </div>
-            
-            {/* Arama Çubuğu ve (sadece Admin için) Masraf Ekle Butonu */}
-            <div className="mb-3 flex gap-2">
-              <div className="flex-1 relative">
+
+            <div className="mb-3 flex flex-col sm:flex-row gap-2 shrink-0">
+              <div className="flex-1 relative min-w-0">
                 <input
                   ref={searchInputRef}
-                  type="text"
+                  type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Ürün ara..."
-                  className="w-full px-3 py-2 pl-10 bg-white/90 backdrop-blur-xl border-2 border-pink-200 theme-sultan:border-emerald-200 rounded-lg shadow-md focus:outline-none focus:ring-2 focus:ring-pink-500 theme-sultan:focus:ring-emerald-500 focus:border-transparent text-gray-800 font-medium placeholder-gray-400 transition-all duration-200 text-sm"
+                  placeholder="Tüm kategorilerde ara…"
+                  autoComplete="off"
+                  className="w-full min-h-[var(--pos-touch-min)] pl-11 pr-10 bg-white border border-slate-200 rounded-[var(--pos-radius-md)] shadow-[0_1px_2px_rgba(15,23,42,0.04)] text-slate-900 font-medium placeholder:text-slate-400 transition-all focus:outline-none focus:ring-2 focus:ring-pink-500/30 focus:border-pink-400 theme-sultan:focus:ring-emerald-500/30 theme-sultan:focus:border-emerald-500"
+                  style={{ fontSize: 'var(--pos-fs-input)' }}
                 />
-                <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
-                  <svg className="w-4 h-4 text-pink-500 theme-sultan:text-pink-50 theme-sultan:text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                  <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
                 </div>
-                {searchQuery && (
+                {searchQuery ? (
                   <button
+                    type="button"
                     onClick={() => {
                       setSearchQuery('');
-                      if (searchInputRef.current) {
-                        searchInputRef.current.focus();
-                      }
+                      searchInputRef.current?.focus();
                     }}
-                    className="absolute right-3 top-1/2 transform -translate-y-1/2 p-1 hover:bg-pink-100 theme-sultan:hover:bg-pink-100 theme-sultan:bg-emerald-100 rounded-lg transition-colors"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 min-h-9 min-w-9 flex items-center justify-center rounded-[var(--pos-radius-sm)] text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
+                    aria-label="Aramayı temizle"
                   >
-                    <svg className="w-4 h-4 text-pink-500 theme-sultan:text-pink-50 theme-sultan:text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
-                )}
+                ) : null}
               </div>
               {userType === 'Admin' && (
                 <button
+                  type="button"
                   onClick={() => setShowExpenseModal(true)}
-                  className="px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-semibold rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2 whitespace-nowrap"
+                  className="min-h-[var(--pos-touch-min)] px-4 rounded-[var(--pos-radius-md)] bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors flex items-center justify-center gap-2 whitespace-nowrap shadow-sm theme-sultan:bg-emerald-800 theme-sultan:hover:bg-emerald-900"
+                  style={{ fontSize: 'var(--pos-fs-input)' }}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="w-[18px] h-[18px] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                   </svg>
-                  <span>Masraf Ekle</span>
+                  <span>Masraf ekle</span>
                 </button>
               )}
             </div>
-            {searchQuery && (
-              <p className="mb-3 text-xs text-gray-600 font-medium">
-                {filteredProducts.length > 0 
-                  ? `${filteredProducts.length} ürün bulundu` 
-                  : 'Ürün bulunamadı'}
+            {searchQuery ? (
+              <p
+                className="mb-2 text-slate-600 font-medium shrink-0"
+                style={{ fontSize: 'var(--pos-fs-meta)' }}
+              >
+                {filteredProducts.length > 0
+                  ? `Tüm kategorilerde ${filteredProducts.length} ürün bulundu`
+                  : 'Tüm kategorilerde eşleşen ürün yok'}
               </p>
-            )}
-            
+            ) : null}
+
             <ProductGrid
               products={filteredProducts}
               onAddToCart={addToCart}
+              isSearchMode={Boolean(searchQuery.trim())}
             />
           </div>
 

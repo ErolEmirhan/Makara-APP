@@ -1,168 +1,210 @@
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-const ProductGrid = ({ products, onAddToCart }) => {
+const INITIAL_VISIBLE = 48;
+const LOAD_MORE_STEP = 56;
+
+const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
+  const scrollRef = useRef(null);
+  const sentinelRef = useRef(null);
+  const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
+
+  useEffect(() => {
+    setVisibleCount(Math.min(INITIAL_VISIBLE, products.length));
+  }, [products]);
+
+  const visibleProducts = useMemo(
+    () => products.slice(0, Math.min(visibleCount, products.length)),
+    [products, visibleCount]
+  );
+
+  const loadMore = useCallback(() => {
+    setVisibleCount((c) => Math.min(c + LOAD_MORE_STEP, products.length));
+  }, [products.length]);
+
+  useEffect(() => {
+    if (visibleCount >= products.length) return;
+    const root = scrollRef.current;
+    const target = sentinelRef.current;
+    if (!root || !target) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) loadMore();
+      },
+      { root, rootMargin: '240px', threshold: 0 }
+    );
+    io.observe(target);
+    return () => io.disconnect();
+  }, [loadMore, visibleCount, products.length]);
+
+  if (!products.length) {
+    return (
+      <div
+        className="pos-catalog flex-1 flex flex-col items-center justify-center min-h-[12rem] rounded-[var(--pos-radius-lg)] border border-dashed border-slate-200 bg-slate-50/50 text-center px-6 py-10 theme-sultan:border-emerald-200/80"
+        role="status"
+      >
+        <p className="text-slate-500 font-medium" style={{ fontSize: 'var(--pos-fs-product)' }}>
+          {isSearchMode
+            ? 'Tüm kategorilerde eşleşen ürün yok.'
+            : 'Bu kategoride gösterilecek ürün yok.'}
+        </p>
+        <p className="text-slate-400 mt-2" style={{ fontSize: 'var(--pos-fs-meta)' }}>
+          {isSearchMode
+            ? 'Farklı bir arama deneyin veya aramayı temizleyip kategori seçin.'
+            : 'Başka bir kategori seçin.'}
+        </p>
+      </div>
+    );
+  }
+
+  const showSentinel = visibleCount < products.length;
 
   return (
-    <div className="flex-1 overflow-y-auto scrollbar-custom">
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pb-4">
-        {products.map((product) => {
-          // Sadece stok takibi yapılan ürünler için kontrol et
+    <div
+      ref={scrollRef}
+      className="pos-catalog flex-1 overflow-y-auto pos-catalog-scroll scrollbar-custom min-h-0"
+    >
+      <div
+        className="grid gap-2.5 pb-4 [grid-template-columns:repeat(auto-fill,minmax(10.5rem,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(11.25rem,1fr))] md:[grid-template-columns:repeat(auto-fill,minmax(12rem,1fr))]"
+        role="list"
+        aria-label="Ürün listesi"
+      >
+        {visibleProducts.map((product) => {
           const trackStock = product.trackStock === true;
           const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
           const isOutOfStock = trackStock && stock !== null && stock === 0;
-          
+
           return (
-            <div
+            <article
               key={product.id}
-              onClick={() => !isOutOfStock && onAddToCart(product)}
+              role="listitem"
               className={`
-                min-h-[7rem] bg-white rounded-2xl 
-                transition-all duration-300 flex flex-col
-                relative group overflow-hidden p-0
-                ${isOutOfStock 
-                  ? 'opacity-50 cursor-not-allowed bg-gray-50' 
-                  : 'cursor-pointer'
+                group relative flex flex-col rounded-[var(--pos-radius-md)] border bg-white overflow-hidden
+                transition-[box-shadow,transform,border-color] duration-200 ease-out touch-manipulation
+                ${
+                  isOutOfStock
+                    ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[0.2]'
+                    : 'border-slate-200/90 cursor-pointer hover:border-slate-300 hover:shadow-[0_6px_20px_-8px_rgba(15,23,42,0.14)] active:scale-[0.99] theme-sultan:hover:border-emerald-200/90'
                 }
               `}
               style={{
-                boxShadow: isOutOfStock 
-                  ? '0 1px 2px rgba(0,0,0,0.05)' 
-                  : '0 1px 3px rgba(0,0,0,0.08)'
+                boxShadow: isOutOfStock
+                  ? 'inset 0 1px 0 rgba(255,255,255,0.6)'
+                  : '0 1px 2px rgba(15, 23, 42, 0.05)',
               }}
             >
-              {/* Minimal Profesyonel Çerçeve */}
-              {!isOutOfStock && (
-                <>
-                  {/* Sade Border */}
-                  <div className="absolute inset-0 rounded-2xl border border-gray-200/60 pointer-events-none"></div>
-                  
-                  {/* Hover Border Efekti */}
-                  <div className="absolute inset-0 rounded-2xl border border-pink-300 theme-sultan:border-emerald-300/0 group-hover:border-pink-300 theme-sultan:group-hover:border-pink-300 theme-sultan:hover:border-pink-300 theme-sultan:border-emerald-300/40 transition-all duration-300 pointer-events-none"></div>
-                </>
-              )}
-              
-              {/* Tükendi Durumu Çerçeve */}
-              {isOutOfStock && (
-                <div className="absolute inset-0 rounded-2xl border border-gray-200/50 pointer-events-none"></div>
-              )}
-              
-              {/* Hover Shadow Efekti */}
-              {!isOutOfStock && (
-                <div className="absolute inset-0 rounded-2xl shadow-sm opacity-0 group-hover:opacity-100 group-hover:shadow-md transition-all duration-300 pointer-events-none"></div>
-              )}
-              
-              {/* Subtle Hover Background */}
-              {!isOutOfStock && (
-                <div className="absolute inset-0 bg-gray-50/0 group-hover:bg-gray-50/50 transition-all duration-300 rounded-2xl"></div>
-              )}
-              
-              {/* Sol Taraf - Minimal Profesyonel Accent */}
-              {!isOutOfStock && (
-                <>
-                  {/* Ana Accent Bar - Sade ve Modern */}
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-pink-500 theme-sultan:from-emerald-500 to-indigo-500 theme-sultan:to-teal-500 rounded-l-2xl"></div>
-                  
-                  {/* Subtle Inner Shadow - Derinlik Hissi */}
-                  <div className="absolute left-1 top-2 bottom-2 w-px bg-gradient-to-b from-pink-300 theme-sultan:from-emerald-300/40 to-transparent rounded-full"></div>
-                </>
-              )}
-              
-              <div className="relative z-10 flex flex-row items-center w-full pr-4">
-              {/* Ürün İsmi - Sol Taraf (tam görünsün, kesilmesin) - min-w-0 ile dar ekranda fiyat alanına yer bırakır */}
-              <div className="relative z-10 flex-1 flex items-center pl-6 pr-2 min-h-0 min-w-0 py-3">
-                <div className="min-w-0">
-                  <h3 className={`
-                    font-bold leading-tight text-left break-words
-                    ${isOutOfStock 
-                      ? 'text-gray-500 text-sm' 
-                      : 'text-gray-900 text-base group-hover:text-pink-800 theme-sultan:group-hover:text-pink-800 theme-sultan:hover:text-pink-800 theme-sultan:text-emerald-800 transition-colors duration-300'
-                    }
-                  `}>
-                    {product.name}
+              <button
+                type="button"
+                disabled={isOutOfStock}
+                onClick={() => !isOutOfStock && onAddToCart(product)}
+                className="flex flex-row flex-1 text-left w-full min-h-[var(--pos-touch-min)] disabled:cursor-not-allowed items-stretch min-w-0"
+              >
+                <div
+                  className={`w-1 shrink-0 self-stretch ${
+                    isOutOfStock
+                      ? 'bg-slate-300'
+                      : 'bg-gradient-to-b from-pink-500 to-indigo-600 theme-sultan:from-emerald-600 theme-sultan:to-teal-700'
+                  }`}
+                  aria-hidden
+                />
+
+                <div className="flex flex-col flex-1 min-w-0 py-3 pl-3 pr-3">
+                  <div className="flex items-start justify-between gap-2 min-w-0">
+                    <h3
+                      className={`font-semibold text-slate-900 break-words hyphens-auto flex-1 min-w-0 ${
+                        isOutOfStock ? 'text-slate-500' : ''
+                      }`}
+                      style={{ fontSize: 'var(--pos-fs-product)', lineHeight: 1.35 }}
+                    >
+                      {product.name}
+                    </h3>
+                    {!isOutOfStock && (
+                      <span
+                        className="shrink-0 tabular-nums font-bold text-slate-900 bg-slate-50 border border-slate-200/90 rounded-[var(--pos-radius-sm)] px-2 py-0.5 theme-sultan:bg-emerald-50/80 theme-sultan:border-emerald-200/60"
+                        style={{ fontSize: 'var(--pos-fs-price)', lineHeight: 1.2 }}
+                      >
+                        ₺{Number(product.price).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex flex-wrap gap-1 mt-1.5">
                     {product.per_person ? (
-                      <span className="block text-[11px] font-semibold text-amber-700 mt-0.5">Kişi başı</span>
+                      <span
+                        className="inline-flex rounded-[var(--pos-radius-sm)] bg-amber-100 text-amber-900 font-semibold px-1.5 py-0.5"
+                        style={{ fontSize: 'var(--pos-fs-overline)' }}
+                      >
+                        Kişi başı
+                      </span>
                     ) : null}
                     {product.gluten_free ? (
-                      <span className="block text-[10px] font-bold text-emerald-700 mt-0.5 uppercase tracking-wide">Glutensiz</span>
+                      <span
+                        className="inline-flex rounded-[var(--pos-radius-sm)] bg-emerald-100 text-emerald-900 font-bold uppercase tracking-wide px-1.5 py-0.5"
+                        style={{ fontSize: 'var(--pos-fs-overline)' }}
+                      >
+                        Glutensiz
+                      </span>
                     ) : null}
-                  </h3>
+                  </div>
+
                   {product.description ? (
-                    <p className="text-[11px] text-gray-500 leading-snug mt-1 line-clamp-3 text-left" title={product.description}>
+                    <p
+                      className="text-slate-500 mt-1.5 line-clamp-2 text-left"
+                      style={{ fontSize: 'var(--pos-fs-meta)', lineHeight: 1.4 }}
+                      title={product.description}
+                    >
                       {product.description}
                     </p>
                   ) : null}
-                </div>
-              </div>
-              
-              {/* Fiyat - Sağ Taraf (kart içinde kalır, taşmaz) */}
-              <div className="relative z-10 flex items-center justify-end flex-shrink-0 pl-2 pr-0 min-w-0">
-                <div className={`
-                  relative inline-flex items-center justify-center max-w-full
-                  transition-all duration-300
-                  ${isOutOfStock 
-                    ? 'opacity-50' 
-                    : 'group-hover:scale-[1.02]'
-                  }
-                `}>
-                  {/* Ana Fiyat Badge - kart sınırları içinde */}
-                  <span className={`
-                    relative font-extrabold tracking-tight text-center whitespace-nowrap
-                    px-3 py-1.5 rounded-lg text-sm
-                    transition-all duration-300
-                    ${isOutOfStock 
-                      ? 'text-gray-500 bg-gray-100 border border-gray-300' 
-                      : 'text-pink-800 theme-sultan:text-emerald-800 bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 via-indigo-50 theme-sultan:via-teal-50 to-pink-50 theme-sultan:to-emerald-50 border border-pink-200 theme-sultan:border-emerald-200/60 shadow-sm group-hover:shadow group-hover:from-pink-100 theme-sultan:group-hover:from-pink-100 theme-sultan:hover:from-pink-100 theme-sultan:from-emerald-100 group-hover:via-indigo-100 theme-sultan:group-hover:via-indigo-100 theme-sultan:hover:via-indigo-100 theme-sultan:via-teal-100 group-hover:to-pink-100 theme-sultan:group-hover:to-pink-100 theme-sultan:hover:to-pink-100 theme-sultan:to-emerald-100 group-hover:border-pink-300 theme-sultan:group-hover:border-pink-300 theme-sultan:hover:border-pink-300 theme-sultan:border-emerald-300/80'
-                    }
-                  `}>
-                    <span className="relative z-10">₺{product.price.toFixed(2)}</span>
-                  </span>
-                </div>
-              </div>
-              </div>
 
-              {product.image ? (
-                <div className="relative z-10 w-full px-3 pb-2 pt-0">
-                  <img
-                    src={product.image}
-                    alt=""
-                    className="w-full max-h-28 object-cover rounded-xl border border-gray-100"
-                  />
+                  <div className="mt-auto pt-2.5 flex items-center justify-between gap-2 border-t border-slate-100">
+                    {isOutOfStock ? (
+                      <span
+                        className="font-semibold text-slate-500 tabular-nums"
+                        style={{ fontSize: 'var(--pos-fs-meta)' }}
+                      >
+                        ₺{Number(product.price).toFixed(2)}
+                      </span>
+                    ) : (
+                      <span
+                        className="text-slate-400 font-medium"
+                        style={{ fontSize: 'var(--pos-fs-overline)' }}
+                      >
+                        Sepete eklemek için dokunun
+                      </span>
+                    )}
+                    {!isOutOfStock && (
+                      <span
+                        className="shrink-0 rounded-[var(--pos-radius-sm)] px-2 py-0.5 font-semibold text-pink-700 bg-pink-50 border border-pink-100 opacity-80 group-hover:opacity-100 transition-opacity theme-sultan:text-emerald-800 theme-sultan:bg-emerald-50 theme-sultan:border-emerald-100 max-sm:opacity-100"
+                        style={{ fontSize: 'var(--pos-fs-overline)' }}
+                      >
+                        Ekle
+                      </span>
+                    )}
+                  </div>
                 </div>
-              ) : null}
-              
-              {/* Stok Durumu Badge */}
+              </button>
+
               {isOutOfStock && (
-                <div className="absolute top-3 right-3 bg-red-500 text-white text-xs font-bold px-2.5 py-1 rounded-md shadow-sm z-20">
+                <div
+                  className="absolute top-2 right-2 rounded-[var(--pos-radius-sm)] bg-red-600 text-white font-bold px-2 py-1 shadow-md z-10"
+                  style={{ fontSize: 'var(--pos-fs-meta)' }}
+                >
                   Tükendi
                 </div>
               )}
-              
-              {/* Hover İndikatör - Alt Çizgi */}
-              {!isOutOfStock && (
-                <div className="absolute bottom-0 left-0 right-0 h-1 bg-gradient-to-r from-pink-400 theme-sultan:from-emerald-400 to-indigo-400 theme-sultan:to-teal-400 transform scale-x-0 group-hover:scale-x-100 transition-transform duration-300 origin-center rounded-b-2xl"></div>
-              )}
-            </div>
+            </article>
           );
         })}
+        {showSentinel ? (
+          <div
+            ref={sentinelRef}
+            className="col-span-full h-1 w-full shrink-0"
+            aria-hidden
+          />
+        ) : null}
       </div>
     </div>
   );
 };
 
-// PERFORMANS: React.memo ile gereksiz re-render'ları önle - özel karşılaştırma
-export default React.memo(ProductGrid, (prevProps, nextProps) => {
-  if (prevProps.products.length !== nextProps.products.length) return false;
-  if (prevProps.products.length === 0) return true;
-  return prevProps.products.every((p, i) => {
-    const n = nextProps.products[i];
-    return (
-      n &&
-      p.id === n.id &&
-      p.name === n.name &&
-      p.price === n.price &&
-      p.image === n.image &&
-      p.trackStock === n.trackStock &&
-      p.stock === n.stock
-    );
-  });
-});
+export default React.memo(ProductGrid);

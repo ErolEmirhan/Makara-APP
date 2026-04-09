@@ -10,7 +10,16 @@
   <link rel="manifest" href="__MOBILE_MANIFEST_HREF__">
   <link rel="icon" type="__ICON_MIME_TYPE__" href="__FAVICON_HREF__">
   <link rel="apple-touch-icon" href="__APPLE_TOUCH_ICON_HREF__">
+  <meta name="mobile-web-app-capable" content="yes">
   <title>__PAGE_TITLE__</title>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function() {
+        navigator.serviceWorker.register('/mobile-sw.js', { scope: '/mobile' })
+          .catch(function() {});
+      });
+    }
+  </script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html {
@@ -332,22 +341,22 @@
       padding-right: 5px;
     }
     /* Scrollable container for products */
-    #orderSection > div:last-child {
+    #productsGridScrollWrap {
       scrollbar-width: thin;
       scrollbar-color: #a855f7 #f1f1f1;
     }
-    #orderSection > div:last-child::-webkit-scrollbar {
+    #productsGridScrollWrap::-webkit-scrollbar {
       width: 6px;
     }
-    #orderSection > div:last-child::-webkit-scrollbar-track {
+    #productsGridScrollWrap::-webkit-scrollbar-track {
       background: #f1f1f1;
       border-radius: 10px;
     }
-    #orderSection > div:last-child::-webkit-scrollbar-thumb {
+    #productsGridScrollWrap::-webkit-scrollbar-thumb {
       background: #a855f7;
       border-radius: 10px;
     }
-    #orderSection > div:last-child::-webkit-scrollbar-thumb:hover {
+    #productsGridScrollWrap::-webkit-scrollbar-thumb:hover {
       background: #9333ea;
     }
     .product-card {
@@ -1481,6 +1490,23 @@
     body.sultan-mobile .table-btn.has-order .table-number {
       font-size: 30px !important;
     }
+    body.sultan-mobile .sultan-table-total {
+      font-size: clamp(0.82rem, 4.5vw, 1.38rem) !important;
+      font-weight: 800 !important;
+      color: #ecfdf5 !important;
+      margin-top: 5px !important;
+      line-height: 1.1 !important;
+      text-align: center !important;
+      width: 100% !important;
+      max-width: 100% !important;
+      padding: 0 3px !important;
+      box-sizing: border-box !important;
+      white-space: nowrap !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      font-variant-numeric: tabular-nums !important;
+      letter-spacing: -0.03em !important;
+    }
     body.sultan-mobile .pin-btn {
       background: linear-gradient(135deg, #059669 0%, #0d9488 100%) !important;
     }
@@ -1606,32 +1632,934 @@
       border-color: #cbd5e1 !important;
       background: #fafafa !important;
     }
+    /* Sultan: normal sipariş ekranında satır içi arama yerine "Ürün ara" butonu */
+    #sultanSearchLaunchRow {
+      display: none;
+    }
+    body.sultan-mobile #sultanInlineSearchRow {
+      display: none !important;
+    }
+    body.sultan-mobile #sultanSearchLaunchRow {
+      display: block !important;
+    }
+    .sultan-search-launch-btn {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 16px 18px;
+      border: none;
+      border-radius: 16px;
+      font-size: 16px;
+      font-weight: 800;
+      color: #fff;
+      cursor: pointer;
+      background: linear-gradient(135deg, #059669 0%, #0d9488 100%);
+      box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
+      transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.22s ease;
+    }
+    .sultan-search-launch-btn:active {
+      transform: scale(0.98);
+    }
+    /* Tam ekran odaklı arama (sadece arama + sonuçlar) */
+    .sultan-immersive-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 10050;
+      flex-direction: column;
+      background: rgba(248, 250, 252, 0.92);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .sultan-immersive-overlay.sultan-immersive-overlay--open {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .sultan-immersive-overlay__panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      background: #ffffff;
+      border-radius: 0 0 22px 22px;
+      box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
+      transform: translateY(-100%);
+      transition: transform 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .sultan-immersive-overlay.sultan-immersive-overlay--open .sultan-immersive-overlay__panel {
+      transform: translateY(0);
+    }
+    .sultan-immersive-overlay__header {
+      flex-shrink: 0;
+      padding: calc(10px + env(safe-area-inset-top, 0px)) 14px 12px;
+      background: linear-gradient(180deg, #ecfdf5 0%, #ffffff 100%);
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .sultan-immersive-overlay__close {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 10px 14px;
+      border: none;
+      border-radius: 12px;
+      background: #f1f5f9;
+      color: #0f172a;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background 0.2s ease;
+    }
+    .sultan-immersive-overlay__close:active {
+      background: #e2e8f0;
+    }
+    .sultan-immersive-overlay__input-wrap {
+      position: relative;
+    }
+    .sultan-immersive-overlay__input-wrap svg {
+      position: absolute;
+      left: 18px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #64748b;
+      pointer-events: none;
+    }
+    #sultanImmersiveSearchInput {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 16px 16px 16px 52px;
+      border: 2px solid #d1fae5;
+      border-radius: 16px;
+      font-size: 17px;
+      font-weight: 600;
+      background: #ffffff;
+      color: #0f172a;
+      outline: none;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+    #sultanImmersiveSearchInput:focus {
+      border-color: #10b981;
+      box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.2);
+    }
+    .sultan-immersive-overlay__body {
+      flex: 1;
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
+      -webkit-overflow-scrolling: touch;
+      padding: 14px 14px calc(24px + env(safe-area-inset-bottom, 0px));
+    }
+    /* Arama modunda sabit sepet üstte kalsın (kapalı şerit ~56px + pay) */
+    body.sultan-immersive-search-open .cart {
+      z-index: 10060 !important;
+    }
+    body.sultan-immersive-search-open .sultan-immersive-overlay__body {
+      padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    }
+    body.sultan-mobile #productsGridScrollWrap.sultan-grid-placeholder {
+      min-height: 120px;
+    }
+    /* —— Sultan Somatı: baştan tasarlanan tam ekran login + kurumsal splash —— */
+    .sultan-login-hero,
+    .sultan-login-status,
+    .sultan-login-footnote,
+    .sultan-input-label,
+    .splash-screen__noise,
+    .splash-badge {
+      display: none;
+    }
+    html.sultan-mobile-root {
+      background: #08111f !important;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth {
+      background: #08111f !important;
+      background-image:
+        radial-gradient(circle at 50% -10%, rgba(45, 212, 191, 0.26) 0%, transparent 38%),
+        radial-gradient(circle at 100% 100%, rgba(16, 185, 129, 0.16) 0%, transparent 34%),
+        linear-gradient(180deg, #08111f 0%, #0b1628 34%, #0b1f1a 100%) !important;
+      padding: 0 !important;
+      min-height: 100dvh;
+      min-height: 100svh;
+      color: #f8fafc;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth .container {
+      background: transparent !important;
+      box-shadow: none !important;
+      padding: 0 !important;
+      margin: 0 !important;
+      max-width: none !important;
+      width: 100% !important;
+      min-height: 100dvh;
+      min-height: 100svh;
+      border-radius: 0 !important;
+      border: none !important;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      min-height: 100dvh;
+      min-height: 100svh;
+      padding: calc(18px + env(safe-area-inset-top, 0px)) 24px calc(24px + env(safe-area-inset-bottom, 0px));
+      background: transparent;
+      border: none;
+      border-radius: 0;
+      box-shadow: none;
+      overflow: hidden;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section::before {
+      display: none;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section::after {
+      content: '';
+      position: absolute;
+      left: -18%;
+      right: -18%;
+      bottom: -14%;
+      height: 42%;
+      background: radial-gradient(ellipse at center, rgba(15, 118, 110, 0.18) 0%, transparent 70%);
+      pointer-events: none;
+      filter: blur(18px);
+    }
+    html.sultan-mobile-root .sultan-login-hero {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      position: relative;
+      width: 100%;
+      max-width: 460px;
+      margin: 0 auto;
+      padding-top: clamp(14px, 7vh, 56px);
+      z-index: 1;
+    }
+    html.sultan-mobile-root .sultan-login-hero__glow {
+      position: absolute;
+      width: 240px;
+      height: 240px;
+      top: -20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: radial-gradient(circle, rgba(45, 212, 191, 0.25) 0%, transparent 68%);
+      pointer-events: none;
+      filter: blur(4px);
+      animation: sultanLoginGlow 4.5s ease-in-out infinite;
+    }
+    @keyframes sultanLoginGlow {
+      0%, 100% { opacity: 0.72; transform: translateX(-50%) scale(1); }
+      50% { opacity: 1; transform: translateX(-50%) scale(1.08); }
+    }
+    html.sultan-mobile-root .sultan-login-hero__mark {
+      position: relative;
+      width: 88px;
+      height: 88px;
+      border-radius: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #ecfeff;
+      background:
+        linear-gradient(145deg, rgba(255,255,255,0.12), rgba(255,255,255,0.02)),
+        linear-gradient(145deg, #14b8a6 0%, #10b981 52%, #047857 100%);
+      box-shadow:
+        0 20px 48px rgba(16, 185, 129, 0.36),
+        0 0 0 1px rgba(255,255,255,0.12) inset,
+        0 10px 26px rgba(8, 17, 31, 0.45);
+      margin-bottom: 22px;
+      animation: sultanLoginMarkIn 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes sultanLoginMarkIn {
+      from {
+        opacity: 0;
+        transform: translateY(18px) scale(0.92);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+    }
+    html.sultan-mobile-root .sultan-login-hero__titles {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: center;
+    }
+    html.sultan-mobile-root .sultan-login-hero__brand {
+      font-size: clamp(1.55rem, 5vw, 2rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: #f8fafc;
+      line-height: 1.08;
+      text-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    }
+    html.sultan-mobile-root .sultan-login-hero__sub {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: #99f6e4;
+      opacity: 0.95;
+    }
+    html.sultan-mobile-root .sultan-login-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 18px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid rgba(153, 246, 228, 0.18);
+      background: rgba(15, 23, 42, 0.34);
+      color: #d1fae5;
+      font-size: 13px;
+      font-weight: 700;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section > .pin-form-stack {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 460px;
+      margin: auto auto 0;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section h2 {
+      font-size: clamp(1.6rem, 5.3vw, 1.95rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      color: #f8fafc;
+      margin-bottom: 10px;
+      text-align: left;
+      line-height: 1.12;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .subtitle {
+      color: #cbd5e1;
+      font-size: 15px;
+      margin-bottom: 26px;
+      font-weight: 500;
+      text-align: left;
+      line-height: 1.5;
+      max-width: 30ch;
+    }
+    html.sultan-mobile-root .sultan-input-label {
+      display: block;
+      margin-bottom: 10px;
+      color: #e2e8f0;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-input-wrapper {
+      max-width: none;
+      width: 100%;
+      margin-bottom: 18px;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-input {
+      width: 100%;
+      border-radius: 20px;
+      border: 1px solid rgba(148, 163, 184, 0.24);
+      background:
+        linear-gradient(180deg, rgba(15, 23, 42, 0.88) 0%, rgba(15, 23, 42, 0.72) 100%);
+      padding: 18px 20px;
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      color: #f8fafc !important;
+      -webkit-text-fill-color: #f8fafc !important;
+      box-shadow:
+        0 10px 24px rgba(2, 8, 23, 0.28),
+        0 0 0 1px rgba(255,255,255,0.03) inset;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-input::placeholder {
+      color: #94a3b8 !important;
+      -webkit-text-fill-color: #94a3b8 !important;
+      letter-spacing: 0.01em;
+      opacity: 1;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-input:focus {
+      border-color: rgba(94, 234, 212, 0.76);
+      background: linear-gradient(180deg, rgba(15, 23, 42, 0.94) 0%, rgba(15, 23, 42, 0.82) 100%);
+      box-shadow:
+        0 0 0 4px rgba(45, 212, 191, 0.18),
+        0 14px 34px rgba(15, 23, 42, 0.34);
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-input:-webkit-autofill,
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-input:-webkit-autofill:hover,
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-input:-webkit-autofill:focus {
+      -webkit-box-shadow: 0 0 0 50px rgba(15, 23, 42, 0.92) inset;
+      box-shadow: 0 0 0 50px rgba(15, 23, 42, 0.92) inset;
+      -webkit-text-fill-color: #f8fafc !important;
+      caret-color: #f8fafc;
+      border-color: rgba(94, 234, 212, 0.28);
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-section__actions {
+      width: 100%;
+      max-width: none !important;
+      margin: 6px 0 24px;
+      gap: 12px;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-section__actions label {
+      flex: 1;
+      min-width: 0;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-section__actions label span {
+      color: #e2e8f0 !important;
+      font-size: 14px !important;
+      font-weight: 600 !important;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section input[type="checkbox"] {
+      accent-color: #2dd4bf !important;
+      width: 20px !important;
+      height: 20px !important;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-section__actions button {
+      color: #99f6e4 !important;
+      font-size: 14px !important;
+      font-weight: 700 !important;
+      text-decoration: none !important;
+      padding: 0 !important;
+      white-space: nowrap;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-btn {
+      width: 100%;
+      max-width: none;
+      border-radius: 20px;
+      padding: 18px 24px;
+      font-size: 17px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #2dd4bf 0%, #10b981 42%, #047857 100%);
+      color: #f8fffe;
+      box-shadow:
+        0 18px 38px rgba(5, 150, 105, 0.34),
+        0 10px 18px rgba(8, 17, 31, 0.24);
+      letter-spacing: 0.02em;
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-btn:hover {
+      background: linear-gradient(135deg, #14b8a6 0%, #059669 100%);
+    }
+    html.sultan-mobile-root body.sultan-mobile.sultan-staff-auth #pinSection.pin-section .pin-error {
+      border-radius: 16px;
+      border: 1px solid rgba(252, 165, 165, 0.42);
+      background: rgba(127, 29, 29, 0.18);
+      color: #fee2e2;
+      font-size: 14px;
+      font-weight: 600;
+      margin-top: 16px;
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+    html.sultan-mobile-root .sultan-login-footnote {
+      display: block;
+      margin-top: 18px;
+      color: #94a3b8;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 1.5;
+      text-align: left;
+      opacity: 0.95;
+    }
+    /* Splash — Sultan */
+    html.sultan-mobile-root .splash-screen {
+      background: #0c1222;
+      background-image:
+        radial-gradient(ellipse 100% 70% at 50% 0%, rgba(16, 185, 129, 0.22) 0%, transparent 55%),
+        linear-gradient(180deg, #0c1222 0%, #0f172a 50%, #022c22 100%);
+    }
+    html.sultan-mobile-root .splash-screen__noise {
+      display: block;
+      position: absolute;
+      inset: 0;
+      opacity: 0.04;
+      pointer-events: none;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    }
+    html.sultan-mobile-root .splash-content {
+      position: relative;
+      z-index: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 48px 32px;
+      max-width: 420px;
+    }
+    html.sultan-mobile-root .splash-badge {
+      display: inline-block;
+      margin-bottom: 20px;
+      padding: 8px 16px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: rgba(226, 232, 240, 0.95);
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(148, 163, 184, 0.25);
+    }
+    html.sultan-mobile-root .splash-icon {
+      width: 108px;
+      height: 108px;
+      margin-bottom: 28px;
+      background: linear-gradient(145deg, #34d399 0%, #059669 50%, #0d9488 100%);
+      box-shadow:
+        0 16px 48px rgba(5, 150, 105, 0.45),
+        0 0 0 1px rgba(255, 255, 255, 0.15) inset;
+    }
+    html.sultan-mobile-root .splash-icon::before {
+      background: linear-gradient(135deg, #34d399, #10b981);
+      opacity: 0.35;
+      filter: blur(20px);
+    }
+    html.sultan-mobile-root .splash-title {
+      color: #f1f5f9;
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      margin-bottom: 12px;
+    }
+    html.sultan-mobile-root .splash-name {
+      color: #94a3b8;
+      font-size: 17px;
+      font-weight: 600;
+      margin-bottom: 40px;
+    }
+    html.sultan-mobile-root .splash-loader {
+      height: 4px;
+      background: rgba(148, 163, 184, 0.2);
+      border-radius: 999px;
+      max-width: 280px;
+    }
+    html.sultan-mobile-root .splash-loader-bar {
+      background: linear-gradient(90deg, #059669 0%, #34d399 50%, #059669 100%);
+      background-size: 200% 100%;
+      box-shadow: 0 0 20px rgba(52, 211, 153, 0.5);
+    }
+
+    /* ===========================
+       APP HEADER
+       =========================== */
+    #appHeader {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 58px;
+      z-index: 9500;
+      display: none;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px 0 16px;
+      padding-top: env(safe-area-inset-top, 0px);
+      background: linear-gradient(135deg, #7c3aed 0%, #ec4899 100%);
+      box-shadow: 0 2px 16px rgba(0,0,0,0.18);
+    }
+    body.sultan-mobile #appHeader {
+      background: linear-gradient(135deg, #064e3b 0%, #059669 100%);
+    }
+    body.makara-mobile #appHeader {
+      background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
+    }
+    #appHeader.visible {
+      display: flex;
+    }
+    .app-header__brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .app-header__icon {
+      width: 32px;
+      height: 32px;
+      background: rgba(255,255,255,0.18);
+      border: 1.5px solid rgba(255,255,255,0.25);
+      border-radius: 9px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .app-header__texts {
+      min-width: 0;
+    }
+    .app-header__title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.2px;
+      line-height: 1.15;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .app-header__sub {
+      font-size: 10px;
+      color: rgba(255,255,255,0.65);
+      font-weight: 500;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      line-height: 1;
+    }
+    .app-header__hamburger {
+      width: 40px;
+      height: 40px;
+      background: rgba(255,255,255,0.12);
+      border: 1.5px solid rgba(255,255,255,0.22);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 4.5px;
+      cursor: pointer;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .app-header__hamburger:hover,
+    .app-header__hamburger:active {
+      background: rgba(255,255,255,0.22);
+    }
+    .app-header__hamburger span {
+      display: block;
+      width: 17px;
+      height: 2px;
+      background: #fff;
+      border-radius: 2px;
+    }
+
+    /* ===========================
+       DRAWER
+       =========================== */
+    #drawerOverlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 10500;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.28s;
+      backdrop-filter: blur(2px);
+      -webkit-backdrop-filter: blur(2px);
+    }
+    #drawerOverlay.open {
+      opacity: 1;
+      pointer-events: all;
+    }
+    #drawerPanel {
+      position: fixed;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 290px;
+      max-width: 88vw;
+      z-index: 10501;
+      background: #fff;
+      transform: translateX(105%);
+      transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow: -8px 0 48px rgba(0,0,0,0.2);
+      border-radius: 22px 0 0 22px;
+    }
+    #drawerPanel.open {
+      transform: translateX(0);
+    }
+    .drawer-head {
+      padding: max(20px, env(safe-area-inset-top, 20px)) 20px 22px;
+      background: linear-gradient(145deg, #7c3aed 0%, #ec4899 100%);
+      position: relative;
+      flex-shrink: 0;
+    }
+    body.sultan-mobile .drawer-head {
+      background: linear-gradient(145deg, #064e3b 0%, #059669 100%);
+    }
+    body.makara-mobile .drawer-head {
+      background: linear-gradient(145deg, #7c3aed 0%, #a855f7 100%);
+    }
+    .drawer-close-btn {
+      position: absolute;
+      top: max(14px, calc(env(safe-area-inset-top, 0px) + 14px));
+      right: 14px;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.18);
+      border: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      transition: background 0.2s;
+      color: white;
+    }
+    .drawer-close-btn:hover { background: rgba(255,255,255,0.28); }
+    .drawer-avatar {
+      width: 58px;
+      height: 58px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      border: 2.5px solid rgba(255,255,255,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      font-weight: 800;
+      color: #fff;
+      letter-spacing: -1px;
+      margin-bottom: 10px;
+      margin-top: 6px;
+      flex-shrink: 0;
+    }
+    .drawer-staff-name {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 3px;
+      line-height: 1.2;
+    }
+    .drawer-staff-role {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.75);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.9px;
+      background: rgba(255,255,255,0.15);
+      padding: 3px 8px;
+      border-radius: 20px;
+    }
+    .drawer-menu {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 0 0;
+      -webkit-overflow-scrolling: touch;
+    }
+    .drawer-section-label {
+      padding: 10px 20px 4px;
+      font-size: 10px;
+      font-weight: 700;
+      color: #9ca3af;
+      text-transform: uppercase;
+      letter-spacing: 1.2px;
+    }
+    .drawer-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 13px 20px;
+      cursor: pointer;
+      transition: background 0.15s, transform 0.1s;
+      border: none;
+      background: none;
+      width: 100%;
+      text-align: left;
+      font-size: 15px;
+      font-weight: 600;
+      color: #1f2937;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .drawer-item:hover { background: #f9fafb; }
+    .drawer-item:active { background: #f3f4f6; transform: scale(0.99); }
+    .drawer-item__icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .drawer-item__icon svg { width: 19px; height: 19px; }
+    .drawer-item__label { flex: 1; }
+    .drawer-divider {
+      height: 1px;
+      background: #f3f4f6;
+      margin: 5px 20px;
+    }
+    .drawer-footer {
+      padding: 10px 16px;
+      padding-bottom: max(14px, env(safe-area-inset-bottom, 14px));
+      border-top: 1px solid #f3f4f6;
+      flex-shrink: 0;
+    }
+    .drawer-logout-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 12px 16px;
+      cursor: pointer;
+      transition: background 0.15s;
+      border: 1.5px solid #fee2e2;
+      background: #fff5f5;
+      width: 100%;
+      text-align: left;
+      font-size: 14px;
+      font-weight: 600;
+      color: #ef4444;
+      border-radius: 13px;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .drawer-logout-item:hover { background: #fee2e2; }
   </style>
 </head>
 <body>
+  <script>
+  (function () {
+    var MOBILE_BRANCH_KEY = __MOBILE_BRANCH_KEY_JSON__;
+    if (MOBILE_BRANCH_KEY === 'sultansomati') {
+      document.documentElement.classList.add('sultan-mobile-root');
+      document.body.classList.add('sultan-mobile', 'sultan-staff-auth');
+    } else if (MOBILE_BRANCH_KEY === 'makara') {
+      document.documentElement.classList.add('makara-mobile-root');
+      document.body.classList.add('makara-mobile');
+    }
+  })();
+  </script>
+  <!-- App Header: Giriş sonrası sabit üst bar -->
+  <div id="appHeader">
+    <div class="app-header__brand">
+      <div class="app-header__icon" aria-hidden="true">
+        <svg width="15" height="15" fill="none" stroke="white" viewBox="0 0 24 24" stroke-width="2.2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 2L4 6v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z"/>
+        </svg>
+      </div>
+      <div class="app-header__texts">
+        <div class="app-header__title" id="appHeaderTitle">Mobil Personel</div>
+        <div class="app-header__sub">Sipariş Sistemi</div>
+      </div>
+    </div>
+    <button class="app-header__hamburger" onclick="openDrawer()" aria-label="Menü aç">
+      <span></span>
+      <span></span>
+      <span></span>
+    </button>
+  </div>
+
+  <!-- Drawer Overlay (tıklanınca kapanır) -->
+  <div id="drawerOverlay" onclick="closeDrawer()"></div>
+
+  <!-- Drawer Panel -->
+  <div id="drawerPanel" role="dialog" aria-modal="true" aria-label="Menü">
+    <div class="drawer-head">
+      <button class="drawer-close-btn" onclick="closeDrawer()" aria-label="Menüyü kapat">
+        <svg width="15" height="15" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+      <div class="drawer-avatar" id="drawerAvatar">?</div>
+      <div class="drawer-staff-name" id="drawerStaffName">—</div>
+      <div class="drawer-staff-role" id="drawerStaffRole">Personel</div>
+    </div>
+
+    <div class="drawer-menu">
+      <!-- Hesap -->
+      <div class="drawer-section-label">Hesap</div>
+      <button class="drawer-item" onclick="closeDrawer(); setTimeout(showChangePasswordModal, 280);">
+        <span class="drawer-item__icon" style="background:#ede9fe;">
+          <svg fill="none" stroke="#7c3aed" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Şifre Değiştir</span>
+      </button>
+
+      <div class="drawer-divider"></div>
+
+      <!-- İşlemler -->
+      <div class="drawer-section-label">İşlemler</div>
+      <button class="drawer-item" onclick="closeDrawer(); setTimeout(refreshAllData, 280);">
+        <span class="drawer-item__icon" style="background:#e0f2fe;">
+          <svg fill="none" stroke="#0284c7" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Yenile</span>
+      </button>
+      <button class="drawer-item" onclick="closeDrawer(); setTimeout(showTransferModal, 280);">
+        <span class="drawer-item__icon" style="background:#e0e7ff;">
+          <svg fill="none" stroke="#4f46e5" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Masa Aktar</span>
+      </button>
+      <button class="drawer-item" id="drawerMergeBtn" style="display:none;" onclick="closeDrawer(); setTimeout(showMergeModal, 280);">
+        <span class="drawer-item__icon" style="background:#d1fae5;">
+          <svg fill="none" stroke="#059669" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Masa Birleştir</span>
+      </button>
+    </div>
+
+    <div class="drawer-footer">
+      <button class="drawer-logout-item" onclick="closeDrawer(); setTimeout(showLogoutModal, 280);">
+        <span class="drawer-item__icon" style="background:#fee2e2; border-radius:11px; width:38px; height:38px; flex-shrink:0;">
+          <svg width="19" height="19" fill="none" stroke="#ef4444" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
+          </svg>
+        </span>
+        Çıkış Yap
+      </button>
+    </div>
+  </div>
+
   <div class="container">
     <!-- PIN Giriş Ekranı - Kurumsal ve Profesyonel -->
     <div id="pinSection" class="pin-section">
+      <div class="sultan-login-hero" aria-hidden="true">
+        <div class="sultan-login-hero__glow"></div>
+        <div class="sultan-login-hero__mark">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M12 2L4 6v6c0 5.55 3.84 10.74 8 12 4.16-1.26 8-6.45 8-12V6l-8-4z" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"/>
+            <path d="M8.5 12.5l2.2 2.2L15.5 9" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </div>
+        <div class="sultan-login-hero__titles">
+          <span class="sultan-login-hero__brand">Sultan Somatı</span>
+          <span class="sultan-login-hero__sub">Mobil personel</span>
+        </div>
+        <div class="sultan-login-status">
+          <span>Güvenli kurumsal erişim</span>
+        </div>
+      </div>
       __PIN_LOGIN_IMAGE_BLOCK__
-      <h2>Personel Girişi</h2>
-      <p class="subtitle">Lütfen şifrenizi giriniz</p>
-      <div class="pin-input-wrapper">
-        <input type="password" id="pinInput" class="pin-input" placeholder="Şifrenizi giriniz" maxlength="20" autocomplete="off" onkeypress="if(event.key === 'Enter') verifyStaffPin()">
+      <div class="pin-form-stack">
+        <h2>Personel Girişi</h2>
+        <p class="subtitle">Hesabınıza erişmek için personel şifrenizi girin.</p>
+        <label class="sultan-input-label" for="pinInput">Personel şifresi</label>
+        <div class="pin-input-wrapper">
+          <input type="password" id="pinInput" class="pin-input" placeholder="Şifrenizi giriniz" maxlength="20" autocomplete="off" onkeypress="if(event.key === 'Enter') verifyStaffPin()">
+        </div>
+        
+        <!-- Beni Hatırla ve Şifre Değiştir -->
+        <div class="pin-section__actions" style="display: flex; justify-content: space-between; align-items: center; width: 100%; max-width: 300px; margin: 15px auto 20px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #666;">
+            <input type="checkbox" id="rememberMe" style="width: 18px; height: 18px; cursor: pointer; accent-color: #8b5cf6;">
+            <span>Beni Hatırla</span>
+          </label>
+          <button type="button" onclick="showChangePasswordModal()" style="background: none; border: none; color: #8b5cf6; font-size: 14px; cursor: pointer; text-decoration: underline; padding: 0;">
+            Şifre Değiştir
+          </button>
+        </div>
+        
+        <button onclick="verifyStaffPin()" class="pin-btn">Giriş Yap</button>
+        <p id="pinError" class="pin-error"></p>
+        <p class="sultan-login-footnote">Bu ekran yalnızca Sultan Somatı mobil personel kullanımı icindir.</p>
       </div>
-      
-      <!-- Beni Hatırla ve Şifre Değiştir -->
-      <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; max-width: 300px; margin: 15px auto 20px;">
-        <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #666;">
-          <input type="checkbox" id="rememberMe" style="width: 18px; height: 18px; cursor: pointer; accent-color: #8b5cf6;">
-          <span>Beni Hatırla</span>
-        </label>
-        <button onclick="showChangePasswordModal()" style="background: none; border: none; color: #8b5cf6; font-size: 14px; cursor: pointer; text-decoration: underline; padding: 0;">
-          Şifre Değiştir
-        </button>
-      </div>
-      
-      <button onclick="verifyStaffPin()" class="pin-btn">Giriş Yap</button>
-      <p id="pinError" class="pin-error"></p>
     </div>
     
     <!-- Şifre Değiştir Modal -->
@@ -1664,13 +2592,15 @@
     
     <!-- Splash Screen - Giriş Sonrası Hoş Geldiniz -->
     <div id="splashScreen" class="splash-screen" style="display: none;">
+      <div class="splash-screen__noise" aria-hidden="true"></div>
       <div class="splash-content">
+        <div class="splash-badge" aria-hidden="true">Sultan Somatı</div>
         <div class="splash-icon">
           <svg width="48" height="48" fill="none" stroke="white" viewBox="0 0 24 24" stroke-width="2.5">
             <path stroke-linecap="round" stroke-linejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
         </div>
-        <h1 class="splash-title">İyi Çalışmalar Dileriz</h1>
+        <h1 class="splash-title">İyi çalışmalar dileriz</h1>
         <p class="splash-name" id="splashStaffName"></p>
         <div class="splash-loader">
           <div class="splash-loader-bar"></div>
@@ -1679,9 +2609,9 @@
     </div>
     
     <!-- Ana Sipariş Ekranı -->
-    <div id="mainSection" style="display: none; padding-top: 60px;">
-      <!-- Çıkış Yap Butonu - Sol Üst (masalar ekranında görünecek) -->
-      <button class="logout-btn" id="mainLogoutBtn" onclick="showLogoutModal()" title="Çıkış Yap" style="display: none;">
+    <div id="mainSection" style="display: none; padding-top: 68px;">
+      <!-- Eski logout butonu gizli tutulur - çıkış artık drawer menüde -->
+      <button class="logout-btn" id="mainLogoutBtn" onclick="showLogoutModal()" title="Çıkış Yap" style="display: none !important;">
         <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
           <path stroke-linecap="round" stroke-linejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/>
         </svg>
@@ -1693,42 +2623,10 @@
       </div>
       
       <div id="tableSelection" style="display: block;">
-        <!-- Geri Dönüş Butonu (gizli - tek ekran) -->
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
-          <button onclick="goBackToTypeSelection()" style="display: none; align-items: center; gap: 8px; padding: 10px 16px; background: linear-gradient(135deg, #6b7280 0%, #4b5563 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(107, 114, 128, 0.3); transition: all 0.3s; cursor: pointer;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(107, 114, 128, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(107, 114, 128, 0.3)'">
-            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"/>
-            </svg>
-            Geri Dön
-          </button>
-          
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <!-- Yenile Butonu -->
-            <button onclick="refreshAllData()" id="refreshDataBtn" style="display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: linear-gradient(135deg, #06b6d4 0%, #0891b2 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(6, 182, 212, 0.3); transition: all 0.3s; cursor: pointer;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(6, 182, 212, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(6, 182, 212, 0.3)'">
-              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
-              </svg>
-              Yenile
-          </button>
-          
-          <!-- Masa Aktar Butonu -->
-          <button onclick="showTransferModal()" class="transfer-table-btn" style="display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: linear-gradient(135deg, #4f46e5 0%, #2563eb 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3); transition: all 0.3s; cursor: pointer;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(79, 70, 229, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(79, 70, 229, 0.3)'">
-            <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
-            </svg>
-            Masa Aktar
-          </button>
-            
-            
-            <!-- Masa Birleştir Butonu (Sadece Müdür) -->
-            <button onclick="showMergeModal()" id="mergeTableBtn" class="merge-table-btn" style="display: none; align-items: center; gap: 8px; padding: 10px 16px; background: linear-gradient(135deg, #10b981 0%, #059669 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3); transition: all 0.3s; cursor: pointer;" onmouseover="this.style.transform='scale(1.05)'; this.style.boxShadow='0 6px 16px rgba(16, 185, 129, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(16, 185, 129, 0.3)'">
-              <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
-                <path stroke-linecap="round" stroke-linejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/>
-              </svg>
-              Masa Birleştir
-            </button>
-          </div>
-        </div>
+        <!-- Eski buton satırı kaldırıldı - tüm işlemler drawer menüde -->
+        <!-- Referans butonlar (görünmez, JS uyumluluğu için) -->
+        <button id="refreshDataBtn" onclick="refreshAllData()" style="display:none;"></button>
+        <button id="mergeTableBtn" class="merge-table-btn" onclick="showMergeModal()" style="display:none;"></button>
         
         <!-- İç/Dış Tab'leri (Gizli - sadece geri dönüş için) -->
         <div class="table-type-tabs" style="display: none;">
@@ -1743,7 +2641,7 @@
       
       <div id="orderSection" style="display: none;">
         <!-- En Üst: Geri Dön Butonu ve Ürün Aktar (Müdür) -->
-        <div style="position: sticky; top: 0; z-index: 100; background: white; padding: 6px 12px 8px 12px; margin: -15px -15px 0 -15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
+        <div style="position: sticky; top: 0; z-index: 100; background: white; padding: 6px 12px 8px 12px; margin: -15px -15px 0 -15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px; scroll-margin-top: 58px;">
           <button class="back-btn" onclick="goBackToTables()" style="position: relative; top: 0; left: 0; margin-bottom: 6px; width: 100%; max-width: none; animation: none;">
             <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
@@ -1751,7 +2649,7 @@
             <span>Masalara Dön</span>
           </button>
           <!-- Ürün Aktar Butonu (Sadece Müdür) -->
-          <button onclick="showTransferItemsModal()" id="orderSectionTransferItemsBtn" style="display: none; width: 100%; padding: 12px 16px; background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3); transition: all 0.3s; cursor: pointer; flex items-center justify-center gap-2;" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 6px 16px rgba(139, 92, 246, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(139, 92, 246, 0.3)'">
+          <button onclick="showTransferItemsModal()" id="orderSectionTransferItemsBtn" style="display: none; width: 100%; padding: 12px 16px; background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%); color: white; border: none; border-radius: 12px; font-size: 14px; font-weight: 700; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3); transition: all 0.3s; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;" onmouseover="this.style.transform='scale(1.02)'; this.style.boxShadow='0 6px 16px rgba(139, 92, 246, 0.4)'" onmouseout="this.style.transform='scale(1)'; this.style.boxShadow='0 4px 12px rgba(139, 92, 246, 0.3)'">
             <svg width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5" style="display: inline-block; vertical-align: middle;">
               <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
             </svg>
@@ -1772,14 +2670,22 @@
             </div>
           </div>
           
-          <!-- Arama Çubuğu -->
-          <div style="position: relative; margin-bottom: 0;">
+          <!-- Arama: Makara satır içi; Sultan Somatı tam ekran mod (buton) -->
+          <div id="sultanInlineSearchRow" style="position: relative; margin-bottom: 0;">
             <input type="text" id="searchInput" class="search-box" placeholder="🔍 Ürün ara..." oninput="filterProducts()" style="padding: 14px 16px 14px 48px; border: 2px solid #e5e7eb; border-radius: 14px; font-size: 15px; background: #f9fafb; transition: all 0.3s;">
             <div style="position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: #9ca3af; pointer-events: none;">
               <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
               </svg>
             </div>
+          </div>
+          <div id="sultanSearchLaunchRow" style="margin-bottom: 0;">
+            <button type="button" class="sultan-search-launch-btn" id="sultanOpenImmersiveSearchBtn" aria-label="Ürün ara">
+              <svg width="22" height="22" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+              </svg>
+              <span>Ürün ara</span>
+            </button>
           </div>
         </div>
         
@@ -1795,10 +2701,31 @@
         </div>
         
         <!-- Ürünler -->
-        <div style="overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; max-height: calc(100vh - 320px); padding-bottom: 100px; padding-right: 5px;">
+        <div id="productsGridScrollWrap" style="overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; max-height: calc(100vh - 320px); padding-bottom: 100px; padding-right: 5px;">
           <div class="products-grid" id="productsGrid"></div>
         </div>
       </div>
+    </div>
+  </div>
+  
+  <!-- Sultan Somatı: tam ekran ürün arama (yalnızca arama + sonuçlar) -->
+  <div id="sultanImmersiveSearchOverlay" class="sultan-immersive-overlay" style="display: none;" aria-hidden="true">
+    <div class="sultan-immersive-overlay__panel">
+      <div class="sultan-immersive-overlay__header">
+        <button type="button" class="sultan-immersive-overlay__close" id="sultanImmersiveSearchCloseBtn">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
+          </svg>
+          Geri
+        </button>
+        <div class="sultan-immersive-overlay__input-wrap">
+          <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input type="search" id="sultanImmersiveSearchInput" autocomplete="off" enterkeyhint="search" placeholder="Ürün adı yazın…" />
+        </div>
+      </div>
+      <div class="sultan-immersive-overlay__body" id="sultanImmersiveProductsMount"></div>
     </div>
   </div>
   
@@ -1961,7 +2888,7 @@
           <label style="display: block; margin-bottom: 8px; font-size: 15px; color: #374151; font-weight: 700;">İptal Edilecek Miktar:</label>
           <div style="display: flex; align-items: center; gap: 12px; max-width: 280px; margin: 0 auto;">
             <button type="button" onclick="changeCancelQuantity(-1)" style="flex: 0 0 52px; height: 52px; border: 2px solid #e5e7eb; border-radius: 14px; background: #f9fafb; font-size: 24px; font-weight: 800; color: #374151; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; -webkit-tap-highlight-color: transparent;" onmouseover="this.style.background='#ef4444'; this.style.borderColor='#ef4444'; this.style.color='white';" onmouseout="this.style.background='#f9fafb'; this.style.borderColor='#e5e7eb'; this.style.color='#374151';" ontouchstart="this.style.transform='scale(0.95)';" ontouchend="this.style.transform='scale(1)';">−</button>
-            <input type="number" id="cancelItemQuantity" min="1" max="1" value="1" step="1" style="flex: 1; padding: 14px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 22px; font-weight: 800; text-align: center; outline: none; transition: all 0.3s; -moz-appearance: textfield;" onfocus="this.style.borderColor='#ef4444';" onblur="this.style.borderColor='#e5e7eb'; validateCancelQuantity();" oninput="validateCancelQuantity()" onkeydown="if(event.key === 'e' || event.key === 'E' || event.key === '+' || event.key === '-') event.preventDefault();">
+            <input type="number" id="cancelItemQuantity" min="1" max="1" value="1" step="1" style="flex: 1; padding: 14px; border: 2px solid #e5e7eb; border-radius: 12px; font-size: 22px; font-weight: 800; text-align: center; outline: none; transition: all 0.3s; appearance: textfield; -moz-appearance: textfield;" onfocus="this.style.borderColor='#ef4444';" onblur="this.style.borderColor='#e5e7eb'; validateCancelQuantity();" oninput="validateCancelQuantity()" onkeydown="if(event.key === 'e' || event.key === 'E' || event.key === '+' || event.key === '-') event.preventDefault();">
             <button type="button" onclick="changeCancelQuantity(1)" style="flex: 0 0 52px; height: 52px; border: 2px solid #e5e7eb; border-radius: 14px; background: #f9fafb; font-size: 24px; font-weight: 800; color: #374151; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: all 0.2s; -webkit-tap-highlight-color: transparent;" onmouseover="this.style.background='#22c55e'; this.style.borderColor='#22c55e'; this.style.color='white';" onmouseout="this.style.background='#f9fafb'; this.style.borderColor='#e5e7eb'; this.style.color='#374151';" ontouchstart="this.style.transform='scale(0.95)';" ontouchend="this.style.transform='scale(1)';">+</button>
           </div>
         </div>
@@ -2179,7 +3106,7 @@
     </div>
   </div>
   
-  <!-- Sultan Somatı — Müdür: masa kartı ⋮ menüsü -->
+  <!-- Sultan Somatı — masa ⋮ (ödeme: tüm personel; adisyon: müdür) -->
   <div id="sultanManagerSheet" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); z-index: 2600; align-items: flex-end; justify-content: center;" onclick="if(event.target === this) closeSultanManagerSheet()">
     <div style="background: #fff; width: 100%; max-width: 480px; border-radius: 22px 22px 0 0; padding: 10px 20px 22px; box-shadow: 0 -12px 40px rgba(0,0,0,0.18);">
       <div style="text-align: center; margin-bottom: 14px;">
@@ -2188,7 +3115,7 @@
         <p id="sultanMgrSubtitle" style="margin: 8px 0 0; font-size: 15px; font-weight: 600; color: #64748b;"></p>
       </div>
       <button type="button" onclick="sultanManagerOpenPayment()" style="width: 100%; padding: 16px; margin-bottom: 10px; border-radius: 14px; border: none; background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #fff; font-size: 16px; font-weight: 800; box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35);">Ödeme al</button>
-      <button type="button" onclick="sultanManagerPrintAdisyon()" style="width: 100%; padding: 16px; margin-bottom: 10px; border-radius: 14px; border: 2px solid #e2e8f0; background: #fff; color: #0f172a; font-size: 16px; font-weight: 700;">Adisyon yazdır</button>
+      <button type="button" id="sultanMgrPrintBtn" onclick="sultanManagerPrintAdisyon()" style="width: 100%; padding: 16px; margin-bottom: 10px; border-radius: 14px; border: 2px solid #e2e8f0; background: #fff; color: #0f172a; font-size: 16px; font-weight: 700;">Adisyon yazdır</button>
       <button type="button" onclick="closeSultanManagerSheet()" style="width: 100%; padding: 12px; border: none; background: transparent; color: #64748b; font-size: 15px; font-weight: 600;">Vazgeç</button>
     </div>
   </div>
@@ -2212,6 +3139,57 @@
     const MOBILE_BRANCH_KEY = __MOBILE_BRANCH_KEY_JSON__;
     const isSultanMobile = MOBILE_BRANCH_KEY === 'sultansomati';
     const isMakaraHavzanMobile = MOBILE_BRANCH_KEY === 'makara';
+    
+    function setSultanLoginChromeActive(on) {
+      if (!isSultanMobile) return;
+      document.body.classList.toggle('sultan-staff-auth', !!on);
+    }
+
+    /* ===========================
+       APP HEADER & DRAWER
+       =========================== */
+    function openDrawer() {
+      document.getElementById('drawerOverlay').classList.add('open');
+      document.getElementById('drawerPanel').classList.add('open');
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeDrawer() {
+      document.getElementById('drawerOverlay').classList.remove('open');
+      document.getElementById('drawerPanel').classList.remove('open');
+      document.body.style.overflow = '';
+    }
+
+    function showAppHeader(staff) {
+      const header = document.getElementById('appHeader');
+      if (!header) return;
+      // Şube adı başlığı
+      const branchLabel = isSultanMobile ? 'Sultan Somatı' : (isMakaraHavzanMobile ? 'Makara' : 'Mobil Personel');
+      const titleEl = document.getElementById('appHeaderTitle');
+      if (titleEl) titleEl.textContent = branchLabel + ' Mobil Personel';
+      header.classList.add('visible');
+      // Drawer personel bilgilerini güncelle
+      if (staff) {
+        const fullName = ((staff.name || '') + ' ' + (staff.surname || '')).trim();
+        const i1 = (staff.name || ' ').charAt(0).toUpperCase();
+        const i2 = (staff.surname || ' ').charAt(0).toUpperCase();
+        const avatarEl = document.getElementById('drawerAvatar');
+        const nameEl = document.getElementById('drawerStaffName');
+        const roleEl = document.getElementById('drawerStaffRole');
+        if (avatarEl) avatarEl.textContent = i1 + i2;
+        if (nameEl) nameEl.textContent = fullName || 'Personel';
+        if (roleEl) roleEl.textContent = staff.is_manager ? 'Müdür' : 'Personel';
+        // Masa Birleştir sadece müdüre görünür
+        const mergeBtn = document.getElementById('drawerMergeBtn');
+        if (mergeBtn) mergeBtn.style.display = staff.is_manager ? 'flex' : 'none';
+      }
+    }
+
+    function hideAppHeader() {
+      const header = document.getElementById('appHeader');
+      if (header) header.classList.remove('visible');
+      closeDrawer();
+    }
     let currentSultanSectionKey = '';
     let selectedTable = null;
     let categories = [];
@@ -2273,6 +3251,7 @@
       if (isSultanMobile) {
         document.documentElement.classList.add('sultan-mobile-root');
         document.body.classList.add('sultan-mobile');
+        initSultanImmersiveSearchUI();
       } else if (isMakaraHavzanMobile) {
         document.documentElement.classList.add('makara-mobile-root');
         document.body.classList.add('makara-mobile');
@@ -2319,12 +3298,9 @@
         }
         document.getElementById('tableTypeSelection').style.display = 'none';
         document.getElementById('tableSelection').style.display = 'block';
-        const mainLogoutBtn = document.getElementById('mainLogoutBtn');
-        if (mainLogoutBtn) mainLogoutBtn.style.display = 'flex';
         document.getElementById('cart').style.display = 'block';
-        const mergeTableBtn = document.getElementById('mergeTableBtn');
-        if (mergeTableBtn && currentStaff && currentStaff.is_manager) mergeTableBtn.style.display = 'flex';
-        else if (mergeTableBtn) mergeTableBtn.style.display = 'none';
+        showAppHeader(currentStaff);
+        setSultanLoginChromeActive(false);
         loadData();
         initWebSocket();
         if (typeof renderTables === 'function') renderTables();
@@ -2366,6 +3342,7 @@
           // 2 saniye sonra ana ekrana geç
           setTimeout(() => {
             document.getElementById('splashScreen').style.display = 'none';
+            setSultanLoginChromeActive(false);
             document.getElementById('mainSection').style.display = 'block';
             // staffName ve staffInfo elementleri kaldırıldı, null kontrolü yap
             const staffNameEl = document.getElementById('staffName');
@@ -2378,12 +3355,8 @@
             }
             document.getElementById('tableTypeSelection').style.display = 'none';
             document.getElementById('tableSelection').style.display = 'block';
-            const mainLogoutBtn = document.getElementById('mainLogoutBtn');
-            if (mainLogoutBtn) mainLogoutBtn.style.display = 'flex';
             document.getElementById('cart').style.display = 'block';
-            const mergeTableBtn = document.getElementById('mergeTableBtn');
-            if (mergeTableBtn && currentStaff && currentStaff.is_manager) mergeTableBtn.style.display = 'flex';
-            else if (mergeTableBtn) mergeTableBtn.style.display = 'none';
+            showAppHeader(currentStaff);
             loadData();
             initWebSocket();
             if (typeof renderTables === 'function') renderTables();
@@ -2523,6 +3496,7 @@
           // Ana ekranı gizle, giriş ekranını göster
           document.getElementById('mainSection').style.display = 'none';
           document.getElementById('pinSection').style.display = 'block';
+          setSultanLoginChromeActive(true);
           // Hata mesajını göster
           const errorDiv = document.getElementById('pinError');
           errorDiv.textContent = data.message || 'Hesabınız silindi. Lütfen yönetici ile iletişime geçin.';
@@ -2778,8 +3752,16 @@
             const typeStr = (table.type || '').replace(/'/g, "\'");
             const hasOrderClass = table.hasOrder ? ' has-order' : '';
             const selectedClass = selectedTable && selectedTable.id === table.id ? ' selected' : '';
+            const ot =
+              typeof table.orderTotal === 'number' && !isNaN(table.orderTotal) ? table.orderTotal : 0;
+            const totalLine =
+              '<div class="sultan-table-total" title="' +
+              ot.toFixed(2) +
+              ' ₺">' +
+              ot.toFixed(2) +
+              ' ₺</div>';
             const mgrFab =
-              table.hasOrder && currentStaff && currentStaff.is_manager
+              table.hasOrder && currentStaff
                 ? '<button type="button" class="sultan-mgr-fab" aria-label="Masa işlemleri" onclick="event.preventDefault();event.stopPropagation();openSultanManagerSheet(' +
                   tableIdStr +
                   ');">⋯</button>'
@@ -2825,7 +3807,9 @@
               '</div>' +
               '<div style="font-size: 10px; font-weight: 600; color: #bbf7d0; margin-top: 4px; padding: 2px 6px; background: rgba(22, 101, 52, 0.25); border-radius: 6px;">' +
               'Dolu' +
-              '</div></button>' +
+              '</div>' +
+              totalLine +
+              '</button>' +
               mgrFab +
               '</div>'
             );
@@ -2939,6 +3923,9 @@
     }
     
     async function selectTable(id, name, type) {
+      if (isSultanMobile) {
+        forceCloseSultanImmersiveSearchNoAnim();
+      }
       selectedTable = { id, name, type };
       schedulePrepareReceipts();
       renderTables();
@@ -2959,6 +3946,11 @@
       document.getElementById('selectedTableInfo').textContent = name + ' için sipariş oluşturuluyor';
       // Arama çubuğunu temizle
       document.getElementById('searchInput').value = '';
+      const immIn = document.getElementById('sultanImmersiveSearchInput');
+      if (immIn) {
+        immIn.value = '';
+      }
+      searchQuery = '';
       // Mevcut siparişleri yükle
       await loadExistingOrders(id);
       // Ürün Aktar butonunu göster/gizle (sadece müdür)
@@ -3055,6 +4047,13 @@
     }
     
     function goBackToTables() {
+      if (isSultanMobile) {
+        forceCloseSultanImmersiveSearchNoAnim();
+      }
+      const immClear = document.getElementById('sultanImmersiveSearchInput');
+      if (immClear) {
+        immClear.value = '';
+      }
       selectedTable = null;
       document.getElementById('tableSelection').style.display = 'block';
       document.getElementById('tableTypeSelection').style.display = 'none';
@@ -3068,6 +4067,7 @@
       if (searchInputEl) {
         searchInputEl.value = '';
       }
+      searchQuery = '';
       // staffInfo elementi kaldırıldı, null kontrolü yap
       const staffInfoEl = document.getElementById('staffInfo');
       if (staffInfoEl) {
@@ -3918,9 +4918,126 @@
     
     let searchQuery = '';
     
+    function isSultanImmersiveSearchOpen() {
+      return document.body.classList.contains('sultan-immersive-search-open');
+    }
+    
+    function syncSearchFromActiveInput() {
+      const imm = document.getElementById('sultanImmersiveSearchInput');
+      const main = document.getElementById('searchInput');
+      if (isSultanImmersiveSearchOpen() && imm) {
+        return (imm.value || '').toLowerCase().trim();
+      }
+      return main ? (main.value || '').toLowerCase().trim() : '';
+    }
+    
     function filterProducts() {
-      searchQuery = document.getElementById('searchInput').value.toLowerCase().trim();
+      searchQuery = syncSearchFromActiveInput();
       renderProducts();
+    }
+    
+    function ensureSultanImmersiveProductsRestored() {
+      const grid = document.getElementById('productsGrid');
+      const wrap = document.getElementById('productsGridScrollWrap');
+      const mount = document.getElementById('sultanImmersiveProductsMount');
+      if (!grid || !wrap || !mount) return;
+      if (grid.parentNode === mount) {
+        wrap.appendChild(grid);
+      }
+      wrap.classList.remove('sultan-grid-placeholder');
+    }
+    
+    /** Tam ekran aramadan çıkınca metni sil (yalnızca arama sırasında görünsün) */
+    function resetSultanImmersiveSearchText() {
+      const imm = document.getElementById('sultanImmersiveSearchInput');
+      const main = document.getElementById('searchInput');
+      if (imm) imm.value = '';
+      if (main) main.value = '';
+      searchQuery = '';
+    }
+    
+    function forceCloseSultanImmersiveSearchNoAnim() {
+      if (!isSultanMobile) return;
+      const overlay = document.getElementById('sultanImmersiveSearchOverlay');
+      if (overlay) {
+        overlay.classList.remove('sultan-immersive-overlay--open');
+        overlay.style.display = 'none';
+        overlay.setAttribute('aria-hidden', 'true');
+      }
+      document.body.classList.remove('sultan-immersive-search-open');
+      resetSultanImmersiveSearchText();
+      ensureSultanImmersiveProductsRestored();
+      filterProducts();
+    }
+    
+    function closeSultanImmersiveSearch() {
+      if (!isSultanMobile) return;
+      const overlay = document.getElementById('sultanImmersiveSearchOverlay');
+      if (!overlay) return;
+      resetSultanImmersiveSearchText();
+      overlay.classList.remove('sultan-immersive-overlay--open');
+      document.body.classList.remove('sultan-immersive-search-open');
+      setTimeout(() => {
+        overlay.style.display = 'none';
+        overlay.setAttribute('aria-hidden', 'true');
+        ensureSultanImmersiveProductsRestored();
+        filterProducts();
+      }, 320);
+    }
+    
+    function openSultanImmersiveSearch() {
+      if (!isSultanMobile) return;
+      const overlay = document.getElementById('sultanImmersiveSearchOverlay');
+      const mount = document.getElementById('sultanImmersiveProductsMount');
+      const grid = document.getElementById('productsGrid');
+      const wrap = document.getElementById('productsGridScrollWrap');
+      const imm = document.getElementById('sultanImmersiveSearchInput');
+      const main = document.getElementById('searchInput');
+      if (!overlay || !mount || !grid || !wrap || !imm) return;
+      imm.value = '';
+      if (main) main.value = '';
+      searchQuery = '';
+      wrap.classList.add('sultan-grid-placeholder');
+      mount.appendChild(grid);
+      overlay.style.display = 'flex';
+      overlay.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('sultan-immersive-search-open');
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          overlay.classList.add('sultan-immersive-overlay--open');
+        });
+      });
+      renderProducts();
+      setTimeout(() => {
+        imm.focus();
+        try {
+          imm.select();
+        } catch (e) {}
+      }, 400);
+    }
+    
+    function initSultanImmersiveSearchUI() {
+      if (!isSultanMobile) return;
+      const openBtn = document.getElementById('sultanOpenImmersiveSearchBtn');
+      const closeBtn = document.getElementById('sultanImmersiveSearchCloseBtn');
+      const imm = document.getElementById('sultanImmersiveSearchInput');
+      if (openBtn) {
+        openBtn.addEventListener('click', openSultanImmersiveSearch);
+      }
+      if (closeBtn) {
+        closeBtn.addEventListener('click', closeSultanImmersiveSearch);
+      }
+      if (imm) {
+        imm.addEventListener('input', filterProducts);
+      }
+      const overlay = document.getElementById('sultanImmersiveSearchOverlay');
+      if (overlay) {
+        overlay.addEventListener('click', (e) => {
+          if (e.target === overlay) {
+            closeSultanImmersiveSearch();
+          }
+        });
+      }
     }
     
     // Resim cache yönetimi (IndexedDB)
@@ -4039,6 +5156,13 @@
       
       requestAnimationFrame(async () => {
         renderProductsScheduled = false;
+        
+        const gridEarly = document.getElementById('productsGrid');
+        if (!gridEarly) return;
+        if (isSultanMobile && isSultanImmersiveSearchOpen() && !searchQuery) {
+          gridEarly.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 48px 20px; color: #64748b; font-size: 16px; font-weight: 600; line-height: 1.5;">Aramak istediğiniz ürünün adını yukarıdaki kutuya yazın.</div>';
+          return;
+        }
         
         let filtered;
         
@@ -4607,6 +5731,7 @@
             document.getElementById('pinInput').value = '';
             localStorage.removeItem('staffSession');
             currentStaff = null;
+            setSultanLoginChromeActive(true);
           }, 2000);
         } else {
           errorDiv.textContent = changeResult.error || 'Şifre değiştirilemedi';
@@ -4634,6 +5759,8 @@
       document.getElementById('mainSection').style.display = 'none';
       document.getElementById('pinSection').style.display = 'block';
       document.getElementById('logoutModal').style.display = 'none';
+      hideAppHeader();
+      setSultanLoginChromeActive(true);
       
       // Sepeti ve seçili masayı temizle
       cart = [];
@@ -4648,7 +5775,7 @@
       showToast('success', 'Çıkış Yapıldı', 'Başarıyla çıkış yaptınız. Tekrar giriş yapabilirsiniz.');
     }
     
-    // Sultan Somatı — müdür: masa ⋮ (ödeme al / adisyon yazdır)
+    // Sultan Somatı — masa ⋮ (ödeme: tüm personel; adisyon yazdır: müdür)
     let sultanMgrTableId = null;
     let sultanMgrOrder = null;
 
@@ -4664,8 +5791,8 @@
     }
     function openSultanManagerSheet(tableId) {
       if (!isSultanMobile) return;
-      if (!currentStaff || !currentStaff.is_manager) {
-        showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
+      if (!currentStaff) {
+        showToast('error', 'Giriş gerekli', 'Lütfen personel olarak giriş yapın.');
         return;
       }
       sultanMgrTableId = tableId;
@@ -4685,6 +5812,10 @@
           }, 0);
           document.getElementById('sultanMgrTitle').textContent = t && t.name ? t.name : 'Masa';
           document.getElementById('sultanMgrSubtitle').textContent = 'Tutar: ' + total.toFixed(2) + ' ₺';
+          var pbtn = document.getElementById('sultanMgrPrintBtn');
+          if (pbtn) {
+            pbtn.style.display = currentStaff && currentStaff.is_manager ? 'block' : 'none';
+          }
           document.getElementById('sultanManagerSheet').style.display = 'flex';
         })
         .catch(function () {

@@ -1,6 +1,6 @@
 {
   "name": "makara-pos",
-  "version": "25.0.0",
+  "version": "30.0.0",
   "description": "MAKARA - Modern POS Uygulaması",
   "main": "electron/main.js",
   "scripts": {

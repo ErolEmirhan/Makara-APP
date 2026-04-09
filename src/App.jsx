@@ -1197,13 +1197,10 @@ function App() {
     }
   };
 
-  const catalogProgressSultan =
-    (splashBranchKey || activeBranch?.key || selectedBranchKey || '').toLowerCase() === 'sultansomati';
-
   if (!showSplash && !isBranchReady && !branchGateResolved) {
     return (
       <>
-        <CatalogSyncProgressBar progress={catalogSyncProgress} sultanTheme={catalogProgressSultan} />
+        <CatalogSyncProgressBar progress={catalogSyncProgress} />
         {showExitSplash && (
           <ExitSplash onComplete={handleExitComplete} />
         )}
@@ -1218,7 +1215,7 @@ function App() {
   if (!showSplash && !isBranchReady && branchGateResolved) {
     return (
       <>
-        <CatalogSyncProgressBar progress={catalogSyncProgress} sultanTheme={catalogProgressSultan} />
+        <CatalogSyncProgressBar progress={catalogSyncProgress} />
         {showExitSplash && (
           <ExitSplash onComplete={handleExitComplete} />
         )}
@@ -1326,7 +1323,7 @@ function App() {
 
   return (
     <>
-      <CatalogSyncProgressBar progress={catalogSyncProgress} sultanTheme={catalogProgressSultan} />
+      <CatalogSyncProgressBar progress={catalogSyncProgress} />
       {showSplash && (
         <SplashScreen
           branchKey={splashBranchKey}

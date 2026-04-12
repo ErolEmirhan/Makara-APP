@@ -3139,6 +3139,11 @@
     const MOBILE_BRANCH_KEY = __MOBILE_BRANCH_KEY_JSON__;
     const isSultanMobile = MOBILE_BRANCH_KEY === 'sultansomati';
     const isMakaraHavzanMobile = MOBILE_BRANCH_KEY === 'makara';
+
+    // Sultan Somatı'da tüm personel müdür yetkisine sahiptir
+    function hasManagerPermission() {
+      return isSultanMobile || !!(currentStaff && currentStaff.is_manager);
+    }
     
     function setSultanLoginChromeActive(on) {
       if (!isSultanMobile) return;
@@ -3178,10 +3183,9 @@
         const roleEl = document.getElementById('drawerStaffRole');
         if (avatarEl) avatarEl.textContent = i1 + i2;
         if (nameEl) nameEl.textContent = fullName || 'Personel';
-        if (roleEl) roleEl.textContent = staff.is_manager ? 'Müdür' : 'Personel';
-        // Masa Birleştir sadece müdüre görünür
+        if (roleEl) roleEl.textContent = (isSultanMobile || staff.is_manager) ? 'Müdür' : 'Personel';
         const mergeBtn = document.getElementById('drawerMergeBtn');
-        if (mergeBtn) mergeBtn.style.display = staff.is_manager ? 'flex' : 'none';
+        if (mergeBtn) mergeBtn.style.display = (isSultanMobile || staff.is_manager) ? 'flex' : 'none';
       }
     }
 
@@ -3562,13 +3566,8 @@
       }
       // Sipariş gönder modalını göster
       document.getElementById('cart').style.display = 'block';
-      // Müdür kontrolü - Masa Birleştir butonunu göster/gizle
       const mergeTableBtn = document.getElementById('mergeTableBtn');
-      if (currentStaff && currentStaff.is_manager) {
-        if (mergeTableBtn) mergeTableBtn.style.display = 'flex';
-      } else {
-        if (mergeTableBtn) mergeTableBtn.style.display = 'none';
-      }
+      if (mergeTableBtn) mergeTableBtn.style.display = hasManagerPermission() ? 'flex' : 'none';
       renderTables();
     }
     
@@ -3953,14 +3952,9 @@
       searchQuery = '';
       // Mevcut siparişleri yükle
       await loadExistingOrders(id);
-      // Ürün Aktar butonunu göster/gizle (sadece müdür)
       const orderSectionTransferItemsBtn = document.getElementById('orderSectionTransferItemsBtn');
       if (orderSectionTransferItemsBtn) {
-        if (currentStaff && currentStaff.is_manager) {
-          orderSectionTransferItemsBtn.style.display = 'flex';
-        } else {
-          orderSectionTransferItemsBtn.style.display = 'none';
-        }
+        orderSectionTransferItemsBtn.style.display = hasManagerPermission() ? 'flex' : 'none';
       }
       if (categories.length > 0) {
         // İlk kategoriyi seç (yan ürünler kategorisi değilse)
@@ -4017,7 +4011,7 @@
                 '<span class="order-item-qty">×' + item.quantity + '</span>' +
                 '<span class="order-item-price">' + itemTotal + ' ₺</span>' +
               '</div>' +
-              (currentStaff && currentStaff.is_manager 
+              (hasManagerPermission()
                 ? '<button id="cancelBtn_' + item.id + '" onclick="showCancelItemModal(' + item.id + ', ' + item.quantity + ', \'' + item.product_name.replace(/'/g, "\'") + '\')" style="padding: 6px 12px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px;" onmouseover="if(!this.disabled) { this.style.transform=\'scale(1.05)\'; this.style.boxShadow=\'0 4px 12px rgba(239, 68, 68, 0.4)\'; }" onmouseout="if(!this.disabled) { this.style.transform=\'scale(1)\'; this.style.boxShadow=\'0 2px 8px rgba(239, 68, 68, 0.3)\'; }" ontouchstart="if(!this.disabled) { this.style.transform=\'scale(0.95)\'; }" ontouchend="if(!this.disabled) { this.style.transform=\'scale(1)\'; }" class="cancel-item-btn"><span id="cancelBtnText_' + item.id + '">İptal</span><svg id="cancelBtnSpinner_' + item.id + '" style="display: none; width: 14px; height: 14px; animation: spin 1s linear infinite;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>'
                 : '<button onclick="showManagerRequiredMessage()" style="padding: 6px 12px; background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(107, 114, 128, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px; opacity: 0.7;" onmouseover="this.style.opacity=\'0.9\';" onmouseout="this.style.opacity=\'0.7\';"><span>İptal</span></button>') +
             '</div>' +
@@ -4259,7 +4253,7 @@
     
     // Ürün Aktar Modal Fonksiyonları
     async function showTransferItemsModal() {
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
         return;
       }
@@ -4511,7 +4505,7 @@
           return;
         }
         
-        if (!currentStaff || !currentStaff.is_manager) {
+        if (!hasManagerPermission()) {
           showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
           return;
         }
@@ -4581,7 +4575,7 @@
     
     // Masa Birleştir Modal Fonksiyonları
     function showMergeModal() {
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
         return;
       }
@@ -4706,7 +4700,7 @@
         return;
       }
       
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
         return;
       }
@@ -5814,7 +5808,7 @@
           document.getElementById('sultanMgrSubtitle').textContent = 'Tutar: ' + total.toFixed(2) + ' ₺';
           var pbtn = document.getElementById('sultanMgrPrintBtn');
           if (pbtn) {
-            pbtn.style.display = currentStaff && currentStaff.is_manager ? 'block' : 'none';
+            pbtn.style.display = hasManagerPermission() ? 'block' : 'none';
           }
           document.getElementById('sultanManagerSheet').style.display = 'flex';
         })
@@ -5952,8 +5946,7 @@
     }
     
     function showCancelItemModal(itemId, maxQuantity, productName) {
-      // Müdür kontrolü
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showManagerRequiredMessage();
         return;
       }
@@ -6025,8 +6018,7 @@
         return;
       }
       
-      // Müdür kontrolü
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showManagerRequiredMessage();
         return;
       }

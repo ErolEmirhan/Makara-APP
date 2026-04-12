@@ -7,6 +7,7 @@ import TableTransferModal from './TableTransferModal';
 import TableMergeModal from './TableMergeModal';
 import OnlineOrderModal from './OnlineOrderModal';
 import OnlineProductManagementModal from './OnlineProductManagementModal';
+import ReservationsModal from './ReservationsModal';
 import Toast from './Toast';
 import Spinner from './Spinner';
 import orderSound from '../sound/order.mp3';
@@ -28,6 +29,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   const [showPartialPaymentModal, setShowPartialPaymentModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
+  const [showReservationsModal, setShowReservationsModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
   
@@ -1693,6 +1695,17 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
       )}
       <div className="flex justify-end gap-3 mb-4">
         <div className="flex items-center gap-3">
+          {isSultanBranch && (
+            <button
+              onClick={() => setShowReservationsModal(true)}
+              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              <span>Rezervasyonlar</span>
+            </button>
+          )}
           <button
             onClick={async () => {
               setShowAdisyonModal(true);
@@ -2519,6 +2532,14 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           branchKey={branchKey}
           onClose={() => setShowMergeModal(false)}
           onMerge={handleMergeTable}
+        />
+      )}
+
+      {/* Rezervasyonlar Modal */}
+      {showReservationsModal && (
+        <ReservationsModal
+          branchKey={branchKey}
+          onClose={() => setShowReservationsModal(false)}
         />
       )}
 

@@ -461,24 +461,29 @@ async function activateBranch(branchKey) {
   const warmupGen = branchWarmupGeneration;
   const warmupBranchKey = activeBranchKey;
 
-  // Kategoriler: renderer isBranchReady olunca hemen getCategories çağırıyor; arka plana bırakılırsa yarışta
-  // anket boş kalıp sadece "Yan Ürünler" görünebiliyor. İlk kategori çekimini burada bitir.
+  // Sultan: önce menü paketi (gerekirse) — paket kurulduysa kategori+ürün zaten db'de; tekrar getDocs atlanır (açılış hızlanır).
+  // Makara: doğrudan Firebase kategorileri.
+  let sultanMenuBundleJustApplied = false;
   try {
-    await syncCategoriesFromFirebase();
+    if (activeBranchKey === 'sultansomati') {
+      sendCatalogSyncProgress({
+        percent: 9,
+        phase: 'bundle',
+        message: 'Menü paketi kontrol ediliyor…'
+      });
+      try {
+        sultanMenuBundleJustApplied = await maybeInstallSultanMenuBundleOnActivate();
+      } catch (e) {
+        console.error('Sultan menü paketi kurulumu:', e);
+      }
+      if (!sultanMenuBundleJustApplied) {
+        await syncCategoriesFromFirebase();
+      }
+    } else {
+      await syncCategoriesFromFirebase();
+    }
   } catch (error) {
     console.error('Kategori senkronu (activateBranch):', error);
-  }
-  if (activeBranchKey === 'sultansomati') {
-    sendCatalogSyncProgress({
-      percent: 33,
-      phase: 'bundle',
-      message: 'Menü paketi kontrol ediliyor…'
-    });
-    try {
-      await maybeInstallSultanMenuBundleOnActivate();
-    } catch (e) {
-      console.error('Sultan menü paketi kurulumu:', e);
-    }
   }
   if (warmupGen !== branchWarmupGeneration || activeBranchKey !== warmupBranchKey) {
     sendCatalogSyncProgress({ percent: 100, phase: 'done', message: '' });
@@ -487,7 +492,15 @@ async function activateBranch(branchKey) {
 
   // İlk açılışta renderer getProducts çağırdığında dolu katalog olsun (splash sırasında bile yüklenebilsin)
   try {
-    await syncProductsFromFirebase();
+    if (!sultanMenuBundleJustApplied) {
+      await syncProductsFromFirebase();
+    } else {
+      sendCatalogSyncProgress({
+        percent: 92,
+        phase: 'products',
+        message: 'Menü paketi yerelde hazır'
+      });
+    }
   } catch (error) {
     console.error('Ürün senkronu (activateBranch):', error);
   }
@@ -557,7 +570,8 @@ let db = {
     cashierPrinter: null // { printerName, printerType } - Kasa yazıcısı ayarı
   },
   printerAssignments: [], // { printerName, printerType, category_id }
-  yanUrunler: [] // Local kayıtlı yan ürünler (Firebase'e gitmez) - { id, name, price }
+  yanUrunler: [], // Local kayıtlı yan ürünler (Firebase'e gitmez) - { id, name, price }
+  reservations: [] // { id, tableId, tableName, date, time, peopleCount, adults, children, babies, note, staffId, staffName, createdAt }
 };
 
 function initDatabase() {
@@ -589,6 +603,7 @@ function initDatabase() {
       if (!db.tableOrderItems) db.tableOrderItems = [];
       if (!db.printerAssignments) db.printerAssignments = [];
       if (!db.yanUrunler) db.yanUrunler = [];
+      if (!db.reservations) db.reservations = [];
       
       // Yan Ürünler için varsayılan veriler (eğer boşsa)
       if (db.yanUrunler.length === 0) {
@@ -871,13 +886,14 @@ async function replaceSultanCatalogFromBundledData(categoriesSeed, productsSeed)
   }
 }
 
+/** @returns {Promise<boolean>} true = paket şimdi kuruldu (Firebase + yerel db doldu); false = zaten güncel veya atlandı */
 async function maybeInstallSultanMenuBundleOnActivate() {
   let bundle;
   try {
     bundle = require('./data/sultanMenuCatalog');
   } catch (e) {
     console.warn('⚠️ sultanMenuCatalog yüklenemedi:', e.message);
-    return;
+    return false;
   }
   const { SULTAN_MENU_BUNDLE_ID, categories: sc, products: sp } = bundle;
   const markerPath = path.join(app.getPath('userData'), 'sultan_menu_bundle_id.txt');
@@ -885,11 +901,12 @@ async function maybeInstallSultanMenuBundleOnActivate() {
   try {
     installed = parseInt(fs.readFileSync(markerPath, 'utf8'), 10) || 0;
   } catch (_) {}
-  if (installed >= SULTAN_MENU_BUNDLE_ID) return;
+  if (installed >= SULTAN_MENU_BUNDLE_ID) return false;
   console.log(`📦 Sultan Somatı menü paketi yükleniyor (sürüm ${SULTAN_MENU_BUNDLE_ID}, ${sp.length} ürün)...`);
   await replaceSultanCatalogFromBundledData(sc, sp);
   fs.writeFileSync(markerPath, String(SULTAN_MENU_BUNDLE_ID), 'utf8');
   console.log('✅ Sultan menü paketi Firebase ve yerel kataloga yazıldı.');
+  return true;
 }
 
 // Firebase'e (makaramasalar) ürün stok bilgisini kaydetme fonksiyonu
@@ -1265,7 +1282,7 @@ async function syncProductsFromFirebase() {
       message: 'Ürünler indiriliyor…'
     });
     const productsRef = firebaseCollection(firestore, 'products');
-    startCatalogProgressPulse('products', 33, 50, 'Ürün listesi sunucudan alınıyor…');
+    startCatalogProgressPulse('products', 33, 72, 'Ürün listesi sunucudan alınıyor…');
     let snapshot;
     try {
       snapshot = await firebaseGetDocs(productsRef);
@@ -2676,9 +2693,8 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
-  // Müdür kontrolü (sadece mobil personel arayüzünden gelen istekler için)
-  // Desktop uygulamasından gelen istekler için kontrol yapılmaz (admin yetkisi var)
-  if (staffId) {
+  // Sultan Somatı'da tüm personel iptal yetkisine sahip; diğer şubelerde sadece müdür
+  if (staffId && activeBranchKey !== 'sultansomati') {
     const staff = (db.staff || []).find(s => s.id === staffId);
     if (!staff || !staff.is_manager) {
       return { 
@@ -2868,8 +2884,8 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
-  // Müdür kontrolü (sadece mobil personel arayüzünden gelen istekler için)
-  if (staffId) {
+  // Sultan Somatı'da tüm personel iptal yetkisine sahip; diğer şubelerde sadece müdür
+  if (staffId && activeBranchKey !== 'sultansomati') {
     const staff = (db.staff || []).find(s => s.id === staffId);
     if (!staff || !staff.is_manager) {
       return { 
@@ -3508,7 +3524,7 @@ ipcMain.handle('cancel-entire-table-order', async (event, orderId, cancelReason 
 });
 
 /** Masa kapatma / ödeme alma (masaüstü ipc + Sultan mobil müdür API). */
-async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaignPercentage = null) {
+async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaignPercentage = null, discountAmountTL = null) {
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
     return { success: false, error: 'Sipariş bulunamadı' };
@@ -3523,17 +3539,31 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
   }
 
   const originalAmount = parseFloat(order.total_amount) || 0;
-  const pct = campaignPercentage != null ? parseFloat(campaignPercentage) : 0;
-  const finalAmount = pct > 0 ? Math.round((originalAmount * (1 - pct / 100)) * 100) / 100 : originalAmount;
-  const discountAmount = originalAmount - finalAmount;
-  if (pct > 0) {
+  let finalAmount, discountAmount;
+  if (discountAmountTL != null && parseFloat(discountAmountTL) > 0) {
+    // TL bazlı sabit indirim (mobil personel indirim girişi)
+    discountAmount = Math.min(Math.round(parseFloat(discountAmountTL) * 100) / 100, originalAmount);
+    finalAmount = Math.round((originalAmount - discountAmount) * 100) / 100;
     order.firstOrderDiscount = {
       applied: true,
-      discountPercent: pct,
+      discountPercent: originalAmount > 0 ? Math.round((discountAmount / originalAmount) * 10000) / 100 : 0,
       discountAmount,
       subtotal: originalAmount,
       finalTotal: finalAmount
     };
+  } else {
+    const pct = campaignPercentage != null ? parseFloat(campaignPercentage) : 0;
+    finalAmount = pct > 0 ? Math.round((originalAmount * (1 - pct / 100)) * 100) / 100 : originalAmount;
+    discountAmount = originalAmount - finalAmount;
+    if (pct > 0) {
+      order.firstOrderDiscount = {
+        applied: true,
+        discountPercent: pct,
+        discountAmount,
+        subtotal: originalAmount,
+        finalTotal: finalAmount
+      };
+    }
   }
 
   order.status = 'completed';
@@ -3563,6 +3593,7 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
 
   db.sales.push({
     id: saleId,
+    table_order_id: orderId,
     total_amount: finalAmount,
     payment_method: paymentMethod,
     sale_date: saleDate,
@@ -3571,6 +3602,7 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
     table_type: order.table_type,
     staff_name: mainStaffName
   });
+  order.completed_sale_id = saleId;
 
   orderItems.forEach(item => {
     const itemId = db.saleItems.length > 0
@@ -3662,6 +3694,55 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
   }
 
   return { success: true, saleId };
+}
+
+/**
+ * Ödemesi alınmış masa siparişini geri al: siparişi tekrar pending yapar, bağlı satış kaydını siler.
+ * Yalnızca completed_sale_id veya sale.table_order_id ile eşleşen satışlar güvenli geri alınır.
+ */
+async function revertCompletedTableOrderCore(orderId) {
+  const oid = typeof orderId === 'string' ? parseInt(orderId, 10) : orderId;
+  const order = db.tableOrders.find((o) => o.id === oid);
+  if (!order) {
+    return { success: false, error: 'Sipariş bulunamadı' };
+  }
+  if (order.status !== 'completed') {
+    return { success: false, error: 'Bu sipariş tamamlanmamış; geri alma uygulanamaz' };
+  }
+  let saleId = order.completed_sale_id;
+  if (!saleId) {
+    const linked = (db.sales || []).find((s) => Number(s.table_order_id) === Number(oid));
+    if (linked) saleId = linked.id;
+  }
+  if (!saleId) {
+    return { success: false, error: 'Bu kayıt için satış bağlantısı yok (eski veriler). Yalnızca güncellemeden sonra kapanan siparişler geri alınabilir.' };
+  }
+  const saleIdx = (db.sales || []).findIndex((s) => s.id === saleId);
+  if (saleIdx < 0) {
+    return { success: false, error: 'Satış kaydı bulunamadı' };
+  }
+  db.saleItems = (db.saleItems || []).filter((si) => si.sale_id !== saleId);
+  db.sales.splice(saleIdx, 1);
+  order.status = 'pending';
+  delete order.completed_sale_id;
+  if (order.firstOrderDiscount) delete order.firstOrderDiscount;
+  saveDatabase();
+  syncSingleTableToFirebase(order.table_id).catch((err) => {
+    console.error('Masa Firebase (geri al):', err);
+  });
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', {
+      orderId: order.id,
+      tableId: order.table_id
+    });
+  }
+  if (io) {
+    io.emit('table-update', {
+      tableId: order.table_id,
+      hasOrder: true
+    });
+  }
+  return { success: true };
 }
 
 ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit', campaignPercentage = null) => {
@@ -5509,14 +5590,16 @@ function generateReceiptText(receiptData) {
 }
 
 // Yazıcıya yazdırma — HTML ile (okunaklı, düzgün düzen; metin belgesi silik/bozuk çıkıyordu)
-async function printToPrinter(printerName, printerType, receiptData, isProductionReceipt = false, productionItems = null) {
+async function printToPrinter(printerName, printerType, receiptData, isProductionReceipt = false, productionItems = null, rawHTML = null) {
   let printWindow = null;
   try {
-    const receiptType = isProductionReceipt ? 'ÜRETİM FİŞİ' : 'KASA FİŞİ';
+    const receiptType = isProductionReceipt ? 'ÜRETİM FİŞİ' : rawHTML ? 'ÖZEL FİŞ' : 'KASA FİŞİ';
     console.log(`   [printToPrinter] ${receiptType} (HTML): "${printerName || 'Varsayılan'}"`);
-    const receiptHTML = isProductionReceipt
-      ? generateProductionReceiptHTML(productionItems || receiptData.items, receiptData)
-      : generateReceiptHTML(receiptData);
+    const receiptHTML = rawHTML
+      ? rawHTML
+      : isProductionReceipt
+        ? generateProductionReceiptHTML(productionItems || receiptData.items, receiptData)
+        : generateReceiptHTML(receiptData);
     printWindow = new BrowserWindow({
       show: false,
       width: 220,
@@ -5787,6 +5870,56 @@ function generateProductionReceiptHTML(items, receiptData) {
 }
 
 /** Kasa «Adisyon Yazdır»: kısa, sade termal fiş (Sultan’da marka: Sultan Somatı). */
+function generateReservationReceiptHTML(reservation) {
+  const brand = getReceiptBrandTitle();
+  const esc = (s) => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const row = (label, value) => value
+    ? `<tr><td style="padding:4px 0;font-size:11px;color:#555;font-weight:600;white-space:nowrap;width:50%;">${esc(label)}</td><td style="padding:4px 0 4px 6px;font-size:12px;color:#111;font-weight:800;text-align:right;">${esc(String(value))}</td></tr>`
+    : '';
+  const peopleRows = [
+    row('Kisi Sayisi', reservation.peopleCount > 0 ? reservation.peopleCount : null),
+    row('Yetiskin',    reservation.adults    > 0 ? reservation.adults    : null),
+    row('Cocuk',       reservation.children  > 0 ? reservation.children  : null),
+    row('Bebek',       reservation.babies    > 0 ? reservation.babies    : null),
+  ].filter(Boolean).join('');
+  const noteHTML = reservation.note && reservation.note.trim()
+    ? `<div style="margin-top:10px;padding:8px 10px;background:#fafafa;border:1px dashed #ddd;border-radius:4px;"><div style="font-size:9px;font-weight:800;color:#888;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:3px;">Ozel Not</div><div style="font-size:11px;color:#222;font-weight:600;line-height:1.55;">${esc(reservation.note)}</div></div>`
+    : '';
+  const now = new Date();
+  const printedAt = now.toLocaleDateString('tr-TR') + ' ' + now.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+@media print{@page{size:58mm auto;margin:0;}body{margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'Montserrat','Arial Narrow',Arial,sans-serif;width:58mm;background:#fff;color:#111;padding:10px 8px 22px 8px;}
+</style></head><body>
+<div style="text-align:center;margin-bottom:12px;">
+  <div style="font-size:14px;font-weight:900;letter-spacing:0.06em;color:#111;text-transform:uppercase;">${esc(brand)}</div>
+  <div style="margin:5px auto;height:2px;background:#111;width:80%;"></div>
+  <div style="font-size:9px;font-weight:800;letter-spacing:0.18em;color:#444;text-transform:uppercase;margin-top:4px;">REZERVASYON</div>
+  <div style="margin:5px auto;height:1px;background:#ccc;width:80%;"></div>
+</div>
+<div style="text-align:center;margin-bottom:10px;padding:8px 6px;background:#f5f5f5;border-radius:6px;">
+  <div style="font-size:9px;font-weight:700;color:#888;letter-spacing:0.1em;text-transform:uppercase;margin-bottom:3px;">MISAFIR</div>
+  <div style="font-size:14px;font-weight:900;color:#111;line-height:1.3;">${esc(reservation.guestName || '\u2014')}</div>
+</div>
+<table style="width:100%;border-collapse:collapse;margin-bottom:4px;"><tbody>
+  ${row('Masa',  reservation.tableName || reservation.tableId)}
+  ${row('Tarih', reservation.date)}
+  ${row('Saat',  reservation.time)}
+</tbody></table>
+${peopleRows ? `<div style="height:1px;background:#eee;margin:8px 0;"></div><table style="width:100%;border-collapse:collapse;"><tbody>${peopleRows}</tbody></table>` : ''}
+${noteHTML}
+<div style="height:1px;background:#ccc;margin:12px 0 8px 0;"></div>
+<div style="text-align:center;">
+  ${reservation.staffName ? `<div style="font-size:9px;color:#888;font-weight:600;">Olusturan: ${esc(reservation.staffName)}</div>` : ''}
+  <div style="font-size:9px;color:#aaa;margin-top:2px;">Yazdirildi: ${printedAt}</div>
+</div>
+</body></html>`;
+}
+
 function generateMinimalAdisyonReceiptHTML(receiptData) {
   const brand = getReceiptBrandTitle();
   const isSuriciBranch = activeBranchKey === 'makarasur';
@@ -9260,14 +9393,28 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     /* Sultan Somatı mobil — tam genişlik beyaz sayfa (yan yeşillik yok) */
     html.sultan-mobile-root {
       background: #ffffff;
+      overflow-x: hidden;
+      max-width: 100%;
+      width: 100%;
+      height: 100%;
+      overscroll-behavior-x: none;
     }
     body.sultan-mobile {
       background: #ffffff !important;
       padding: 0 !important;
+      overflow-x: hidden;
+      max-width: 100%;
+      width: 100%;
+      min-height: 100vh;
+      min-height: 100dvh;
+      overscroll-behavior-x: none;
+      /* Tüm sayfayı yatay sürüklemeyi engelle; dikey kaydırma + pinch */
+      touch-action: pan-y pinch-zoom;
+      position: relative;
     }
     body.sultan-mobile .container {
-      max-width: none;
       width: 100%;
+      max-width: 100%;
       margin: 0;
       border-radius: 0;
       border: none;
@@ -9275,6 +9422,80 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       padding: 12px 14px 20px;
       min-height: 100vh;
       box-sizing: border-box;
+      overflow-x: hidden;
+    }
+    /* Yatay kaydırması kasıtlı alanlar (touch-action body'de pan-y iken açıkça pan-x) */
+    body.sultan-mobile .category-tabs {
+      touch-action: pan-x pinch-zoom;
+      scrollbar-width: thin;
+      scrollbar-color: #cbd5e1 transparent;
+      padding-bottom: 2px;
+    }
+    body.sultan-mobile .category-tabs::-webkit-scrollbar {
+      height: 4px;
+    }
+    body.sultan-mobile .category-tabs::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 4px;
+    }
+    body.sultan-mobile .category-tabs-inner {
+      gap: 4px !important;
+    }
+    body.sultan-mobile .category-tabs-row.category-tabs-row--equal {
+      gap: 5px !important;
+    }
+    body.sultan-mobile #orderSectionCategoryBar {
+      padding-top: 2px !important;
+      padding-bottom: 4px !important;
+      margin-bottom: 4px !important;
+    }
+    /* Sultan — kurumsal minimal kategori sekmeleri (daha küçük, nötr palet) */
+    body.sultan-mobile .category-tab.category-tab--sultan {
+      padding: 6px 10px !important;
+      min-height: 32px !important;
+      font-size: 11.5px !important;
+      font-weight: 600 !important;
+      letter-spacing: -0.02em !important;
+      line-height: 1.2 !important;
+      border-radius: 9px !important;
+      border: 1px solid #e2e8f0 !important;
+      background: #f8fafc !important;
+      color: #64748b !important;
+      box-shadow: none !important;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body.sultan-mobile .category-tab.category-tab--sultan::before {
+      display: none !important;
+    }
+    body.sultan-mobile .category-tab.category-tab--sultan:hover {
+      background: #f1f5f9 !important;
+      border-color: #cbd5e1 !important;
+      color: #334155 !important;
+      transform: none !important;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05) !important;
+    }
+    body.sultan-mobile .category-tab.category-tab--sultan.active {
+      border-color: #059669 !important;
+      color: #064e3b !important;
+      background: #ffffff !important;
+      box-shadow: 0 0 0 1px rgba(5, 150, 105, 0.12), 0 2px 8px rgba(15, 23, 42, 0.06) !important;
+      font-weight: 700 !important;
+      transform: none !important;
+    }
+    body.sultan-mobile .category-tab.category-tab--sultan.active::after {
+      height: 2px !important;
+      bottom: 0 !important;
+      left: 6px !important;
+      right: 6px !important;
+      border-radius: 2px !important;
+      background: linear-gradient(90deg, #34d399, #059669) !important;
+      box-shadow: none !important;
+    }
+    body.sultan-mobile .category-tab.category-tab--sultan:active {
+      transform: scale(0.97) !important;
+    }
+    body.sultan-mobile .sultan-section-scroll {
+      touch-action: pan-x pinch-zoom;
     }
     /* Makara Havzan mobil — tam genişlik beyaz (yanlarda pembe gradient taşması yok) */
     html.makara-mobile-root {
@@ -9297,17 +9518,17 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     }
     /* Masa kutuları ~2×: 4 sütun yerine 2 sütun (genişlik ve yükseklik birlikte büyür) */
     body.sultan-mobile .table-grid {
-      grid-template-columns: repeat(2, 1fr) !important;
-      gap: 14px !important;
+      grid-template-columns: repeat(3, 1fr) !important;
+      gap: 10px !important;
     }
     body.sultan-mobile .table-btn .table-number {
-      font-size: 28px !important;
+      font-size: 22px !important;
     }
     body.sultan-mobile .table-btn.has-order .table-number {
-      font-size: 30px !important;
+      font-size: 23px !important;
     }
     body.sultan-mobile .sultan-table-total {
-      font-size: clamp(0.82rem, 4.5vw, 1.38rem) !important;
+      font-size: clamp(0.72rem, 3.5vw, 1.1rem) !important;
       font-weight: 800 !important;
       color: #ecfdf5 !important;
       margin-top: 5px !important;
@@ -9326,44 +9547,124 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     body.sultan-mobile .pin-btn {
       background: linear-gradient(135deg, #059669 0%, #0d9488 100%) !important;
     }
-    body.sultan-mobile .category-tab.active {
+    body.sultan-mobile .category-tab:not(.category-tab--sultan).active {
       border-color: #5eead4 !important;
       color: #047857 !important;
       background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%) !important;
     }
-    body.sultan-mobile .category-tab.active::after {
+    body.sultan-mobile .category-tab:not(.category-tab--sultan).active::after {
       background: linear-gradient(90deg, #10b981 0%, #059669 50%, #10b981 100%) !important;
     }
-    body.sultan-mobile .category-tab {
+    body.sultan-mobile .category-tab:not(.category-tab--sultan) {
       font-size: 14px !important;
       font-weight: 700 !important;
       padding: 12px 18px !important;
       min-height: 48px !important;
       white-space: nowrap !important;
     }
+    body.sultan-mobile .products-grid {
+      grid-template-columns: repeat(2, 1fr) !important;
+      gap: 14px !important;
+    }
     body.sultan-mobile .product-card {
       background: #ffffff !important;
       background-image: none !important;
-      border: 1px solid #e5e7eb !important;
-      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06) !important;
+      border: 1.5px solid #e2e8f0 !important;
+      border-radius: 18px !important;
+      box-shadow: 0 2px 10px rgba(15, 23, 42, 0.07), 0 1px 4px rgba(15, 23, 42, 0.04) !important;
+      min-height: 155px !important;
+      padding: 20px 16px 14px !important;
+      transition: all 0.18s ease !important;
     }
     body.sultan-mobile .product-card::before {
       display: none !important;
     }
     body.sultan-mobile .product-card:hover {
-      border-color: #d1d5db !important;
-      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08) !important;
+      border-color: #6ee7b7 !important;
+      box-shadow: 0 6px 22px rgba(16, 185, 129, 0.13), 0 2px 8px rgba(15, 23, 42, 0.06) !important;
+      transform: translateY(-2px) !important;
+    }
+    body.sultan-mobile .product-card:active {
+      transform: scale(0.97) !important;
+      box-shadow: 0 1px 4px rgba(15, 23, 42, 0.08) !important;
     }
     body.sultan-mobile .product-name {
-      color: #334155 !important;
+      color: #1e293b !important;
       text-shadow: none !important;
       font-weight: 700 !important;
+      font-size: 15px !important;
+      line-height: 1.45 !important;
+      margin-bottom: 6px !important;
     }
     body.sultan-mobile .product-price {
-      color: #94a3b8 !important;
+      color: #059669 !important;
       text-shadow: none !important;
-      font-weight: 700 !important;
-      font-size: 16px !important;
+      font-weight: 800 !important;
+      font-size: 19px !important;
+      letter-spacing: -0.3px !important;
+    }
+    /* Sultan: masa sipariş ekranı — üst toolbar; Masalara dön / Ürün aktar gizli; yerel mevcut sipariş listesi yok (Siparişler menüde) */
+    body.sultan-mobile #orderSectionTopNav {
+      display: none !important;
+    }
+    body.sultan-mobile #existingOrders {
+      display: none !important;
+    }
+    body.sultan-mobile #orderSectionCategoryBar {
+      top: calc(58px + env(safe-area-inset-top, 0px) + 6px) !important;
+    }
+    body.sultan-mobile #sultanOrderToolbar {
+      display: flex;
+      flex-direction: row;
+      align-items: stretch;
+      gap: 10px;
+      position: sticky;
+      top: 0;
+      z-index: 101;
+      margin: -15px -15px 10px -15px;
+      padding: 10px 12px 10px;
+      padding-top: max(10px, env(safe-area-inset-top, 0px));
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      border-bottom: 1px solid #e2e8f0;
+      box-shadow: 0 6px 20px rgba(15, 23, 42, 0.06);
+    }
+    body.sultan-mobile #sultanOrderToolbar .sultan-order-toolbar__btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 48px;
+      padding: 0 12px;
+      border: none;
+      border-radius: 14px;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.2s ease, opacity 0.2s;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body.sultan-mobile #sultanOrderToolbar .sultan-order-toolbar__btn:active {
+      transform: scale(0.98);
+    }
+    body.sultan-mobile #sultanOrderToolbar .sultan-order-toolbar__btn--back {
+      background: #f1f5f9;
+      color: #0f172a;
+      border: 1.5px solid #e2e8f0;
+      box-shadow: 0 1px 0 rgba(15, 23, 42, 0.04);
+    }
+    body.sultan-mobile #sultanOrderToolbar .sultan-order-toolbar__btn--orders {
+      background: linear-gradient(135deg, #10b981 0%, #047857 100%);
+      color: #fff;
+      box-shadow: 0 8px 22px rgba(5, 150, 105, 0.38);
+    }
+    body.sultan-mobile #sultanOrderToolbar .sultan-order-toolbar__btn svg {
+      flex-shrink: 0;
+    }
+    body.sultan-mobile #productsGridScrollWrap {
+      max-height: calc(100vh - 224px);
+      max-height: calc(100dvh - 224px);
     }
     body.sultan-mobile .table-btn.selected {
       border-color: #10b981 !important;
@@ -9428,10 +9729,26 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       box-shadow: 0 6px 20px rgba(5, 150, 105, 0.45);
     }
     body.sultan-mobile .sultan-section-tab .cnt {
-      opacity: 0.9;
+      opacity: 1;
+      font-size: 13px;
+      margin-left: 5px;
+      background: rgba(0,0,0,0.07);
+      padding: 1px 6px;
+      border-radius: 20px;
+      letter-spacing: 0;
+      color: #64748b;
       font-weight: 700;
-      font-size: 14px;
-      margin-left: 6px;
+    }
+    body.sultan-mobile .sultan-section-tab.has-occ:not(.active) .cnt {
+      color: #047857;
+      font-weight: 800;
+      background: rgba(16, 185, 129, 0.12);
+    }
+    body.sultan-mobile .sultan-section-tab.active .cnt {
+      color: #fff;
+      font-weight: 800;
+      background: rgba(255, 255, 255, 0.28);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
     }
     body.sultan-mobile .table-btn.sultan-table-empty {
       background: #ffffff !important;
@@ -9447,6 +9764,14 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     body.sultan-mobile .table-btn.sultan-table-empty:not(.selected):hover {
       border-color: #cbd5e1 !important;
       background: #fafafa !important;
+    }
+    body.sultan-mobile .table-btn.sultan-table-reserved {
+      background: #fffbeb !important;
+      border: 2px solid #fcd34d !important;
+      box-shadow: 0 0 0 2px rgba(251,191,36,0.18) !important;
+    }
+    body.sultan-mobile .table-btn.sultan-table-reserved .table-number {
+      color: #92400e !important;
     }
     /* Sultan: normal sipariş ekranında satır içi arama yerine "Ürün ara" butonu */
     #sultanSearchLaunchRow {
@@ -9979,6 +10304,9 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     }
     body.sultan-mobile #appHeader {
       background: linear-gradient(135deg, #064e3b 0%, #059669 100%);
+      max-width: 100%;
+      overflow-x: hidden;
+      box-sizing: border-box;
     }
     body.makara-mobile #appHeader {
       background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
@@ -10082,7 +10410,67 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
       position: relative;
       flex-shrink: 0;
     }
-    body.sultan-mobile .drawer-head { background: linear-gradient(145deg, #064e3b 0%, #059669 100%); }
+    body.sultan-mobile .drawer-head {
+      background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+      border-bottom: 1px solid #e2e8f0;
+      padding: max(14px, env(safe-area-inset-top, 14px)) 52px 14px 16px;
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      grid-template-rows: auto auto;
+      align-items: center;
+      column-gap: 12px;
+      row-gap: 2px;
+    }
+    body.sultan-mobile .drawer-head .drawer-close-btn {
+      color: #64748b;
+      background: rgba(148, 163, 184, 0.12);
+      top: max(12px, calc(env(safe-area-inset-top, 0px) + 10px));
+      right: 12px;
+    }
+    body.sultan-mobile .drawer-head .drawer-close-btn:hover { background: rgba(148, 163, 184, 0.2); }
+    body.sultan-mobile .drawer-avatar {
+      grid-row: 1 / span 2;
+      grid-column: 1;
+      width: 42px;
+      height: 42px;
+      margin: 0;
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      border-radius: 12px;
+      border: 1px solid #d1fae5;
+      background: #ecfdf5;
+      color: #047857;
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    body.sultan-mobile .drawer-staff-name {
+      grid-column: 2;
+      grid-row: 1;
+      font-size: 15px;
+      font-weight: 700;
+      color: #0f172a;
+      letter-spacing: -0.02em;
+      margin: 0;
+      line-height: 1.25;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    body.sultan-mobile .drawer-staff-role {
+      grid-column: 2;
+      grid-row: 2;
+      margin: 0;
+      align-self: start;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #64748b;
+      background: transparent;
+      padding: 0;
+      border-radius: 0;
+    }
     body.makara-mobile .drawer-head { background: linear-gradient(145deg, #7c3aed 0%, #a855f7 100%); }
     .drawer-close-btn {
       position: absolute;
@@ -10220,14 +10608,6 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         </span>
         <span class="drawer-item__label">Yenile</span>
       </button>
-      <button class="drawer-item" onclick="closeDrawer(); setTimeout(showTransferModal, 280);">
-        <span class="drawer-item__icon" style="background:#e0e7ff;">
-          <svg fill="none" stroke="#4f46e5" viewBox="0 0 24 24" stroke-width="2">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
-          </svg>
-        </span>
-        <span class="drawer-item__label">Masa Aktar</span>
-      </button>
       <button class="drawer-item" id="drawerMergeBtn" style="display:none;" onclick="closeDrawer(); setTimeout(showMergeModal, 280);">
         <span class="drawer-item__icon" style="background:#d1fae5;">
           <svg fill="none" stroke="#059669" viewBox="0 0 24 24" stroke-width="2">
@@ -10235,6 +10615,39 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           </svg>
         </span>
         <span class="drawer-item__label">Masa Birleştir</span>
+      </button>
+      <button class="drawer-item" id="drawerAllOrdersBtn" style="display:none;" onclick="closeDrawer(); setTimeout(openSultanAllOrdersSheet, 280);">
+        <span class="drawer-item__icon" style="background:#ecfdf5;">
+          <svg fill="none" stroke="#047857" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Siparişler</span>
+      </button>
+      <button class="drawer-item" id="drawerReservationBtn" style="display:none;" onclick="closeDrawer(); setTimeout(openReservationFormSheet, 280);">
+        <span class="drawer-item__icon" style="background:#fef3c7;">
+          <svg fill="none" stroke="#d97706" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Rezervasyon</span>
+      </button>
+      <button class="drawer-item" id="drawerReservationListBtn" style="display:none;" onclick="closeDrawer(); setTimeout(openReservationListSheet, 280);">
+        <span class="drawer-item__icon" style="background:#fef9c3;">
+          <svg fill="none" stroke="#ca8a04" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Mevcut Rezervasyonlar</span>
+        <span id="drawerReservationCount" style="background:#fbbf24;color:#78350f;font-size:11px;font-weight:800;padding:2px 7px;border-radius:20px;margin-left:auto;"></span>
+      </button>
+      <button class="drawer-item" id="drawerSalesHistoryBtn" style="display:none;" onclick="closeDrawer(); setTimeout(openSultanSalesHistorySheet, 280);">
+        <span class="drawer-item__icon" style="background:#ecfdf5;">
+          <svg fill="none" stroke="#047857" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Satışlar</span>
       </button>
     </div>
     <div class="drawer-footer">
@@ -10371,9 +10784,24 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       </div>
       
       <div id="orderSection" style="display: none;">
-        <!-- En Üst: Geri Dön Butonu ve Ürün Aktar (Müdür) -->
-        <div style="position: sticky; top: 0; z-index: 100; background: white; padding: 6px 12px 8px 12px; margin: -15px -15px 0 -15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px; scroll-margin-top: 58px;">
-          <button class="back-btn" onclick="goBackToTables()" style="position: relative; top: 0; left: 0; margin-bottom: 6px; width: 100%; max-width: none; animation: none;">
+        <!-- Sultan Somatı: masadayken geri + Siparişler (drawer ile aynı sheet) -->
+        <div id="sultanOrderToolbar" style="display: none;" aria-label="Masa üstü gezinme">
+          <button type="button" class="sultan-order-toolbar__btn sultan-order-toolbar__btn--back" onclick="goBackToTables()">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.3" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
+            </svg>
+            <span>Geri dön</span>
+          </button>
+          <button type="button" class="sultan-order-toolbar__btn sultan-order-toolbar__btn--orders" onclick="openSultanAllOrdersFromCurrentTable()">
+            <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.2" aria-hidden="true">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/>
+            </svg>
+            <span>Mevcut siparişler</span>
+          </button>
+        </div>
+        <!-- En Üst: Geri Dön + Ürün Aktar (Makara vb.); Sultan mobilde gizlenir — masaya dönüş cihaz geri tuşu / mantık -->
+        <div id="orderSectionTopNav" style="position: sticky; top: 0; z-index: 100; background: white; padding: 6px 12px 8px 12px; margin: -15px -15px 0 -15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px; scroll-margin-top: 58px;">
+          <button type="button" class="back-btn" id="orderSectionBackToTablesBtn" onclick="goBackToTables()" style="position: relative; top: 0; left: 0; margin-bottom: 6px; width: 100%; max-width: none; animation: none;">
             <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
               <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5L3 12m0 0l7.5-7.5M3 12h18"/>
             </svg>
@@ -10389,7 +10817,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         </div>
         
         <!-- Kategoriler ve Arama -->
-        <div style="position: sticky; top: 46px; z-index: 99; background: white; padding: 4px 0 6px 0; margin: 0 -15px 6px -15px; padding-left: 15px; padding-right: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
+        <div id="orderSectionCategoryBar" style="position: sticky; top: 46px; z-index: 99; background: white; padding: 4px 0 6px 0; margin: 0 -15px 6px -15px; padding-left: 15px; padding-right: 15px; box-shadow: 0 2px 10px rgba(0,0,0,0.05); border-radius: 0 0 20px 20px;">
           <!-- Kategoriler: 3 satır, satırlara mümkün olduğunca eşit sayıda -->
           <div style="margin-bottom: 6px;">
             <div class="category-tabs" id="categoryTabs">
@@ -10598,7 +11026,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
   </div>
   
   <!-- Ürün İptal Modal -->
-  <div id="cancelItemModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideCancelItemModal()">
+  <div id="cancelItemModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2900; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideCancelItemModal()">
     <div style="background: white; border-radius: 24px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;">
       <div style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; padding: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -10642,7 +11070,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
   </div>
   
   <!-- Türk Kahvesi / Menengiç Kahve Seçenek Modal -->
-  <div id="turkishCoffeeModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2000; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideTurkishCoffeeModal()">
+  <div id="turkishCoffeeModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10100; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideTurkishCoffeeModal()">
     <div style="background: white; border-radius: 24px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;">
       <div style="background: linear-gradient(135deg, #92400e 0%, #78350f 100%); color: white; padding: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -10671,7 +11099,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
   </div>
   
   <!-- İptal Açıklaması Modal (Fiş yazdırıldıktan sonra) -->
-  <div id="cancelReasonModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 3000; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) return;">
+  <div id="cancelReasonModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2910; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) return;">
     <div style="background: white; border-radius: 24px; width: 100%; max-width: 480px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;">
       <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: white; padding: 24px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -10845,11 +11273,212 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         <h3 id="sultanMgrTitle" style="margin: 0; font-size: 18px; font-weight: 800; color: #0f172a;">Masa</h3>
         <p id="sultanMgrSubtitle" style="margin: 8px 0 0; font-size: 15px; font-weight: 600; color: #64748b;"></p>
       </div>
+      <div style="background:#f8fafc;border-radius:14px;padding:14px 16px;margin-bottom:14px;border:1.5px solid #e2e8f0;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px;">
+          <label for="sultanMgrDiscountInput" style="font-size:14px;font-weight:700;color:#374151;white-space:nowrap;">İndirim (₺)</label>
+          <input type="number" id="sultanMgrDiscountInput" min="0" step="0.01" placeholder="0.00" oninput="updateSultanMgrDiscount()" style="flex:1;border:1.5px solid #d1d5db;border-radius:10px;padding:8px 12px;font-size:16px;font-weight:700;color:#1e293b;text-align:right;outline:none;max-width:140px;box-sizing:border-box;">
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:13px;color:#94a3b8;font-weight:600;">Ödenecek Tutar</span>
+          <span id="sultanMgrPayableAmount" style="font-size:19px;font-weight:900;color:#059669;">—</span>
+        </div>
+      </div>
       <button type="button" onclick="sultanManagerOpenPayment()" style="width: 100%; padding: 16px; margin-bottom: 10px; border-radius: 14px; border: none; background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #fff; font-size: 16px; font-weight: 800; box-shadow: 0 4px 14px rgba(5, 150, 105, 0.35);">Ödeme al</button>
+      <button type="button" onclick="openSultanMgrTransferSheet()" style="width: 100%; padding: 16px; margin-bottom: 10px; border-radius: 14px; border: 2px solid #e2e8f0; background: #fff; color: #1e40af; font-size: 16px; font-weight: 700;">Masa aktar</button>
       <button type="button" id="sultanMgrPrintBtn" onclick="sultanManagerPrintAdisyon()" style="width: 100%; padding: 16px; margin-bottom: 10px; border-radius: 14px; border: 2px solid #e2e8f0; background: #fff; color: #0f172a; font-size: 16px; font-weight: 700;">Adisyon yazdır</button>
+      <button type="button" onclick="openSultanMgrCancelSheet()" style="width: 100%; padding: 14px; margin-bottom: 10px; border-radius: 14px; border: 1.5px solid #fecaca; background: #fff5f5; color: #dc2626; font-size: 15px; font-weight: 700;">Tüm masayı iptal et</button>
       <button type="button" onclick="closeSultanManagerSheet()" style="width: 100%; padding: 12px; border: none; background: transparent; color: #64748b; font-size: 15px; font-weight: 600;">Vazgeç</button>
     </div>
   </div>
+  <!-- Sultan — Tüm Masayı İptal Et Onay Sayfası -->
+  <div id="sultanMgrCancelSheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.5);z-index:2700;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeSultanMgrCancelSheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;padding:10px 20px 28px;box-shadow:0 -12px 40px rgba(0,0,0,0.2);">
+      <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 16px;"></div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div style="width:44px;height:44px;border-radius:50%;background:#fee2e2;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="22" height="22" fill="none" stroke="#dc2626" viewBox="0 0 24 24" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
+        </div>
+        <div>
+          <div style="font-size:17px;font-weight:800;color:#0f172a;" id="sultanMgrCancelTitle">Masayı İptal Et</div>
+          <div style="font-size:13px;color:#64748b;margin-top:2px;">Bu işlem geri alınamaz</div>
+        </div>
+      </div>
+      <textarea id="sultanMgrCancelReason" rows="3" placeholder="İptal açıklaması girin (zorunlu)..." style="width:100%;border:1.5px solid #fca5a5;border-radius:12px;padding:12px 14px;font-size:15px;color:#1e293b;resize:none;outline:none;font-family:inherit;box-sizing:border-box;line-height:1.5;margin-bottom:14px;"></textarea>
+      <button type="button" onclick="confirmSultanMgrCancelOrder()" style="width:100%;padding:16px;border-radius:14px;border:none;background:linear-gradient(135deg,#dc2626,#b91c1c);color:#fff;font-size:16px;font-weight:800;cursor:pointer;margin-bottom:10px;box-shadow:0 3px 12px rgba(220,38,38,0.3);">Evet, İptal Et</button>
+      <button type="button" onclick="closeSultanMgrCancelSheet()" style="width:100%;padding:13px;border:none;background:transparent;color:#64748b;font-size:15px;font-weight:600;cursor:pointer;">Vazgeç</button>
+    </div>
+  </div>
+
+  <!-- Sultan — Masa Aktar Hedef Seçim Sayfası -->
+  <div id="sultanMgrTransferSheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.5);z-index:2700;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeSultanMgrTransferSheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 -12px 40px rgba(0,0,0,0.2);">
+      <div style="padding:10px 20px 14px;flex-shrink:0;">
+        <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 14px;"></div>
+        <div style="font-size:17px;font-weight:800;color:#0f172a;margin-bottom:4px;">Hedef Masayı Seçin</div>
+        <div style="font-size:13px;color:#64748b;" id="sultanMgrTransferSubtitle"></div>
+      </div>
+      <div id="sultanMgrTransferGrid" style="flex:1;overflow-y:auto;padding:0 16px 8px;"></div>
+      <div style="padding:14px 20px 24px;flex-shrink:0;display:flex;gap:10px;">
+        <button type="button" onclick="closeSultanMgrTransferSheet()" style="flex:1;padding:14px;border-radius:14px;border:1.5px solid #e2e8f0;background:#f8fafc;color:#64748b;font-size:15px;font-weight:700;cursor:pointer;">Vazgeç</button>
+        <button type="button" id="sultanMgrTransferConfirmBtn" onclick="confirmSultanMgrTransfer()" style="flex:2;padding:14px;border-radius:14px;border:none;background:linear-gradient(135deg,#1d4ed8,#1e40af);color:#fff;font-size:15px;font-weight:800;cursor:pointer;display:none;box-shadow:0 3px 12px rgba(29,78,216,0.3);">Aktar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sultan — Rezervasyon Oluşturma Formu -->
+  <div id="sultanReservationFormSheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:2800;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeReservationFormSheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 -12px 40px rgba(0,0,0,0.22);">
+      <div style="padding:10px 20px 0;flex-shrink:0;">
+        <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 14px;"></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+          <div style="width:40px;height:40px;border-radius:12px;background:#fef3c7;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            <svg width="20" height="20" fill="none" stroke="#d97706" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+          </div>
+          <div>
+            <div style="font-size:17px;font-weight:800;color:#0f172a;" id="resFormTitle">Rezervasyon Oluştur</div>
+            <div style="font-size:13px;color:#64748b;" id="resFormTableLabel"></div>
+          </div>
+        </div>
+      </div>
+      <div style="flex:1;overflow-y:auto;padding:0 20px 10px;">
+        <div style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Ad Soyad *</label>
+          <input type="text" id="resFormGuestName" placeholder="Müşteri adı soyadı..." style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;">
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Tarih *</label>
+            <input type="date" id="resFormDate" style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Saat *</label>
+            <input type="time" id="resFormTime" style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Kişi Sayısı</label>
+            <input type="number" id="resFormPeople" min="0" placeholder="0" style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Yetişkin</label>
+            <input type="number" id="resFormAdults" min="0" placeholder="0" style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;">
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Çocuk</label>
+            <input type="number" id="resFormChildren" min="0" placeholder="0" style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;">
+          </div>
+          <div>
+            <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Bebek</label>
+            <input type="number" id="resFormBabies" min="0" placeholder="0" style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;">
+          </div>
+        </div>
+        <div id="resFormTablePickerWrap" style="margin-bottom:10px;">
+          <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Masa *</label>
+          <select id="resFormTableSelect" style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;outline:none;box-sizing:border-box;background:#fff;"></select>
+        </div>
+        <div>
+          <label style="font-size:12px;font-weight:700;color:#475569;display:block;margin-bottom:4px;">Özel Not</label>
+          <textarea id="resFormNote" rows="3" placeholder="Özel not..." style="width:100%;border:1.5px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:14px;color:#1e293b;resize:none;outline:none;font-family:inherit;box-sizing:border-box;line-height:1.5;"></textarea>
+        </div>
+      </div>
+      <div style="padding:12px 20px 24px;flex-shrink:0;display:flex;gap:10px;">
+        <button type="button" onclick="closeReservationFormSheet()" style="flex:1;padding:14px;border-radius:14px;border:1.5px solid #e2e8f0;background:#f8fafc;color:#64748b;font-size:15px;font-weight:700;cursor:pointer;">Vazgeç</button>
+        <button type="button" id="resFormSubmitBtn" onclick="submitReservation()" style="flex:2;padding:14px;border-radius:14px;border:none;background:linear-gradient(135deg,#d97706,#b45309);color:#fff;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 3px 12px rgba(217,119,6,0.3);">Oluştur</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sultan — Rezervasyon Detay Sheet -->
+  <div id="sultanReservationDetailSheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:2800;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeReservationDetailSheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;padding:10px 20px 26px;box-shadow:0 -12px 40px rgba(0,0,0,0.22);">
+      <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 14px;"></div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">
+        <div style="width:40px;height:40px;border-radius:12px;background:#fef3c7;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+          <svg width="20" height="20" fill="none" stroke="#d97706" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+        </div>
+        <div>
+          <div style="font-size:17px;font-weight:800;color:#0f172a;">Rezervasyon Bilgileri</div>
+          <div style="font-size:13px;color:#64748b;" id="resDetailTableLabel"></div>
+        </div>
+      </div>
+      <div id="resDetailBody" style="background:#f8fafc;border-radius:14px;padding:14px 16px;margin-bottom:14px;border:1.5px solid #e2e8f0;font-size:14px;color:#1e293b;line-height:1.9;"></div>
+      <button type="button" onclick="printReservation()" style="width:100%;padding:14px;margin-bottom:10px;border-radius:14px;border:none;background:linear-gradient(135deg,#d97706,#b45309);color:#fff;font-size:15px;font-weight:800;cursor:pointer;box-shadow:0 3px 12px rgba(217,119,6,0.3);">Rezervasyon Yazdır</button>
+      <button type="button" onclick="editReservationFromDetail()" style="width:100%;padding:13px;margin-bottom:10px;border-radius:14px;border:1.5px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;font-size:14px;font-weight:700;cursor:pointer;">Düzenle</button>
+      <button type="button" onclick="cancelReservation()" style="width:100%;padding:13px;margin-bottom:10px;border-radius:14px;border:1.5px solid #fecaca;background:#fff5f5;color:#dc2626;font-size:14px;font-weight:700;cursor:pointer;">Rezervasyonu İptal Et</button>
+      <button type="button" onclick="closeReservationDetailSheet()" style="width:100%;padding:12px;border:none;background:transparent;color:#64748b;font-size:14px;font-weight:600;cursor:pointer;">Kapat</button>
+    </div>
+  </div>
+
+  <!-- Sultan — Tüm Rezervasyonlar Listesi -->
+  <div id="sultanReservationListSheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:2800;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeReservationListSheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 -12px 40px rgba(0,0,0,0.22);">
+      <div style="padding:10px 20px 0;flex-shrink:0;">
+        <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 14px;"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:38px;height:38px;border-radius:11px;background:#fef3c7;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              <svg width="18" height="18" fill="none" stroke="#d97706" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+            </div>
+            <div style="font-size:17px;font-weight:800;color:#0f172a;">Mevcut Rezervasyonlar</div>
+          </div>
+          <span id="resListCount" style="background:#fef3c7;color:#92400e;font-size:12px;font-weight:800;padding:3px 10px;border-radius:20px;"></span>
+        </div>
+      </div>
+      <div id="resListBody" style="flex:1;overflow-y:auto;padding:0 16px 8px;"></div>
+      <div style="padding:12px 20px 24px;flex-shrink:0;">
+        <button type="button" onclick="closeReservationListSheet()" style="width:100%;padding:13px;border:none;background:transparent;color:#64748b;font-size:15px;font-weight:600;cursor:pointer;">Kapat</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sultan — Tamamlanmış satışlar (geri al) -->
+  <div id="sultanSalesHistorySheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:2815;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeSultanSalesHistorySheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 -12px 40px rgba(0,0,0,0.22);">
+      <div style="padding:10px 20px 0;flex-shrink:0;">
+        <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 14px;"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:38px;height:38px;border-radius:11px;background:#ecfdf5;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              <svg width="18" height="18" fill="none" stroke="#047857" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            </div>
+            <div style="font-size:17px;font-weight:800;color:#0f172a;">Satışlar</div>
+          </div>
+        </div>
+        <p style="margin:0 0 12px;font-size:12px;font-weight:600;color:#64748b;line-height:1.45;">Ödemesi alınmış masalar. Yanlışlıkla kapatılan siparişi <strong style="color:#0f172a;">Geri al</strong> ile tekrar açık masaya döndürebilirsiniz.</p>
+      </div>
+      <div id="sultanSalesHistoryBody" style="flex:1;overflow-y:auto;padding:0 16px 8px;"></div>
+      <div style="padding:12px 20px 24px;flex-shrink:0;">
+        <button type="button" onclick="closeSultanSalesHistorySheet()" style="width:100%;padding:13px;border:none;background:transparent;color:#64748b;font-size:15px;font-weight:600;cursor:pointer;">Kapat</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Sultan — Tüm masalar açık siparişleri (toplu) -->
+  <div id="sultanAllOrdersSheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:2816;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeSultanAllOrdersSheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 -12px 40px rgba(0,0,0,0.22);">
+      <div style="padding:10px 20px 0;flex-shrink:0;">
+        <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 14px;"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <div style="width:38px;height:38px;border-radius:11px;background:#ecfdf5;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+              <svg width="18" height="18" fill="none" stroke="#047857" viewBox="0 0 24 24" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            </div>
+            <div style="font-size:17px;font-weight:800;color:#0f172a;">Siparişler</div>
+          </div>
+          <span id="sultanAllOrdersCount" style="background:#ecfdf5;color:#047857;font-size:12px;font-weight:800;padding:3px 10px;border-radius:20px;"></span>
+        </div>
+        <p style="margin:0 0 10px;font-size:12px;font-weight:600;color:#64748b;line-height:1.45;">Tüm masalardaki açık siparişler ve satırlar.</p>
+      </div>
+      <div id="sultanAllOrdersBody" style="flex:1;overflow-y:auto;padding:0 16px 8px;-webkit-overflow-scrolling:touch;"></div>
+      <div style="padding:12px 20px 24px;flex-shrink:0;">
+        <button type="button" onclick="closeSultanAllOrdersSheet()" style="width:100%;padding:13px;border:none;background:transparent;color:#64748b;font-size:15px;font-weight:600;cursor:pointer;">Kapat</button>
+      </div>
+    </div>
+  </div>
+
   <div id="sultanPaymentSheet" style="display: none; position: fixed; inset: 0; background: rgba(15, 23, 42, 0.45); z-index: 2650; align-items: flex-end; justify-content: center;" onclick="if(event.target === this) closeSultanPaymentSheet()">
     <div style="background: #fff; width: 100%; max-width: 480px; border-radius: 22px 22px 0 0; padding: 10px 20px 22px; box-shadow: 0 -12px 40px rgba(0,0,0,0.18);">
       <div style="text-align: center; margin-bottom: 14px;">
@@ -10870,7 +11499,13 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     const MOBILE_BRANCH_KEY = ${JSON.stringify(mobileBranchKey)};
     const isSultanMobile = MOBILE_BRANCH_KEY === 'sultansomati';
     const isMakaraHavzanMobile = MOBILE_BRANCH_KEY === 'makara';
-    
+    let sultanAllOrdersHighlightTableId = null;
+
+    // Sultan Somatı'da tüm personel müdür yetkisine sahiptir
+    function hasManagerPermission() {
+      return isSultanMobile || !!(currentStaff && currentStaff.is_manager);
+    }
+
     function setSultanLoginChromeActive(on) {
       if (!isSultanMobile) return;
       document.body.classList.toggle('sultan-staff-auth', !!on);
@@ -10883,6 +11518,18 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       document.getElementById('drawerOverlay').classList.add('open');
       document.getElementById('drawerPanel').classList.add('open');
       document.body.style.overflow = 'hidden';
+      var resBtn = document.getElementById('drawerReservationBtn');
+      if (resBtn) resBtn.style.display = isSultanMobile ? '' : 'none';
+      var resListBtn = document.getElementById('drawerReservationListBtn');
+      if (resListBtn) resListBtn.style.display = isSultanMobile ? '' : 'none';
+      var resCount = document.getElementById('drawerReservationCount');
+      if (resCount) resCount.textContent = (sultanReservations && sultanReservations.length > 0) ? sultanReservations.length : '';
+      var salesHistBtn = document.getElementById('drawerSalesHistoryBtn');
+      if (salesHistBtn) salesHistBtn.style.display = isSultanMobile ? '' : 'none';
+      var mergeBtn = document.getElementById('drawerMergeBtn');
+      if (mergeBtn) mergeBtn.style.display = !isSultanMobile && currentStaff && currentStaff.is_manager ? '' : 'none';
+      var allOrdBtn = document.getElementById('drawerAllOrdersBtn');
+      if (allOrdBtn) allOrdBtn.style.display = isSultanMobile ? '' : 'none';
     }
 
     function closeDrawer() {
@@ -10904,9 +11551,11 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         const roleEl = document.getElementById('drawerStaffRole');
         if (avatarEl) avatarEl.textContent = i1 + i2;
         if (nameEl) nameEl.textContent = fullName || 'Personel';
-        if (roleEl) roleEl.textContent = staff.is_manager ? 'Müdür' : 'Personel';
+        if (roleEl) roleEl.textContent = (isSultanMobile || staff.is_manager) ? 'Müdür' : 'Personel';
         const mergeBtn = document.getElementById('drawerMergeBtn');
-        if (mergeBtn) mergeBtn.style.display = staff.is_manager ? 'flex' : 'none';
+        if (mergeBtn) mergeBtn.style.display = !isSultanMobile && staff.is_manager ? 'flex' : 'none';
+        const allOrdersBtn = document.getElementById('drawerAllOrdersBtn');
+        if (allOrdersBtn) allOrdersBtn.style.display = isSultanMobile ? 'flex' : 'none';
       }
     }
 
@@ -11205,6 +11854,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
             if (selectedTable && selectedTable.id === data.tableId) {
               loadExistingOrders(selectedTable.id).catch(err => console.error('Sipariş yenileme hatası:', err));
             }
+            if (isSultanMobile) {
+              var _ssh = document.getElementById('sultanSalesHistorySheet');
+              if (_ssh && _ssh.style.display === 'flex') renderSultanSalesHistoryList();
+              var _sao = document.getElementById('sultanAllOrdersSheet');
+              if (_sao && _sao.style.display === 'flex') renderSultanAllOrdersSheet();
+            }
           }, 200);
         });
         socket.on('new-order', async (data) => {
@@ -11288,13 +11943,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       }
       // Sipariş gönder modalını göster
       document.getElementById('cart').style.display = 'block';
-      // Müdür kontrolü - Masa Birleştir butonunu göster/gizle
       const mergeTableBtn = document.getElementById('mergeTableBtn');
-      if (currentStaff && currentStaff.is_manager) {
-        if (mergeTableBtn) mergeTableBtn.style.display = 'flex';
-      } else {
-        if (mergeTableBtn) mergeTableBtn.style.display = 'none';
-      }
+      if (mergeTableBtn) mergeTableBtn.style.display = hasManagerPermission() ? 'flex' : 'none';
       renderTables();
     }
     
@@ -11329,14 +11979,18 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       renderTables();
     }
     
+    var sultanReservations = []; // { id, tableId, ... }
+
     async function loadData() {
       try {
-        const [catsRes, prodsRes, tablesRes] = await Promise.all([
+        const fetchList = [
           fetch(API_URL + '/categories'),
           fetch(API_URL + '/products'),
           fetch(API_URL + '/tables')
-        ]);
-        categories = await catsRes.json();
+        ];
+        if (isSultanMobile) fetchList.push(fetch(API_URL + '/reservations'));
+        const results = await Promise.all(fetchList);
+        categories = await results[0].json();
         if (isSultanMobile) {
           categories = categories.filter(function (c) {
             var n = Number(c.id);
@@ -11345,8 +11999,9 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
             return nm !== 'yan ürünler' && nm !== 'yan urunler';
           });
         }
-        products = await prodsRes.json();
-        tables = await tablesRes.json();
+        products = await results[1].json();
+        tables = await results[2].json();
+        if (isSultanMobile && results[3]) sultanReservations = await results[3].json();
         renderTables();
         renderCategories();
       } catch (error) {
@@ -11425,21 +12080,23 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         keys
           .map(function (k) {
             const label = byKey[k];
-            const cnt = tables.filter(function (x) {
-              return x.sectionKey === k;
-            }).length;
+            const sectionTables = tables.filter(function (x) { return x.sectionKey === k; });
+            const total = sectionTables.length;
+            const occupied = sectionTables.filter(function (x) { return x.hasOrder; }).length;
             const active = currentSultanSectionKey === k ? ' active' : '';
             const kEsc = k.replace(/'/g, "\\'");
+            const occCls = occupied > 0 ? ' has-occ' : '';
             return (
               '<button type="button" class="sultan-section-tab' +
               active +
+              occCls +
               '" onclick="selectSultanSectionKey(\\'' +
               kEsc +
               '\\')">' +
               String(label).replace(/</g, '&lt;').replace(/>/g, '&gt;') +
-              '<span class="cnt">(' +
-              cnt +
-              ')</span></button>'
+              '<span class="cnt">' +
+              occupied + '/' + total +
+              '</span></button>'
             );
           })
           .join('') +
@@ -11486,16 +12143,23 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
               ' ₺">' +
               ot.toFixed(2) +
               ' ₺</div>';
+            // Rezervasyon kontrolü
+            const reservation = sultanReservations.find(function(r) { return r.tableId === table.id; });
             const mgrFab =
-              table.hasOrder && currentStaff
-                ? '<button type="button" class="sultan-mgr-fab" aria-label="Masa işlemleri" onclick="event.preventDefault();event.stopPropagation();openSultanManagerSheet(' +
-                  tableIdStr +
-                  ');">⋯</button>'
+              (table.hasOrder || reservation) && currentStaff
+                ? '<button type="button" class="sultan-mgr-fab" aria-label="Masa işlemleri" onclick="event.preventDefault();event.stopPropagation();' +
+                  (table.hasOrder ? 'openSultanManagerSheet(' + tableIdStr + ')' : 'openReservationDetailSheet(' + tableIdStr + ')') +
+                  '">⋯</button>'
                 : '';
             if (!table.hasOrder) {
+              const resvBadge = reservation
+                ? '<div style="font-size:9px;font-weight:800;color:#92400e;margin-top:4px;padding:2px 7px;background:rgba(251,191,36,0.25);border-radius:6px;letter-spacing:0.03em;">REZERVE</div>'
+                : '';
+              const resvClass = reservation ? ' sultan-table-reserved' : '';
               return (
                 '<div class="sultan-table-cell">' +
                 '<button class="table-btn sultan-table-empty' +
+                resvClass +
                 selectedClass +
                 '" onclick="selectTable(' +
                 tableIdStr +
@@ -11506,7 +12170,11 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
                 '\\')">' +
                 '<div class="table-number">' +
                 table.number +
-                '</div></button></div>'
+                '</div>' +
+                resvBadge +
+                '</button>' +
+                mgrFab +
+                '</div>'
               );
             }
             const disp = String(table.name || '')
@@ -11657,6 +12325,10 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       renderTables();
       document.getElementById('tableSelection').style.display = 'none';
       document.getElementById('orderSection').style.display = 'block';
+      var sultanOrderToolbarEl = document.getElementById('sultanOrderToolbar');
+      if (sultanOrderToolbarEl) {
+        sultanOrderToolbarEl.style.display = isSultanMobile ? 'flex' : 'none';
+      }
       // Çıkış Yap butonunu gizle
       const mainLogoutBtn = document.getElementById('mainLogoutBtn');
       if (mainLogoutBtn) {
@@ -11679,14 +12351,9 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       searchQuery = '';
       // Mevcut siparişleri yükle
       await loadExistingOrders(id);
-      // Ürün Aktar butonunu göster/gizle (sadece müdür)
       const orderSectionTransferItemsBtn = document.getElementById('orderSectionTransferItemsBtn');
       if (orderSectionTransferItemsBtn) {
-        if (currentStaff && currentStaff.is_manager) {
-          orderSectionTransferItemsBtn.style.display = 'flex';
-        } else {
-          orderSectionTransferItemsBtn.style.display = 'none';
-        }
+        orderSectionTransferItemsBtn.style.display = !isSultanMobile && hasManagerPermission() ? 'flex' : 'none';
       }
       if (categories.length > 0) {
         // İlk kategoriyi seç (yan ürünler kategorisi değilse)
@@ -11696,6 +12363,11 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
     
     async function loadExistingOrders(tableId) {
+      if (isSultanMobile) {
+        var eo = document.getElementById('existingOrders');
+        if (eo) eo.style.display = 'none';
+        return;
+      }
       try {
         const response = await fetch(API_URL + '/table-orders?tableId=' + encodeURIComponent(tableId));
         if (!response.ok) {
@@ -11712,7 +12384,10 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     function renderExistingOrders(orders) {
       const ordersContainer = document.getElementById('existingOrders');
       const ordersList = document.getElementById('existingOrdersList');
-      
+      if (isSultanMobile) {
+        if (ordersContainer) ordersContainer.style.display = 'none';
+        return;
+      }
       if (!orders || orders.length === 0) {
         ordersContainer.style.display = 'none';
         return;
@@ -11743,7 +12418,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
                 '<span class="order-item-qty">×' + item.quantity + '</span>' +
                 '<span class="order-item-price">' + itemTotal + ' ₺</span>' +
               '</div>' +
-              (currentStaff && currentStaff.is_manager 
+              (hasManagerPermission()
                 ? '<button id="cancelBtn_' + item.id + '" onclick="showCancelItemModal(' + item.id + ', ' + item.quantity + ', \\'' + item.product_name.replace(/'/g, "\\'") + '\\')" style="padding: 6px 12px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px;" onmouseover="if(!this.disabled) { this.style.transform=\\'scale(1.05)\\'; this.style.boxShadow=\\'0 4px 12px rgba(239, 68, 68, 0.4)\\'; }" onmouseout="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; this.style.boxShadow=\\'0 2px 8px rgba(239, 68, 68, 0.3)\\'; }" ontouchstart="if(!this.disabled) { this.style.transform=\\'scale(0.95)\\'; }" ontouchend="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; }" class="cancel-item-btn"><span id="cancelBtnText_' + item.id + '">İptal</span><svg id="cancelBtnSpinner_' + item.id + '" style="display: none; width: 14px; height: 14px; animation: spin 1s linear infinite;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>'
                 : '<button onclick="showManagerRequiredMessage()" style="padding: 6px 12px; background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(107, 114, 128, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px; opacity: 0.7;" onmouseover="this.style.opacity=\\'0.9\\';" onmouseout="this.style.opacity=\\'0.7\\';"><span>İptal</span></button>') +
             '</div>' +
@@ -11784,6 +12459,10 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       document.getElementById('tableSelection').style.display = 'block';
       document.getElementById('tableTypeSelection').style.display = 'none';
       document.getElementById('orderSection').style.display = 'none';
+      var sultanOrderToolbarEl = document.getElementById('sultanOrderToolbar');
+      if (sultanOrderToolbarEl) {
+        sultanOrderToolbarEl.style.display = 'none';
+      }
       const cartEl = document.getElementById('cart');
       if (cartEl) {
         cartEl.style.display = 'none';
@@ -11985,7 +12664,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     
     // Ürün Aktar Modal Fonksiyonları
     async function showTransferItemsModal() {
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
         return;
       }
@@ -12237,7 +12916,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           return;
         }
         
-        if (!currentStaff || !currentStaff.is_manager) {
+        if (!hasManagerPermission()) {
           showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
           return;
         }
@@ -12307,7 +12986,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     
     // Masa Birleştir Modal Fonksiyonları
     function showMergeModal() {
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
         return;
       }
@@ -12432,7 +13111,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         return;
       }
       
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showToast('error', 'Yetki Yok', 'Bu işlem için müdür yetkisi gereklidir.');
         return;
       }
@@ -12497,6 +13176,13 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       var chunk1 = [];
       var chunk2 = [];
       if (n > 0) {
+        if (isSultanMobile) {
+          /* Sultan: sırayı bozmadan 3 satıra böl (soldan sağa okunur); kompakt pill ile daha çok sığar */
+          var perRow = Math.ceil(sorted.length / 3);
+          chunk0 = sorted.slice(0, perRow);
+          chunk1 = sorted.slice(perRow, perRow * 2);
+          chunk2 = sorted.slice(perRow * 2);
+        } else {
         function cmpOrder(a, b) {
           var oa = typeof a.order_index === 'number' ? a.order_index : parseInt(a.order_index, 10) || 0;
           var ob = typeof b.order_index === 'number' ? b.order_index : parseInt(b.order_index, 10) || 0;
@@ -12542,6 +13228,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         chunk0 = rows[0];
         chunk1 = rows[1];
         chunk2 = rows[2];
+        }
       }
       
       // Soft pastel renk paleti (çeşitli renkler - flu tonlar)
@@ -12573,8 +13260,13 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       };
       
       function categoryTabButtonHtml(cat) {
-        const colors = getCategoryColor(cat.id);
         const isActive = selectedCategoryId === cat.id;
+        if (isSultanMobile) {
+          var nm = (cat.name && String(cat.name)) || '';
+          nm = nm.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+          return '<button type="button" class="category-tab category-tab--sultan' + (isActive ? ' active' : '') + '" onclick="selectCategory(' + cat.id + ')">' + nm + '</button>';
+        }
+        const colors = getCategoryColor(cat.id);
         const activeBg = colors.hover;
         const activeBorder = colors.border;
         return '<button class="category-tab ' + (isActive ? 'active' : '') + '" onclick="selectCategory(' + cat.id + ')" style="background: ' + (isActive ? activeBg : colors.bg) + '; border-color: ' + (isActive ? activeBorder : colors.border) + '; color: ' + colors.text + '; box-shadow: 0 2px 8px rgba(0,0,0,0.08); font-weight: ' + (isActive ? '700' : '600') + ';" onmouseover="if(!this.classList.contains(\\'active\\')) { this.style.background=\\'' + colors.hover + '\\'; this.style.transform=\\'translateY(-2px)\\'; }" onmouseout="if(!this.classList.contains(\\'active\\')) { this.style.background=\\'' + colors.bg + '\\'; this.style.transform=\\'translateY(0)\\'; }">' + cat.name + '</button>';
@@ -12885,6 +13577,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         
         const gridEarly = document.getElementById('productsGrid');
         if (!gridEarly) return;
+        // Kart yeniden render olurken aktif kart durumunu sıfırla
+        if (isSultanMobile) sultanActiveCardId = null;
         if (isSultanMobile && isSultanImmersiveSearchOpen() && !searchQuery) {
           gridEarly.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 48px 20px; color: #64748b; font-size: 16px; font-weight: 600; line-height: 1.5;">Aramak istediğiniz ürünün adını yukarıdaki kutuya yazın.</div>';
           return;
@@ -12953,7 +13647,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         const needsCoffeeModal = isTurkishCoffee || isMenengicCoffee;
         // ID'yi string olarak geç (yan ürünler için gerekli)
         const productIdStr = typeof prod.id === 'string' ? '\\'' + prod.id + '\\'' : prod.id;
-        const onClickHandler = isOutOfStock ? '' : (needsCoffeeModal ? 'onclick="showTurkishCoffeeModal(' + productIdStr + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"' : 'onclick="addToCart(' + productIdStr + ', \\'' + prod.name.replace(/'/g, "\\'") + '\\', ' + prod.price + ')"');
+        const escapedName = prod.name.replace(/'/g, "\\'");
+        const onClickHandler = isOutOfStock ? '' : (needsCoffeeModal
+          ? 'onclick="showTurkishCoffeeModal(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ')"'
+          : (isSultanMobile
+              ? 'onclick="toggleSultanCard(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ', \\'' + cardId + '\\')"'
+              : 'onclick="addToCart(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ')"'));
         const cardStyle = isOutOfStock ? backgroundStyle + ' opacity: 0.6; cursor: not-allowed; pointer-events: none;' : backgroundStyle;
         
         // Kilit ikonu (sadece stok 0 olduğunda)
@@ -12967,11 +13666,43 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           const stockText = stock === 1 ? '1 adet kaldı' : stock + ' adet kaldı';
           stockBadge = '<div style="position: absolute; bottom: 0; left: 0; right: 0; background: linear-gradient(to top, rgba(245, 158, 11, 0.95) 0%, rgba(245, 158, 11, 0.85) 100%); color: white; padding: 8px; text-align: center; font-size: 12px; font-weight: 700; z-index: 10; border-radius: 0 0 12px 12px; text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);">⚠️ ' + stockText + '</div>';
         }
-        
+
+        // Sultan Somatı: sağ üst köşe miktar kontrolü (dikey, büyük, modern) — anlık sepet
+        const sultanInlineQty = (isSultanMobile && !isOutOfStock && !needsCoffeeModal)
+          ? '<div id="' + cardId + '-sqr" style="position:absolute;top:8px;right:8px;display:none;flex-direction:column;align-items:center;background:#fff;border:1.5px solid #a7f3d0;border-radius:14px;overflow:hidden;box-shadow:0 3px 14px rgba(5,150,105,0.22);z-index:5;min-width:36px;">' +
+            '<button onclick="event.stopPropagation();sultanCardInc(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ', \\'' + cardId + '\\')" style="width:36px;height:34px;border:none;border-bottom:1.5px solid #a7f3d0;background:#059669;font-size:20px;font-weight:700;cursor:pointer;color:#fff;display:flex;align-items:center;justify-content:center;padding:0;line-height:1;touch-action:manipulation;">+</button>' +
+            '<span id="' + cardId + '-sqv" style="font-size:16px;font-weight:900;color:#065f46;width:36px;text-align:center;height:32px;line-height:32px;background:#f0fdf4;letter-spacing:-0.5px;">1</span>' +
+            '<button onclick="event.stopPropagation();sultanCardDec(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ', \\'' + cardId + '\\')" style="width:36px;height:34px;border:none;border-top:1.5px solid #a7f3d0;background:#fff;font-size:22px;font-weight:500;cursor:pointer;color:#059669;display:flex;align-items:center;justify-content:center;padding:0;line-height:1;touch-action:manipulation;">−</button>' +
+            '</div>'
+          : '';
+
+        // Sultan Somatı: sol alt köşe not butonu
+        const sultanNoteBtn = (isSultanMobile && !isOutOfStock && !needsCoffeeModal)
+          ? '<button onclick="event.stopPropagation();openSultanNote(' + productIdStr + ', \\'' + escapedName + '\\', \\'' + cardId + '\\')" style="position:relative;width:28px;height:28px;border-radius:50%;border:1.5px solid #e2e8f0;background:#f8fafc;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;">' +
+            '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="2.2" cy="6.5" r="1.2" fill="#94a3b8"/><circle cx="6.5" cy="6.5" r="1.2" fill="#94a3b8"/><circle cx="10.8" cy="6.5" r="1.2" fill="#94a3b8"/></svg>' +
+            '<span id="' + cardId + '-ni" style="display:none;position:absolute;top:-1px;right:-1px;width:7px;height:7px;background:#059669;border-radius:50%;border:1.5px solid #fff;"></span>' +
+            '</button>'
+          : '';
+
+        // Kart HTML — Sultan mobile için yeni düzen, diğerleri için eski düzen
+        if (isSultanMobile && !isOutOfStock && !needsCoffeeModal) {
+          return '<div id="' + cardId + '" class="product-card" ' + onClickHandler + ' style="' + cardStyle + ' position: relative; overflow: hidden; display:flex; flex-direction:column;">' +
+            lockIcon +
+            sultanInlineQty +
+            '<div class="product-name" style="padding-right:72px;">' + prod.name + '</div>' +
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:auto;padding-top:8px;">' +
+              sultanNoteBtn +
+              '<div class="product-price">' + prod.price.toFixed(2) + ' ₺</div>' +
+            '</div>' +
+            stockBadge +
+          '</div>';
+        }
+
         return '<div id="' + cardId + '" class="product-card" ' + onClickHandler + ' style="' + cardStyle + ' position: relative; overflow: hidden;">' +
           lockIcon +
           '<div class="product-name" style="' + (isOutOfStock ? 'opacity: 0.7;' : '') + '">' + prod.name + '</div>' +
           '<div class="product-price" style="' + (isOutOfStock ? 'opacity: 0.7;' : '') + '">' + prod.price.toFixed(2) + ' ₺</div>' +
+          sultanInlineQty +
           stockBadge +
         '</div>';
       }).join('');
@@ -13095,16 +13826,162 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       
       updateCart();
       hideTurkishCoffeeModal();
-      
-      // Arama input'unu temizle ve ürünleri yeniden render et
-      const searchInputEl = document.getElementById('searchInput');
-      if (searchInputEl) {
-        searchInputEl.value = '';
-        searchQuery = '';
-        renderProducts();
+      showToast('success', 'Eklendi', productName + ' sepete eklendi');
+
+      // Sultan Somatı immersive araması açıksa arama sorgusunu koru, kapatma
+      if (!(isSultanMobile && isSultanImmersiveSearchOpen())) {
+        const searchInputEl = document.getElementById('searchInput');
+        if (searchInputEl) {
+          searchInputEl.value = '';
+          searchQuery = '';
+          renderProducts();
+        }
       }
     }
-    
+
+    // ── Sultan Somatı: Ürün Notu ──────────────────────────────────────────
+    let sultanNotes = {}; // cardId -> not metni
+    let _sultanNoteCtx = { cardId: null, productId: null, name: null };
+
+    function openSultanNote(productId, name, cardId) {
+      _sultanNoteCtx = { cardId, productId, name };
+
+      let modal = document.getElementById('sultanNoteModal');
+      if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'sultanNoteModal';
+        modal.style.cssText = 'position:fixed;inset:0;z-index:20000;display:flex;align-items:flex-end;justify-content:center;background:rgba(15,23,42,0.45);backdrop-filter:blur(6px);';
+        modal.innerHTML =
+          '<style>#sultanNoteTextarea:focus{border-color:#059669!important;}</style>' +
+          '<div style="background:#fff;border-radius:24px 24px 0 0;width:100%;padding:22px 20px 32px;box-shadow:0 -6px 40px rgba(0,0,0,0.13);">' +
+            '<div style="width:36px;height:4px;background:#e2e8f0;border-radius:4px;margin:0 auto 18px;"></div>' +
+            '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:16px;">' +
+              '<div>' +
+                '<div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;text-transform:uppercase;margin-bottom:4px;">NOT EKLE</div>' +
+                '<div id="sultanNoteProductName" style="font-size:16px;font-weight:700;color:#1e293b;line-height:1.3;"></div>' +
+              '</div>' +
+              '<button onclick="closeSultanNoteModal()" style="width:32px;height:32px;border-radius:50%;border:none;background:#f1f5f9;cursor:pointer;font-size:20px;color:#64748b;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-left:12px;">x</button>' +
+            '</div>' +
+            '<textarea id="sultanNoteTextarea" placeholder="Bu urun icin ozel not... (az baharatli, yok)" rows="4" style="width:100%;border:1.5px solid #e2e8f0;border-radius:14px;padding:13px 14px;font-size:15px;color:#1e293b;resize:none;outline:none;font-family:inherit;box-sizing:border-box;line-height:1.5;transition:border-color 0.2s;"></textarea>' +
+            '<div style="display:flex;gap:10px;margin-top:12px;">' +
+              '<button onclick="clearSultanNote()" style="flex:0 0 auto;padding:0 18px;height:46px;border-radius:14px;border:1.5px solid #e2e8f0;background:#f8fafc;color:#64748b;font-size:14px;font-weight:600;cursor:pointer;">Temizle</button>' +
+              '<button onclick="saveSultanNote()" style="flex:1;height:46px;border-radius:14px;border:none;background:linear-gradient(135deg,#059669,#0d9488);color:#fff;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 3px 12px rgba(5,150,105,0.3);">Kaydet</button>' +
+            '</div>' +
+          '</div>';
+        document.body.appendChild(modal);
+        modal.addEventListener('click', function(e) { if (e.target === modal) closeSultanNoteModal(); });
+      }
+
+      document.getElementById('sultanNoteProductName').textContent = name;
+      const ta = document.getElementById('sultanNoteTextarea');
+      ta.value = sultanNotes[cardId] || '';
+      ta.style.borderColor = '#e2e8f0';
+      modal.style.display = 'flex';
+      setTimeout(function() { ta.focus(); }, 120);
+    }
+
+    function closeSultanNoteModal() {
+      const modal = document.getElementById('sultanNoteModal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function clearSultanNote() {
+      const ta = document.getElementById('sultanNoteTextarea');
+      if (ta) { ta.value = ''; ta.style.borderColor = '#e2e8f0'; }
+    }
+
+    function saveSultanNote() {
+      const ta = document.getElementById('sultanNoteTextarea');
+      const note = ta ? ta.value.trim() : '';
+      const { cardId, productId, name } = _sultanNoteCtx;
+      sultanNotes[cardId] = note || null;
+      // Sepette varsa extraNote güncelle
+      const existing = cart.find(function(item) { return String(item.id) === String(productId) && item.name === name && !item.isGift; });
+      if (existing) existing.extraNote = note || null;
+      // Kart üzerindeki yeşil nokta göstergesi
+      const indicator = document.getElementById(cardId + '-ni');
+      if (indicator) indicator.style.display = note ? 'block' : 'none';
+      closeSultanNoteModal();
+      showToast('success', 'Not Kaydedildi', note ? ('"' + note.substring(0, 30) + (note.length > 30 ? '...' : '') + '"') : 'Not temizlendi');
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
+    // ── Sultan Somatı: Kart İçi Anlık Miktar Seçici ─────────────────────
+    let sultanActiveCardId = null;
+
+    function _sultanCloseCard(cardId) {
+      const row = document.getElementById(cardId + '-sqr');
+      if (row) row.style.display = 'none';
+      const card = document.getElementById(cardId);
+      if (card) card.style.outline = '';
+      if (sultanActiveCardId === cardId) sultanActiveCardId = null;
+    }
+
+    function toggleSultanCard(productId, name, price, cardId) {
+      const row = document.getElementById(cardId + '-sqr');
+      if (!row) return;
+      const isOpen = row.style.display === 'flex';
+      // Her kart bağımsız olarak açılıp kapanır; başka kartlar etkilenmez
+      if (isOpen) {
+        _sultanCloseCard(cardId);
+      } else {
+        // Sepetteki mevcut miktarı göster; yoksa 1 ekle
+        const isYanUrun = typeof productId === 'string' && productId.startsWith('yan_urun_');
+        const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
+        let qty;
+        if (existing) {
+          qty = existing.quantity;
+        } else {
+          const extraNote = sultanNotes[cardId] || null;
+          cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun, lineId: nextCartLineId++, extraNote });
+          qty = 1;
+          updateCart();
+        }
+        const val = document.getElementById(cardId + '-sqv');
+        if (val) val.textContent = qty;
+        row.style.display = 'flex';
+        sultanActiveCardId = cardId;
+        const card = document.getElementById(cardId);
+        if (card) card.style.outline = '2px solid #059669';
+      }
+    }
+
+    function sultanCardDec(productId, name, price, cardId) {
+      const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
+      if (!existing) { _sultanCloseCard(cardId); return; }
+      if (existing.quantity <= 1) {
+        cart.splice(cart.indexOf(existing), 1);
+        updateCart();
+        _sultanCloseCard(cardId);
+      } else {
+        existing.quantity--;
+        const val = document.getElementById(cardId + '-sqv');
+        if (val) val.textContent = existing.quantity;
+        updateCart();
+      }
+    }
+
+    function sultanCardInc(productId, name, price, cardId) {
+      const isYanUrun = typeof productId === 'string' && productId.startsWith('yan_urun_');
+      if (!isYanUrun) {
+        const product = products.find(p => String(p.id) === String(productId));
+        if (product && product.trackStock) {
+          const stock = product.stock || 0;
+          const val = document.getElementById(cardId + '-sqv');
+          const cur = val ? (parseInt(val.textContent) || 0) : 0;
+          if (cur >= stock) { showToast('error', 'Stok Yetersiz', 'Maksimum ' + stock + ' adet eklenebilir.'); return; }
+        }
+      }
+      const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
+      if (existing) {
+        existing.quantity++;
+        const val = document.getElementById(cardId + '-sqv');
+        if (val) val.textContent = existing.quantity;
+        updateCart();
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────
+
     function addToCart(productId, name, price) {
       // Yan ürün kontrolü
       const isYanUrun = typeof productId === 'string' && productId.startsWith('yan_urun_');
@@ -13139,12 +14016,14 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       }
       updateCart();
       
-      // Arama input'unu temizle ve ürünleri yeniden render et
-      const searchInputEl = document.getElementById('searchInput');
-      if (searchInputEl) {
-        searchInputEl.value = '';
-        searchQuery = '';
-        renderProducts();
+      // Sultan immersive araması açıkken arama sorgusunu koruyup kapatma
+      if (!(isSultanMobile && isSultanImmersiveSearchOpen())) {
+        const searchInputEl = document.getElementById('searchInput');
+        if (searchInputEl) {
+          searchInputEl.value = '';
+          searchQuery = '';
+          renderProducts();
+        }
       }
       
       // Sepeti otomatik açma - kullanıcı manuel olarak açacak
@@ -13492,6 +14371,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       cart = [];
       selectedTable = null;
       updateCart();
+      sultanMgrDiscountByOrderId = {};
       
       // Input'u temizle
       document.getElementById('pinInput').value = '';
@@ -13504,8 +14384,43 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     // Sultan Somatı — masa ⋮ (ödeme: tüm personel; adisyon yazdır: müdür)
     let sultanMgrTableId = null;
     let sultanMgrOrder = null;
+    let sultanMgrDiscountAmount = 0;
+    /** Açık sipariş başına girilen indirim (₺); sheet kapanınca silinmez, ödeme/iptal/çıkışta temizlenir */
+    var sultanMgrDiscountByOrderId = {};
+
+    function _sultanMgrClearSavedDiscount(orderId) {
+      if (orderId == null) return;
+      delete sultanMgrDiscountByOrderId[orderId];
+    }
+
+    function _sultanMgrGetTotal() {
+      if (!sultanMgrOrder) return 0;
+      return sultanMgrOrder.items.reduce(function(s, i) { return i.isGift ? s : s + i.price * i.quantity; }, 0);
+    }
+
+    function updateSultanMgrDiscount() {
+      var input = document.getElementById('sultanMgrDiscountInput');
+      var raw = parseFloat(input ? input.value : 0) || 0;
+      var total = _sultanMgrGetTotal();
+      sultanMgrDiscountAmount = Math.min(Math.max(raw, 0), total);
+      if (sultanMgrOrder) {
+        sultanMgrDiscountByOrderId[sultanMgrOrder.id] = sultanMgrDiscountAmount;
+      }
+      var payable = total - sultanMgrDiscountAmount;
+      var el = document.getElementById('sultanMgrPayableAmount');
+      if (el) el.textContent = payable.toFixed(2) + ' \u20ba';
+    }
 
     function closeSultanManagerSheet() {
+      if (sultanMgrOrder) {
+        var input = document.getElementById('sultanMgrDiscountInput');
+        if (input) {
+          var raw = parseFloat(input.value) || 0;
+          var total = _sultanMgrGetTotal();
+          sultanMgrDiscountAmount = Math.min(Math.max(raw, 0), total);
+          sultanMgrDiscountByOrderId[sultanMgrOrder.id] = sultanMgrDiscountAmount;
+        }
+      }
       var el = document.getElementById('sultanManagerSheet');
       if (el) el.style.display = 'none';
       sultanMgrTableId = null;
@@ -13532,15 +14447,22 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
             return;
           }
           sultanMgrOrder = orders[0];
-          var total = sultanMgrOrder.items.reduce(function (s, i) {
-            if (i.isGift) return s;
-            return s + i.price * i.quantity;
-          }, 0);
+          var total = _sultanMgrGetTotal();
+          var oid = sultanMgrOrder.id;
+          var savedDisc = sultanMgrDiscountByOrderId[oid];
+          if (typeof savedDisc === 'number' && !isNaN(savedDisc)) {
+            sultanMgrDiscountAmount = Math.min(Math.max(savedDisc, 0), total);
+          } else {
+            sultanMgrDiscountAmount = 0;
+          }
           document.getElementById('sultanMgrTitle').textContent = t && t.name ? t.name : 'Masa';
-          document.getElementById('sultanMgrSubtitle').textContent = 'Tutar: ' + total.toFixed(2) + ' ₺';
+          document.getElementById('sultanMgrSubtitle').textContent = 'Toplam: ' + total.toFixed(2) + ' \u20ba';
+          var discInput = document.getElementById('sultanMgrDiscountInput');
+          if (discInput) discInput.value = sultanMgrDiscountAmount > 0 ? String(sultanMgrDiscountAmount) : '';
+          updateSultanMgrDiscount();
           var pbtn = document.getElementById('sultanMgrPrintBtn');
           if (pbtn) {
-            pbtn.style.display = currentStaff && currentStaff.is_manager ? 'block' : 'none';
+            pbtn.style.display = hasManagerPermission() ? 'block' : 'none';
           }
           document.getElementById('sultanManagerSheet').style.display = 'flex';
         })
@@ -13551,22 +14473,26 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     function sultanManagerOpenPayment() {
       if (!sultanMgrOrder) return;
       document.getElementById('sultanManagerSheet').style.display = 'none';
-      var total = sultanMgrOrder.items.reduce(function (s, i) {
-        if (i.isGift) return s;
-        return s + i.price * i.quantity;
-      }, 0);
-      document.getElementById('sultanPaySubtitle').textContent = total.toFixed(2) + ' ₺ tahsil edilecek';
+      var total = _sultanMgrGetTotal();
+      var payable = total - sultanMgrDiscountAmount;
+      var subtitle = payable.toFixed(2) + ' \u20ba tahsil edilecek';
+      if (sultanMgrDiscountAmount > 0) {
+        subtitle += ' (' + sultanMgrDiscountAmount.toFixed(2) + ' \u20ba indirim uyguland\u0131)';
+      }
+      document.getElementById('sultanPaySubtitle').textContent = subtitle;
       document.getElementById('sultanPaymentSheet').style.display = 'flex';
     }
     function sultanManagerPrintAdisyon() {
       if (!sultanMgrOrder || !currentStaff) return;
+      updateSultanMgrDiscount();
       var oid = sultanMgrOrder.id;
       var sid = currentStaff.id;
+      var discountTL = sultanMgrDiscountAmount > 0 ? sultanMgrDiscountAmount : null;
       closeSultanManagerSheet();
       fetch(API_URL + '/sultan-manager/print-adisyon', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId: oid, staffId: sid })
+        body: JSON.stringify({ orderId: oid, staffId: sid, discountAmountTL: discountTL })
       })
         .then(function (res) { return res.json().then(function (j) { return { ok: res.ok, j: j }; }); })
         .then(function (x) {
@@ -13590,12 +14516,14 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           body: JSON.stringify({
             orderId: sultanMgrOrder.id,
             paymentMethod: paymentMethod,
-            staffId: currentStaff.id
+            staffId: currentStaff.id,
+            discountAmountTL: sultanMgrDiscountAmount > 0 ? sultanMgrDiscountAmount : null
           })
         });
         var data = await res.json();
         if (res.ok && data.success) {
           showToast('success', 'Ödeme alındı', 'Masa kapatıldı.');
+          _sultanMgrClearSavedDiscount(sultanMgrOrder.id);
           sultanMgrOrder = null;
           sultanMgrTableId = null;
           await loadData();
@@ -13605,6 +14533,640 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       } catch (e) {
         showToast('error', 'Hata', 'Bağlantı hatası');
       }
+    }
+
+    // ----- Tüm Masayı İptal Et -----
+    function openSultanMgrCancelSheet() {
+      if (!sultanMgrTableId) return;
+      var t = tables.find(function(x){ return x.id === sultanMgrTableId; });
+      var title = document.getElementById('sultanMgrCancelTitle');
+      if (title) title.textContent = (t && t.name ? t.name : 'Masa') + ' — Tüm Siparişi İptal Et';
+      var ta = document.getElementById('sultanMgrCancelReason');
+      if (ta) ta.value = '';
+      document.getElementById('sultanMgrCancelSheet').style.display = 'flex';
+    }
+    function closeSultanMgrCancelSheet() {
+      document.getElementById('sultanMgrCancelSheet').style.display = 'none';
+    }
+    async function confirmSultanMgrCancelOrder() {
+      var reason = (document.getElementById('sultanMgrCancelReason').value || '').trim();
+      if (!reason) {
+        showToast('error', 'Açıklama gerekli', 'Lütfen bir iptal açıklaması girin.');
+        return;
+      }
+      if (!sultanMgrOrder) {
+        showToast('error', 'Hata', 'Sipariş bilgisi bulunamadı.');
+        return;
+      }
+      try {
+        var res = await fetch(API_URL + '/sultan-manager/cancel-entire-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: sultanMgrOrder.id, cancelReason: reason, staffId: currentStaff ? currentStaff.id : null })
+        });
+        var data = await res.json();
+        if (res.ok && data.success) {
+          _sultanMgrClearSavedDiscount(sultanMgrOrder.id);
+          closeSultanMgrCancelSheet();
+          closeSultanManagerSheet();
+          showToast('success', 'İptal edildi', 'Masa siparişi iptal edildi.');
+          await loadData();
+        } else {
+          showToast('error', 'Hata', (data && data.error) || 'İptal işlemi başarısız.');
+        }
+      } catch(e) {
+        showToast('error', 'Hata', 'Bağlantı hatası');
+      }
+    }
+
+    // ----- Masa Aktar (Manager Sheet içinden) -----
+    var _sultanMgrTransferTargetId = null;
+
+    function openSultanMgrTransferSheet() {
+      if (!sultanMgrTableId) return;
+      _sultanMgrTransferTargetId = null;
+      var t = tables.find(function(x){ return x.id === sultanMgrTableId; });
+      var sub = document.getElementById('sultanMgrTransferSubtitle');
+      if (sub) sub.textContent = 'Kaynak: ' + (t && t.name ? t.name : '');
+      var btn = document.getElementById('sultanMgrTransferConfirmBtn');
+      if (btn) btn.style.display = 'none';
+      _renderSultanMgrTransferGrid();
+      document.getElementById('sultanMgrTransferSheet').style.display = 'flex';
+    }
+    function closeSultanMgrTransferSheet() {
+      document.getElementById('sultanMgrTransferSheet').style.display = 'none';
+      _sultanMgrTransferTargetId = null;
+    }
+    function _renderSultanMgrTransferGrid() {
+      var grid = document.getElementById('sultanMgrTransferGrid');
+      if (!grid) return;
+
+      // Masaları bölüme göre grupla (sectionKey → sectionLabel ile)
+      var bySection = {};
+      var sectionOrder = [];
+      tables.forEach(function(table) {
+        var key = table.sectionKey || '_other';
+        if (!bySection[key]) {
+          bySection[key] = { label: table.sectionLabel || key, tables: [] };
+          sectionOrder.push(key);
+        }
+        bySection[key].tables.push(table);
+      });
+
+      var html = '';
+      sectionOrder.forEach(function(key) {
+        var sec = bySection[key];
+        var sectionTables = sec.tables;
+
+        // Bölümde mevcut kaynaktan farklı en az 1 masa var mı kontrol et
+        var hasVisible = sectionTables.some(function(t) { return t.id !== sultanMgrTableId; });
+        if (!hasVisible) return;
+
+        // Bölüm başlığı
+        html += '<div style="margin-top:14px;margin-bottom:6px;">' +
+          '<div style="display:flex;align-items:center;gap:8px;">' +
+            '<div style="flex:1;height:1px;background:#e2e8f0;"></div>' +
+            '<span style="font-size:11px;font-weight:800;color:#64748b;letter-spacing:0.06em;text-transform:uppercase;white-space:nowrap;padding:0 4px;">' +
+              sec.label.replace(/</g,'&lt;').replace(/>/g,'&gt;') +
+            '</span>' +
+            '<div style="flex:1;height:1px;background:#e2e8f0;"></div>' +
+          '</div>' +
+        '</div>';
+
+        // Bölümdeki masalar — 3 sütunlu inline-grid
+        html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:4px;">';
+
+        sectionTables.forEach(function(table) {
+          if (table.id === sultanMgrTableId) return;
+
+          if (table.hasOrder) {
+            html += '<div style="opacity:0.35;padding:10px 6px;border:2px solid #e2e8f0;border-radius:12px;background:#f8fafc;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:68px;">' +
+              '<div style="width:34px;height:34px;border-radius:50%;background:#94a3b8;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#fff;margin-bottom:4px;">' + table.number + '</div>' +
+              '<span style="font-size:10px;color:#64748b;font-weight:600;text-align:center;line-height:1.2;">' + table.number + '</span>' +
+              '<span style="font-size:9px;color:#dc2626;margin-top:2px;font-weight:700;">Dolu</span>' +
+              '</div>';
+            return;
+          }
+
+          var isSelected = _sultanMgrTransferTargetId === table.id;
+          var bg = isSelected ? '#d1fae5' : '#f0fdf4';
+          var border = isSelected ? '#059669' : '#a7f3d0';
+          var circleBg = isSelected ? 'linear-gradient(135deg,#059669,#047857)' : 'linear-gradient(135deg,#34d399,#059669)';
+          html += '<button type="button" onclick="_selectSultanMgrTransferTarget(\\'' + table.id + '\\')" style="padding:10px 6px;border:2px solid ' + border + ';border-radius:12px;background:' + bg + ';cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:68px;transition:all 0.15s;' + (isSelected ? 'box-shadow:0 0 0 3px rgba(5,150,105,0.2);' : '') + '">' +
+            '<div style="width:34px;height:34px;border-radius:50%;background:' + circleBg + ';display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#fff;margin-bottom:4px;">' + table.number + '</div>' +
+            '<span style="font-size:9px;color:#047857;font-weight:600;">Boş</span>' +
+            '</button>';
+        });
+
+        html += '</div>';
+      });
+
+      if (!html.trim()) {
+        html = '<div style="text-align:center;padding:30px 20px;color:#94a3b8;font-size:14px;">Aktarılabilecek boş masa yok.</div>';
+      }
+
+      grid.innerHTML = html;
+    }
+    function _selectSultanMgrTransferTarget(tableId) {
+      _sultanMgrTransferTargetId = tableId;
+      var btn = document.getElementById('sultanMgrTransferConfirmBtn');
+      if (btn) btn.style.display = 'block';
+      _renderSultanMgrTransferGrid();
+    }
+    async function confirmSultanMgrTransfer() {
+      if (!sultanMgrTableId || !_sultanMgrTransferTargetId) {
+        showToast('error', 'Hata', 'Hedef masa seçilmedi.');
+        return;
+      }
+      try {
+        var res = await fetch(API_URL + '/transfer-table-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceTableId: sultanMgrTableId, targetTableId: _sultanMgrTransferTargetId })
+        });
+        var data = await res.json();
+        if (res.ok && data.success) {
+          closeSultanMgrTransferSheet();
+          closeSultanManagerSheet();
+          showToast('success', 'Aktarıldı', 'Masa başarıyla aktarıldı.');
+          await loadData();
+        } else {
+          showToast('error', 'Hata', (data && data.error) || 'Aktarım başarısız.');
+        }
+      } catch(e) {
+        showToast('error', 'Hata', 'Bağlantı hatası');
+      }
+    }
+
+    // ──── Rezervasyon ────
+    var _reservationFormTableId = null;
+    var _reservationDetailId = null;
+    var _reservationEditId = null; // Düzenleme modunda mevcut rezervasyon id'si
+
+    function openReservationFormSheet(tableId, existingReservation) {
+      _reservationFormTableId = tableId || null;
+      _reservationEditId = existingReservation ? existingReservation.id : null;
+      // Başlık & buton
+      var titleEl = document.getElementById('resFormTitle');
+      var btnEl = document.getElementById('resFormSubmitBtn');
+      if (titleEl) titleEl.textContent = existingReservation ? 'Rezervasyon Düzenle' : 'Rezervasyon Oluştur';
+      if (btnEl) btnEl.textContent = existingReservation ? 'Kaydet' : 'Oluştur';
+      // Alanları doldur
+      var gEl = document.getElementById('resFormGuestName');
+      if (gEl) gEl.value = existingReservation ? (existingReservation.guestName || '') : '';
+      var dateEl = document.getElementById('resFormDate');
+      if (dateEl) dateEl.value = existingReservation ? existingReservation.date : (function(){
+        var t = new Date(); return t.getFullYear()+'-'+String(t.getMonth()+1).padStart(2,'0')+'-'+String(t.getDate()).padStart(2,'0');
+      })();
+      var timeEl = document.getElementById('resFormTime');
+      if (timeEl) timeEl.value = existingReservation ? (existingReservation.time || '') : '';
+      var peopleEl = document.getElementById('resFormPeople');
+      if (peopleEl) peopleEl.value = existingReservation && existingReservation.peopleCount ? existingReservation.peopleCount : '';
+      var adultsEl = document.getElementById('resFormAdults');
+      if (adultsEl) adultsEl.value = existingReservation && existingReservation.adults ? existingReservation.adults : '';
+      var childEl = document.getElementById('resFormChildren');
+      if (childEl) childEl.value = existingReservation && existingReservation.children ? existingReservation.children : '';
+      var babyEl = document.getElementById('resFormBabies');
+      if (babyEl) babyEl.value = existingReservation && existingReservation.babies ? existingReservation.babies : '';
+      var noteEl = document.getElementById('resFormNote');
+      if (noteEl) noteEl.value = existingReservation ? (existingReservation.note || '') : '';
+      // Masa seçim dropdown
+      var sel = document.getElementById('resFormTableSelect');
+      var tid = tableId || (existingReservation && existingReservation.tableId) || null;
+      if (sel) {
+        var opts = tables.map(function(t) {
+          return '<option value="' + t.id + '"' + (t.id === tid ? ' selected' : '') + '>' + t.name + '</option>';
+        }).join('');
+        sel.innerHTML = opts;
+        if (tid) sel.value = tid;
+      }
+      var wrap = document.getElementById('resFormTablePickerWrap');
+      if (wrap) wrap.style.display = tid ? 'none' : '';
+      var lbl = document.getElementById('resFormTableLabel');
+      if (lbl && tid) {
+        var tObj = tables.find(function(x){ return x.id === tid; });
+        lbl.textContent = tObj ? tObj.name : '';
+      } else if (lbl) {
+        lbl.textContent = '';
+      }
+      document.getElementById('sultanReservationFormSheet').style.display = 'flex';
+    }
+
+    function closeReservationFormSheet() {
+      document.getElementById('sultanReservationFormSheet').style.display = 'none';
+      _reservationEditId = null;
+    }
+
+    async function submitReservation() {
+      var sel = document.getElementById('resFormTableSelect');
+      var tableId = _reservationFormTableId || (sel ? sel.value : null)
+        || (_reservationEditId ? (sultanReservations.find(function(r){ return r.id === _reservationEditId; }) || {}).tableId : null);
+      if (!tableId && sel) tableId = sel.value;
+      var guestName = (document.getElementById('resFormGuestName').value || '').trim();
+      var date = (document.getElementById('resFormDate').value || '').trim();
+      var time = (document.getElementById('resFormTime').value || '').trim();
+      if (!guestName) { showToast('error', 'Hata', 'Ad Soyad girin.'); return; }
+      if (!tableId) { showToast('error', 'Hata', 'Masa seçin.'); return; }
+      if (!date) { showToast('error', 'Hata', 'Tarih girin.'); return; }
+      if (!time) { showToast('error', 'Hata', 'Saat girin.'); return; }
+      var t = tables.find(function(x){ return x.id === tableId; });
+      var body = {
+        tableId: tableId,
+        tableName: t ? t.name : tableId,
+        guestName: guestName,
+        date: date,
+        time: time,
+        peopleCount: parseInt(document.getElementById('resFormPeople').value) || 0,
+        adults: parseInt(document.getElementById('resFormAdults').value) || 0,
+        children: parseInt(document.getElementById('resFormChildren').value) || 0,
+        babies: parseInt(document.getElementById('resFormBabies').value) || 0,
+        note: (document.getElementById('resFormNote').value || '').trim(),
+        staffId: currentStaff ? currentStaff.id : null,
+        staffName: currentStaff ? ((currentStaff.name || '') + ' ' + (currentStaff.surname || '')).trim() : null
+      };
+      if (_reservationEditId) body.reservationId = _reservationEditId;
+      try {
+        var res = await fetch(API_URL + '/reservations', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        var data = await res.json();
+        if (res.ok && data.success) {
+          closeReservationFormSheet();
+          var isEdit = !!_reservationEditId;
+          showToast('success', isEdit ? 'Güncellendi' : 'Oluşturuldu', (t ? t.name : '') + (isEdit ? ' rezervasyonu güncellendi.' : ' masası rezerve edildi.'));
+          sultanReservations = sultanReservations.filter(function(r){ return r.tableId !== tableId && r.id !== (data.reservation && data.reservation.id); });
+          sultanReservations.push(data.reservation);
+          renderTables();
+          // Eğer liste sheet açıksa yenile
+          if (document.getElementById('sultanReservationListSheet') && document.getElementById('sultanReservationListSheet').style.display === 'flex') {
+            renderReservationList();
+          }
+        } else {
+          showToast('error', 'Hata', (data && data.error) || 'İşlem başarısız.');
+        }
+      } catch(e) {
+        showToast('error', 'Hata', 'Bağlantı hatası');
+      }
+    }
+
+    function openReservationDetailSheet(tableId) {
+      var reservation = sultanReservations.find(function(r){ return r.tableId === tableId; });
+      if (!reservation) { showToast('error', 'Hata', 'Bu masada rezervasyon bulunamadı.'); return; }
+      _reservationDetailId = reservation.id;
+      var t = tables.find(function(x){ return x.id === tableId; });
+      var lbl = document.getElementById('resDetailTableLabel');
+      if (lbl) lbl.textContent = t ? t.name : tableId;
+      var body = document.getElementById('resDetailBody');
+      if (body) {
+        var rows = [
+          ['Ad Soyad', reservation.guestName || '—'],
+          ['Masa', reservation.tableName || reservation.tableId],
+          ['Tarih', reservation.date],
+          ['Saat', reservation.time],
+          ['Kişi Sayısı', reservation.peopleCount || '—'],
+          ['Yetişkin', reservation.adults || '—'],
+          ['Çocuk', reservation.children || '—'],
+          ['Bebek', reservation.babies || '—'],
+        ];
+        var html = rows.map(function(r){
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;">' +
+            '<span style="color:#64748b;font-size:13px;">' + r[0] + '</span>' +
+            '<span style="font-weight:700;color:#0f172a;font-size:14px;">' + r[1] + '</span>' +
+            '</div>';
+        }).join('');
+        if (reservation.note && reservation.note.trim()) {
+          html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #e2e8f0;">' +
+            '<div style="font-size:12px;color:#64748b;margin-bottom:4px;">Özel Not</div>' +
+            '<div style="font-size:14px;color:#1e293b;line-height:1.5;">' + reservation.note.replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>' +
+            '</div>';
+        }
+        if (reservation.staffName) {
+          html += '<div style="margin-top:8px;font-size:12px;color:#94a3b8;">Oluşturan: ' + reservation.staffName + '</div>';
+        }
+        body.innerHTML = html;
+      }
+      document.getElementById('sultanReservationDetailSheet').style.display = 'flex';
+    }
+
+    function closeReservationDetailSheet() {
+      document.getElementById('sultanReservationDetailSheet').style.display = 'none';
+    }
+
+    async function printReservation() {
+      if (!_reservationDetailId) return;
+      try {
+        var res = await fetch(API_URL + '/reservations/print', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reservationId: _reservationDetailId })
+        });
+        var data = await res.json();
+        if (res.ok && data.success) {
+          showToast('success', 'Yazdırıldı', 'Rezervasyon fişi yazdırıldı.');
+        } else {
+          showToast('error', 'Yazdırılamadı', (data && data.error) || 'Hata');
+        }
+      } catch(e) {
+        showToast('error', 'Hata', 'Bağlantı hatası');
+      }
+    }
+
+    async function cancelReservation() {
+      if (!_reservationDetailId) return;
+      try {
+        var res = await fetch(API_URL + '/reservations/' + encodeURIComponent(_reservationDetailId), {
+          method: 'DELETE'
+        });
+        var data = await res.json();
+        if (res.ok && data.success) {
+          sultanReservations = sultanReservations.filter(function(r){ return r.id !== _reservationDetailId; });
+          closeReservationDetailSheet();
+          showToast('success', 'İptal edildi', 'Rezervasyon iptal edildi.');
+          renderTables();
+        } else {
+          showToast('error', 'Hata', (data && data.error) || 'İptal başarısız.');
+        }
+      } catch(e) {
+        showToast('error', 'Hata', 'Bağlantı hatası');
+      }
+    }
+
+    function editReservationFromDetail() {
+      var reservation = sultanReservations.find(function(r){ return r.id === _reservationDetailId; });
+      if (!reservation) return;
+      closeReservationDetailSheet();
+      setTimeout(function(){ openReservationFormSheet(reservation.tableId, reservation); }, 120);
+    }
+
+    function _escSalesHtml(s) {
+      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function openSultanAllOrdersSheet(highlightTableId) {
+      if (!isSultanMobile) return;
+      if (!currentStaff) {
+        showToast('error', 'Giriş gerekli', 'Lütfen personel olarak giriş yapın.');
+        return;
+      }
+      if (highlightTableId != null && highlightTableId !== '') {
+        sultanAllOrdersHighlightTableId = String(highlightTableId);
+      } else {
+        sultanAllOrdersHighlightTableId = null;
+      }
+      var sh = document.getElementById('sultanAllOrdersSheet');
+      if (sh) sh.style.display = 'flex';
+      renderSultanAllOrdersSheet();
+    }
+    function openSultanAllOrdersFromCurrentTable() {
+      if (!isSultanMobile || !selectedTable) return;
+      openSultanAllOrdersSheet(selectedTable.id);
+    }
+    function closeSultanAllOrdersSheet() {
+      var sh = document.getElementById('sultanAllOrdersSheet');
+      if (sh) sh.style.display = 'none';
+      sultanAllOrdersHighlightTableId = null;
+    }
+    async function renderSultanAllOrdersSheet() {
+      var body = document.getElementById('sultanAllOrdersBody');
+      var cntEl = document.getElementById('sultanAllOrdersCount');
+      if (!body) return;
+      body.innerHTML = '<div style="text-align:center;padding:28px 16px;color:#64748b;font-weight:600;font-size:14px;">Yükleniyor…</div>';
+      if (cntEl) cntEl.textContent = '';
+      try {
+        var res = await fetch(API_URL + '/sultan-mobile/pending-orders?staffId=' + encodeURIComponent(currentStaff.id));
+        var data = await res.json();
+        if (!res.ok || !data.success) {
+          body.innerHTML = '<div style="text-align:center;padding:28px 16px;color:#b91c1c;font-weight:600;font-size:14px;">' + _escSalesHtml((data && data.error) || 'Liste alınamadı') + '</div>';
+          return;
+        }
+        var arr = data.orders || [];
+        if (cntEl) cntEl.textContent = arr.length ? arr.length + ' masa' : '0';
+        if (!arr.length) {
+          body.innerHTML = '<div style="text-align:center;padding:36px 20px;color:#94a3b8;font-size:15px;font-weight:600;">Açık sipariş bulunmuyor.</div>';
+          return;
+        }
+        body.innerHTML = arr.map(function (ord) {
+          var tnm = _escSalesHtml(ord.table_name || ord.table_id || 'Masa');
+          var tamt = (typeof ord.total_amount === 'number' ? ord.total_amount : parseFloat(ord.total_amount) || 0).toFixed(2);
+          var isHl = !!(sultanAllOrdersHighlightTableId && String(ord.table_id) === String(sultanAllOrdersHighlightTableId));
+          var cardBorder = isHl ? '#10b981' : '#e2e8f0';
+          var cardShadow = isHl
+            ? '0 8px 28px rgba(5,150,105,0.2),0 0 0 2px rgba(16,185,129,0.45)'
+            : '0 2px 10px rgba(15,23,42,0.05)';
+          var hlBadge = isHl
+            ? '<span style="font-size:10px;font-weight:900;color:#fff;background:linear-gradient(135deg,#059669,#047857);padding:3px 10px;border-radius:999px;letter-spacing:0.04em;text-transform:uppercase;flex-shrink:0;">Bu masa</span>'
+            : '';
+          var meta = [(ord.order_date || ''), (ord.order_time || '')].filter(Boolean).join(' ');
+          var note = ord.order_note
+            ? '<div style="margin-top:8px;padding:8px 10px;background:#f8fafc;border-radius:10px;font-size:12px;color:#475569;line-height:1.4;"><span style="font-weight:700;">Not:</span> ' + _escSalesHtml(ord.order_note) + '</div>'
+            : '';
+          var lines = (ord.items || []).map(function (it) {
+            var nm = _escSalesHtml(it.product_name || '');
+            var q = Number(it.quantity) || 0;
+            var gift = it.isGift ? ' <span style="color:#059669;font-weight:800;font-size:11px;">İKRAM</span>' : '';
+            var sn = it.staff_name ? ' <span style="color:#94a3b8;font-size:11px;font-weight:600;">· ' + _escSalesHtml(it.staff_name) + '</span>' : '';
+            var ln = it.item_note
+              ? '<div style="font-size:11px;color:#64748b;margin-top:3px;line-height:1.35;">' + _escSalesHtml(it.item_note) + '</div>'
+              : '';
+            var lineTot = it.isGift ? '0.00' : (q * (parseFloat(it.price) || 0)).toFixed(2);
+            var cancelCell = '';
+            if (hasManagerPermission() && it.id != null && it.id !== '') {
+              var pnameJs = String(it.product_name || '').replace(/'/g, "\\'");
+              cancelCell =
+                '<button id="cancelBtn_' + it.id + '" onclick="showCancelItemModal(' + it.id + ', ' + q + ', \\'' + pnameJs + '\\', true)" style="padding: 6px 12px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px;" onmouseover="if(!this.disabled) { this.style.transform=\\'scale(1.05)\\'; this.style.boxShadow=\\'0 4px 12px rgba(239, 68, 68, 0.4)\\'; }" onmouseout="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; this.style.boxShadow=\\'0 2px 8px rgba(239, 68, 68, 0.3)\\'; }" ontouchstart="if(!this.disabled) { this.style.transform=\\'scale(0.95)\\'; }" ontouchend="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; }" class="cancel-item-btn"><span id="cancelBtnText_' + it.id + '">İptal</span><svg id="cancelBtnSpinner_' + it.id + '" style="display: none; width: 14px; height: 14px; animation: spin 1s linear infinite;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>';
+            } else if (!hasManagerPermission()) {
+              cancelCell =
+                '<button onclick="showManagerRequiredMessage()" style="padding: 6px 12px; background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(107, 114, 128, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px; opacity: 0.7;" onmouseover="this.style.opacity=\\'0.9\\';" onmouseout="this.style.opacity=\\'0.7\\';"><span>İptal</span></button>';
+            }
+            return (
+              '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">' +
+              '<div style="flex:1;min-width:0;"><span style="font-weight:800;color:#0f172a;">' + q + '×</span> ' + nm + gift + sn + ln + '</div>' +
+              '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0;">' +
+              '<div style="font-weight:800;color:#334155;white-space:nowrap;font-variant-numeric:tabular-nums;">' + lineTot + ' ₺</div>' +
+              cancelCell +
+              '</div></div>'
+            );
+          }).join('');
+          return (
+            '<div data-sultan-order-highlight="' + (isHl ? '1' : '0') + '" style="margin-bottom:14px;border-radius:16px;border:1px solid ' + cardBorder + ';background:#fff;overflow:hidden;box-shadow:' + cardShadow + ';">' +
+            '<div style="padding:12px 14px;background:linear-gradient(135deg,#ecfdf5 0%,#f0fdf4 100%);border-bottom:1px solid #d1fae5;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0;flex:1;">' +
+            '<div style="font-size:15px;font-weight:800;color:#064e3b;letter-spacing:-0.02em;">' + tnm + '</div>' +
+            hlBadge +
+            '</div>' +
+            '<div style="font-size:14px;font-weight:900;color:#047857;font-variant-numeric:tabular-nums;flex-shrink:0;">' + tamt + ' ₺</div>' +
+            '</div>' +
+            '<div style="padding:2px 14px 12px;">' +
+            (meta ? '<div style="font-size:11px;color:#94a3b8;font-weight:600;margin-bottom:2px;padding-top:8px;">' + _escSalesHtml(meta) + '</div>' : '') +
+            lines +
+            note +
+            '</div></div>'
+          );
+        }).join('');
+        if (sultanAllOrdersHighlightTableId) {
+          requestAnimationFrame(function () {
+            var hl = body.querySelector('[data-sultan-order-highlight="1"]');
+            if (hl) hl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+          });
+        }
+      } catch (e) {
+        body.innerHTML = '<div style="text-align:center;padding:28px;color:#b91c1c;font-weight:600;">Bağlantı hatası</div>';
+      }
+    }
+    function openSultanSalesHistorySheet() {
+      if (!isSultanMobile) return;
+      if (!currentStaff) {
+        showToast('error', 'Giriş gerekli', 'Lütfen personel olarak giriş yapın.');
+        return;
+      }
+      var sh = document.getElementById('sultanSalesHistorySheet');
+      if (sh) sh.style.display = 'flex';
+      renderSultanSalesHistoryList();
+    }
+    function closeSultanSalesHistorySheet() {
+      var sh = document.getElementById('sultanSalesHistorySheet');
+      if (sh) sh.style.display = 'none';
+    }
+    async function renderSultanSalesHistoryList() {
+      var body = document.getElementById('sultanSalesHistoryBody');
+      if (!body) return;
+      body.innerHTML = '<div style="text-align:center;padding:28px 16px;color:#64748b;font-weight:600;font-size:14px;">Yükleniyor…</div>';
+      try {
+        var res = await fetch(API_URL + '/sultan-manager/completed-table-orders?staffId=' + encodeURIComponent(currentStaff.id));
+        var data = await res.json();
+        if (!res.ok || !data.success) {
+          body.innerHTML = '<div style="text-align:center;padding:28px 16px;color:#b91c1c;font-weight:600;font-size:14px;">' + _escSalesHtml((data && data.error) || 'Liste alınamadı') + '</div>';
+          return;
+        }
+        var arr = data.orders || [];
+        if (!arr.length) {
+          body.innerHTML = '<div style="text-align:center;padding:36px 20px;color:#94a3b8;font-size:15px;font-weight:600;">Tamamlanmış masa satışı yok.</div>';
+          return;
+        }
+        body.innerHTML = arr.map(function (row) {
+          var nm = _escSalesHtml(row.table_name || row.table_id || 'Masa');
+          var amt = (typeof row.charged_amount === 'number' ? row.charged_amount : parseFloat(row.charged_amount) || 0).toFixed(2);
+          var pm = _escSalesHtml(row.payment_method || '—');
+          var wh = _escSalesHtml((row.sale_date || '') + ' ' + (row.sale_time || '')).trim();
+          var can = !!row.canRevert;
+          var revertBtn = can
+            ? '<button type="button" onclick="revertSultanCompletedSale(' + row.id + ')" style="padding:8px 14px;border-radius:10px;border:1.5px solid #fca5a5;background:#fff1f2;color:#b91c1c;font-size:13px;font-weight:800;cursor:pointer;">Geri al</button>'
+            : '<span style="font-size:11px;font-weight:700;color:#94a3b8;">Eski kayıt</span>';
+          return '<div style="margin-bottom:10px;background:#f8fafc;border-radius:14px;border:1.5px solid #e2e8f0;padding:12px 14px;display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;">' +
+            '<div style="flex:1;min-width:180px;">' +
+            '<div style="font-size:16px;font-weight:800;color:#0f172a;">' + nm + '</div>' +
+            '<div style="margin-top:4px;font-size:13px;font-weight:600;color:#64748b;">' + amt + ' ₺ · ' + pm + '</div>' +
+            (wh ? '<div style="margin-top:2px;font-size:12px;color:#94a3b8;">' + wh + '</div>' : '') +
+            '</div>' +
+            '<div style="flex-shrink:0;">' + revertBtn + '</div>' +
+            '</div>';
+        }).join('');
+      } catch (e) {
+        body.innerHTML = '<div style="text-align:center;padding:28px;color:#b91c1c;font-weight:600;">Bağlantı hatası</div>';
+      }
+    }
+    async function revertSultanCompletedSale(orderId) {
+      if (!currentStaff) return;
+      if (!confirm('Bu satışı geri alırsanız masa tekrar açık sipariş olur; ilgili satış kaydı silinir. Devam edilsin mi?')) return;
+      try {
+        var res = await fetch(API_URL + '/sultan-manager/revert-completed-order', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: orderId, staffId: currentStaff.id })
+        });
+        var data = await res.json();
+        if (res.ok && data.success) {
+          showToast('success', 'Geri alındı', 'Masa tekrar açık sipariş olarak gösteriliyor.');
+          await loadData();
+          renderSultanSalesHistoryList();
+        } else {
+          showToast('error', 'Geri alınamadı', (data && data.error) || 'Hata');
+        }
+      } catch (e) {
+        showToast('error', 'Hata', 'Bağlantı hatası');
+      }
+    }
+
+    // ── Rezervasyon Listesi ──
+    function openReservationListSheet() {
+      renderReservationList();
+      document.getElementById('sultanReservationListSheet').style.display = 'flex';
+    }
+    function closeReservationListSheet() {
+      document.getElementById('sultanReservationListSheet').style.display = 'none';
+    }
+    function renderReservationList() {
+      var cnt = document.getElementById('resListCount');
+      if (cnt) cnt.textContent = sultanReservations.length > 0 ? sultanReservations.length + ' rezervasyon' : 'Rezervasyon yok';
+      var body = document.getElementById('resListBody');
+      if (!body) return;
+      if (!sultanReservations.length) {
+        body.innerHTML = '<div style="text-align:center;padding:40px 20px;color:#94a3b8;font-size:15px;font-weight:600;">Henüz rezervasyon bulunmuyor.</div>';
+        return;
+      }
+      // Tarihe göre sırala
+      var sorted = sultanReservations.slice().sort(function(a, b){
+        if (a.date < b.date) return -1; if (a.date > b.date) return 1;
+        if ((a.time || '') < (b.time || '')) return -1; if ((a.time || '') > (b.time || '')) return 1;
+        return 0;
+      });
+      body.innerHTML = sorted.map(function(r, idx) {
+        var escapedId = r.id.replace(/'/g, "\\'");
+        var tableName = r.tableName || r.tableId;
+        var guestName = r.guestName ? r.guestName : '—';
+        var peopleInfo = [];
+        if (r.peopleCount) peopleInfo.push(r.peopleCount + ' kişi');
+        if (r.adults) peopleInfo.push(r.adults + ' yetişkin');
+        if (r.children) peopleInfo.push(r.children + ' çocuk');
+        if (r.babies) peopleInfo.push(r.babies + ' bebek');
+        var peopleStr = peopleInfo.join(' · ') || '—';
+        return '<div style="margin-bottom:10px;background:#f8fafc;border-radius:14px;border:1.5px solid #e2e8f0;overflow:hidden;">' +
+          '<div style="padding:12px 14px;">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">' +
+          '<div style="font-size:15px;font-weight:800;color:#0f172a;">' + guestName + '</div>' +
+          '<div style="font-size:12px;font-weight:700;color:#d97706;background:#fef3c7;padding:2px 8px;border-radius:20px;">' + r.date + ' ' + (r.time || '') + '</div>' +
+          '</div>' +
+          '<div style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px;color:#64748b;">' +
+          '<span style="background:#e0f2fe;color:#0369a1;padding:2px 8px;border-radius:20px;font-weight:600;">' + tableName + '</span>' +
+          (peopleStr !== '—' ? '<span style="background:#f0fdf4;color:#166534;padding:2px 8px;border-radius:20px;font-weight:600;">' + peopleStr + '</span>' : '') +
+          '</div>' +
+          (r.note ? '<div style="margin-top:6px;font-size:12px;color:#475569;font-style:italic;">' + r.note.replace(/</g,'&lt;').replace(/>/g,'&gt;').substring(0,60) + (r.note.length>60?'…':'') + '</div>' : '') +
+          '</div>' +
+          '<div style="display:flex;border-top:1px solid #e2e8f0;">' +
+          '<button type="button" onclick="editReservationFromList(\\'' + escapedId + '\\')" style="flex:1;padding:10px;border:none;background:transparent;color:#1d4ed8;font-size:13px;font-weight:700;cursor:pointer;border-right:1px solid #e2e8f0;">Düzenle</button>' +
+          '<button type="button" onclick="printReservationById(\\'' + escapedId + '\\')" style="flex:1;padding:10px;border:none;background:transparent;color:#d97706;font-size:13px;font-weight:700;cursor:pointer;border-right:1px solid #e2e8f0;">Yazdır</button>' +
+          '<button type="button" onclick="deleteReservationById(\\'' + escapedId + '\\')" style="flex:1;padding:10px;border:none;background:transparent;color:#dc2626;font-size:13px;font-weight:700;cursor:pointer;">Kaldır</button>' +
+          '</div>' +
+          '</div>';
+      }).join('');
+    }
+    function editReservationFromList(id) {
+      var reservation = sultanReservations.find(function(r){ return r.id === id; });
+      if (!reservation) return;
+      closeReservationListSheet();
+      setTimeout(function(){ openReservationFormSheet(reservation.tableId, reservation); }, 120);
+    }
+    async function printReservationById(id) {
+      try {
+        var res = await fetch(API_URL + '/reservations/print', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reservationId: id })
+        });
+        var data = await res.json();
+        if (res.ok && data.success) showToast('success', 'Yazdırıldı', 'Rezervasyon fişi yazdırıldı.');
+        else showToast('error', 'Yazdırılamadı', (data && data.error) || 'Hata');
+      } catch(e) { showToast('error', 'Hata', 'Bağlantı hatası'); }
+    }
+    async function deleteReservationById(id) {
+      try {
+        var res = await fetch(API_URL + '/reservations/' + encodeURIComponent(id), { method: 'DELETE' });
+        var data = await res.json();
+        if (res.ok && data.success) {
+          sultanReservations = sultanReservations.filter(function(r){ return r.id !== id; });
+          renderReservationList();
+          renderTables();
+          showToast('success', 'Kaldırıldı', 'Rezervasyon silindi.');
+        } else { showToast('error', 'Hata', (data && data.error) || 'Silinemedi.'); }
+      } catch(e) { showToast('error', 'Hata', 'Bağlantı hatası'); }
     }
 
     // Not Modal İşlemleri (Sultan: hedef seçimi + genel / satır bazlı extraNote)
@@ -13677,13 +15239,13 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       showToast('error', 'Yetki Yok', 'İptal ettirmek için lütfen müdürle görüşünüz.');
     }
     
-    function showCancelItemModal(itemId, maxQuantity, productName) {
-      // Müdür kontrolü
-      if (!currentStaff || !currentStaff.is_manager) {
+    function showCancelItemModal(itemId, maxQuantity, productName, fromAllOrders) {
+      if (!hasManagerPermission()) {
         showManagerRequiredMessage();
         return;
       }
-      
+      cancelOpenedFromSultanAllOrdersSheet = fromAllOrders === true;
+
       cancelItemId = itemId;
       cancelItemMaxQuantity = maxQuantity;
       document.getElementById('cancelItemName').textContent = productName;
@@ -13715,6 +15277,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       document.getElementById('cancelItemModal').style.display = 'none';
       cancelItemId = null;
       cancelItemMaxQuantity = 1;
+      cancelOpenedFromSultanAllOrdersSheet = false;
     }
     
     function validateCancelQuantity() {
@@ -13741,6 +15304,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     // İptal işlemi için geçici değişkenler
     let pendingCancelItemId = null;
     let pendingCancelQuantity = null;
+    let cancelOpenedFromSultanAllOrdersSheet = false;
+    let pendingCancelFromAllOrdersSheet = false;
     
     function confirmCancelItem() {
       if (!cancelItemId) return;
@@ -13751,13 +15316,13 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         return;
       }
       
-      // Müdür kontrolü
-      if (!currentStaff || !currentStaff.is_manager) {
+      if (!hasManagerPermission()) {
         showManagerRequiredMessage();
         return;
       }
       
       // İptal edilecek ürün bilgilerini sakla
+      pendingCancelFromAllOrdersSheet = !!cancelOpenedFromSultanAllOrdersSheet;
       pendingCancelItemId = cancelItemId;
       pendingCancelQuantity = cancelQuantity;
       
@@ -13811,7 +15376,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           // Başarılı (açıklama ile birlikte gönderildi)
           showToast('success', 'Başarılı', 'Ürün başarıyla iptal edildi');
           hideCancelReasonModal();
-          if (selectedTable) {
+          if (pendingCancelFromAllOrdersSheet) {
+            pendingCancelFromAllOrdersSheet = false;
+            const _aos = document.getElementById('sultanAllOrdersSheet');
+            if (_aos && _aos.style.display === 'flex') await renderSultanAllOrdersSheet();
+            await loadData();
+          } else if (selectedTable) {
             await loadExistingOrders(selectedTable.id);
           }
           pendingCancelItemId = null;
@@ -13822,6 +15392,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           resetCancelButton(cancelBtn, cancelBtnText, cancelBtnSpinner);
           pendingCancelItemId = null;
           pendingCancelQuantity = null;
+          pendingCancelFromAllOrdersSheet = false;
         }
       } catch (error) {
         console.error('İptal hatası:', error);
@@ -13829,6 +15400,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         resetCancelButton(cancelBtn, cancelBtnText, cancelBtnSpinner);
         pendingCancelItemId = null;
         pendingCancelQuantity = null;
+        pendingCancelFromAllOrdersSheet = false;
       }
     }
     
@@ -13872,6 +15444,10 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       pendingCancelItemId = null;
       pendingCancelQuantity = null;
       hideCancelReasonModal();
+      if (pendingCancelFromAllOrdersSheet) {
+        pendingCancelFromAllOrdersSheet = false;
+        return;
+      }
       // Masalara dön
       document.getElementById('orderSection').style.display = 'none';
       document.getElementById('tableSelection').style.display = 'block';
@@ -13925,7 +15501,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           pendingCancelItemId = null;
           pendingCancelQuantity = null;
           showToast('success', 'Başarılı', 'Ürün iptal edildi');
-          if (selectedTable) {
+          if (pendingCancelFromAllOrdersSheet) {
+            pendingCancelFromAllOrdersSheet = false;
+            const _aos2 = document.getElementById('sultanAllOrdersSheet');
+            if (_aos2 && _aos2.style.display === 'flex') await renderSultanAllOrdersSheet();
+            await loadData();
+          } else if (selectedTable) {
             await loadExistingOrders(selectedTable.id);
           }
         } else {
@@ -14056,7 +15637,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       setTimeout(function() {
         if (sendBtn) sendBtn.disabled = false;
         if (sendBtnContent) sendBtnContent.innerHTML = originalSendHTML;
-      }, 1500);
+        // Sultan Somatı: sipariş sonrası otomatik masalar bölümüne dön
+        if (isSultanMobile) {
+          sultanNotes = {};
+          goBackToTables();
+        }
+      }, 1000);
       
       // Backend isteği arka planda (birebir aynı işlem devam etsin)
       fetch(API_URL + '/orders', {
@@ -14075,6 +15661,91 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           showToast('error', 'Bağlantı Hatası', 'Sunucuya iletilemedi. Lütfen kontrol edin.');
         });
     }
+
+    // ── Donanım Geri Tuşu (Android) — uygulamadan çıkmak yerine önceki ekrana dön ──
+    (function() {
+      // Başlangıç state'i push et (her zaman popstate tetiklensin diye)
+      history.pushState({ mobileNav: true }, '');
+
+      function _isVisible(id) {
+        var el = document.getElementById(id);
+        return el && el.style.display !== 'none' && el.style.display !== '';
+      }
+
+      function handleMobileBack() {
+        // En üstteki katmanı kapat, öncelik sırasıyla:
+
+        // 1. Dinamik sultan not modalı
+        var snm = document.getElementById('sultanNoteModal');
+        if (snm && snm.style.display === 'flex') { closeSultanNoteModal(); return; }
+
+        // 2. Türk kahvesi / Menengiç modalı
+        if (_isVisible('turkishCoffeeModal')) { hideTurkishCoffeeModal(); return; }
+
+        // 3. Sultan immersive arama
+        if (isSultanMobile && isSultanImmersiveSearchOpen()) { closeSultanImmersiveSearch(); return; }
+
+        // 4. Şifre değiştirme modalı
+        if (_isVisible('changePasswordModal')) { closeChangePasswordModal(); return; }
+
+        // 5. Çıkış onay modalı
+        if (_isVisible('logoutModal')) { hideLogoutModal(); return; }
+
+        // 6. İptal neden modalı
+        if (_isVisible('cancelReasonModal')) { document.getElementById('cancelReasonModal').style.display = 'none'; return; }
+
+        // 7. İptal onay sheet (manager içinden)
+        if (_isVisible('sultanMgrCancelSheet')) { closeSultanMgrCancelSheet(); return; }
+
+        // 7b. Masa aktar hedef seçim sheet
+        if (_isVisible('sultanMgrTransferSheet')) { closeSultanMgrTransferSheet(); return; }
+
+        // 7c. Rezervasyon form/detay/liste sheet'leri
+        if (_isVisible('sultanReservationFormSheet')) { closeReservationFormSheet(); return; }
+        if (_isVisible('sultanReservationDetailSheet')) { closeReservationDetailSheet(); return; }
+        if (_isVisible('sultanReservationListSheet')) { closeReservationListSheet(); return; }
+        if (_isVisible('sultanSalesHistorySheet')) { closeSultanSalesHistorySheet(); return; }
+        if (_isVisible('sultanAllOrdersSheet')) { closeSultanAllOrdersSheet(); return; }
+
+        // 7c. Ödeme sheet
+        if (_isVisible('sultanPaymentSheet')) { closeSultanPaymentSheet(); return; }
+
+        // 8. Yönetici sheet
+        if (_isVisible('sultanManagerSheet')) { closeSultanManagerSheet(); return; }
+
+        // 9. İkram modalı
+        if (_isVisible('giftMarkModal')) { hideGiftMarkModal(); return; }
+
+        // 10. Ürün iptal modalı
+        if (_isVisible('cancelItemModal')) { hideCancelItemModal(); return; }
+
+        // 11. Not modallari
+        if (_isVisible('noteModalSultan')) { hideNoteModalSultan(); return; }
+        if (_isVisible('noteModal')) { hideNoteModal(); return; }
+
+        // 12. Transfer / birleştirme modallari
+        if (_isVisible('transferItemsModal')) { hideTransferItemsModal(); return; }
+        if (_isVisible('transferModal')) { hideTransferModal(); return; }
+        if (_isVisible('mergeModal')) { hideMergeModal(); return; }
+
+        // 13. Drawer (yan menü)
+        var drawer = document.getElementById('drawerOverlay');
+        if (drawer && (drawer.style.display === 'block' || drawer.classList.contains('open'))) { closeDrawer(); return; }
+
+        // 14. Sipariş ekranından masalara dön
+        if (_isVisible('orderSection')) { goBackToTables(); return; }
+
+        // Masalar ekranındayız, çıkışı engelle — state'i yeniden ekle
+        history.pushState({ mobileNav: true }, '');
+      }
+
+      window.addEventListener('popstate', function(e) {
+        // Geri tuşu basıldığında hep bir state daha push et ki bir sonraki basışta da çalışsın
+        history.pushState({ mobileNav: true }, '');
+        handleMobileBack();
+      });
+    })();
+    // ──────────────────────────────────────────────────────────────────────────────
   </script>
 </body>
 </html>`;
@@ -14679,8 +16350,11 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Geçersiz istek parametreleri' });
       }
 
-      // Müdür kontrolü
-      if (staffId) {
+      // Sultan Somatı'da tüm personel yetkili; diğer şubelerde sadece müdür
+      if (!staffId) {
+        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
+      }
+      if (activeBranchKey !== 'sultansomati') {
         const staff = (db.staff || []).find(s => s.id === staffId);
         if (!staff || !staff.is_manager) {
           return res.status(403).json({ 
@@ -14688,8 +16362,6 @@ function startAPIServer() {
             error: 'Ürün aktarma yetkisi yok. Bu işlem için müdür yetkisi gereklidir.' 
           });
         }
-      } else {
-        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
       }
 
       const sourceOrder = db.tableOrders.find(o => o.id === sourceOrderId);
@@ -14880,8 +16552,11 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Kaynak ve hedef masa ID\'leri gerekli' });
       }
 
-      // Müdür kontrolü
-      if (staffId) {
+      // Sultan Somatı'da tüm personel yetkili; diğer şubelerde sadece müdür
+      if (!staffId) {
+        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
+      }
+      if (activeBranchKey !== 'sultansomati') {
         const staff = (db.staff || []).find(s => s.id === staffId);
         if (!staff || !staff.is_manager) {
           return res.status(403).json({ 
@@ -14889,8 +16564,6 @@ function startAPIServer() {
             error: 'Masa birleştirme yetkisi yok. Bu işlem için müdür yetkisi gereklidir.' 
           });
         }
-      } else {
-        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
       }
 
       const sourceOrder = db.tableOrders.find(
@@ -15075,8 +16748,11 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Ürün ID\'si gerekli' });
       }
 
-      // Müdür kontrolü
-      if (staffId) {
+      // Sultan Somatı'da tüm personel yetkili; diğer şubelerde sadece müdür
+      if (!staffId) {
+        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
+      }
+      if (activeBranchKey !== 'sultansomati') {
         const staff = (db.staff || []).find(s => s.id === staffId);
         if (!staff || !staff.is_manager) {
           return res.status(403).json({ 
@@ -15084,8 +16760,6 @@ function startAPIServer() {
             error: 'İptal yetkisi yok. İptal ettirmek için lütfen müdürle görüşünüz.' 
           });
         }
-      } else {
-        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
       }
 
       const item = db.tableOrderItems.find(oi => oi.id === itemId);
@@ -15311,6 +16985,60 @@ function startAPIServer() {
     res.json(ordersWithItems);
   });
 
+  /** Sultan mobil — tüm masaların bekleyen siparişleri (toplu liste; personel doğrulaması). */
+  appExpress.get('/api/sultan-mobile/pending-orders', (req, res) => {
+    try {
+      if (activeBranchKey !== 'sultansomati') {
+        return res.status(403).json({ success: false, error: 'Bu liste yalnızca Sultan Somatı mobilinde kullanılabilir.' });
+      }
+      const staffId = req.query.staffId;
+      if (!staffId) {
+        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
+      }
+      const staff = (db.staff || []).find((s) => String(s.id) === String(staffId));
+      if (!staff) {
+        return res.status(403).json({ success: false, error: 'Personel bulunamadı.' });
+      }
+      const pending = (db.tableOrders || []).filter(
+        (o) =>
+          o.status === 'pending' &&
+          typeof o.table_id === 'string' &&
+          o.table_id.indexOf('sultan-') === 0
+      );
+      pending.sort((a, b) => String(a.table_name || '').localeCompare(String(b.table_name || ''), 'tr'));
+      const orders = pending.map((order) => {
+        const items = (db.tableOrderItems || []).filter((i) => i.order_id === order.id);
+        const subtotal = items.reduce(
+          (s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)),
+          0
+        );
+        return {
+          orderId: order.id,
+          table_id: order.table_id,
+          table_name: order.table_name,
+          total_amount: order.total_amount,
+          computed_subtotal: Math.round(subtotal * 100) / 100,
+          order_note: order.order_note || null,
+          order_date: order.order_date || null,
+          order_time: order.order_time || null,
+          items: items.map((i) => ({
+            id: i.id,
+            product_name: i.product_name,
+            quantity: i.quantity,
+            price: i.price,
+            isGift: i.isGift || false,
+            staff_name: i.staff_name || null,
+            item_note: i.item_note || null
+          }))
+        };
+      });
+      res.json({ success: true, orders });
+    } catch (e) {
+      console.error('sultan-mobile/pending-orders:', e);
+      res.status(500).json({ success: false, error: e.message || 'Liste alınamadı' });
+    }
+  });
+
   /** Sultan mobil — müdür: kasa adisyon verisi (masaüstüyle aynı mantık). */
   function buildCashierAdisyonPayloadFromTableOrder(order) {
     const items = (order.items || []).map((item) => ({
@@ -15353,7 +17081,7 @@ function startAPIServer() {
       if (activeBranchKey !== 'sultansomati') {
         return res.status(403).json({ success: false, error: 'Bu işlem yalnızca Sultan Somatı şubesinde kullanılabilir.' });
       }
-      const { orderId, paymentMethod, staffId } = req.body || {};
+      const { orderId, paymentMethod, staffId, discountAmountTL } = req.body || {};
       if (!orderId || !staffId) {
         return res.status(400).json({ success: false, error: 'Sipariş ve personel bilgisi gerekli' });
       }
@@ -15361,7 +17089,7 @@ function startAPIServer() {
       if (!staff) {
         return res.status(403).json({ success: false, error: 'Personel bulunamadı.' });
       }
-      const result = await completeTableOrderCore(orderId, paymentMethod, null);
+      const result = await completeTableOrderCore(orderId, paymentMethod, null, discountAmountTL || null);
       if (!result.success) {
         return res.status(400).json(result);
       }
@@ -15372,8 +17100,58 @@ function startAPIServer() {
     }
   });
 
-  // Sultan Somatı mobil — müdür: kasa adisyonu yazdır
-  appExpress.post('/api/sultan-manager/print-adisyon', async (req, res) => {
+  // Sultan Somatı mobil — ödemesi alınmış (tamamlanmış) masa siparişleri listesi
+  appExpress.get('/api/sultan-manager/completed-table-orders', (req, res) => {
+    try {
+      if (activeBranchKey !== 'sultansomati') {
+        return res.status(403).json({ success: false, error: 'Bu işlem yalnızca Sultan Somatı şubesinde kullanılabilir.' });
+      }
+      const staffId = req.query.staffId;
+      if (!staffId) {
+        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
+      }
+      const staff = (db.staff || []).find((s) => String(s.id) === String(staffId));
+      if (!staff) {
+        return res.status(403).json({ success: false, error: 'Personel bulunamadı.' });
+      }
+      const list = (db.tableOrders || []).filter(
+        (o) =>
+          o.status === 'completed' &&
+          typeof o.table_id === 'string' &&
+          o.table_id.indexOf('sultan-') === 0
+      );
+      list.sort((a, b) => b.id - a.id);
+      const orders = list.slice(0, 150).map((order) => {
+        let sale = null;
+        if (order.completed_sale_id) {
+          sale = (db.sales || []).find((s) => s.id === order.completed_sale_id);
+        }
+        if (!sale) {
+          sale = (db.sales || []).find((s) => Number(s.table_order_id) === Number(order.id));
+        }
+        const canRevert = !!sale;
+        const charged = sale ? sale.total_amount : order.total_amount;
+        return {
+          id: order.id,
+          table_id: order.table_id,
+          table_name: order.table_name,
+          total_amount: order.total_amount,
+          charged_amount: charged,
+          payment_method: sale ? sale.payment_method : '—',
+          sale_date: sale ? sale.sale_date : order.order_date || '',
+          sale_time: sale ? sale.sale_time : order.order_time || '',
+          canRevert
+        };
+      });
+      res.json({ success: true, orders });
+    } catch (e) {
+      console.error('sultan-manager/completed-table-orders:', e);
+      res.status(500).json({ success: false, error: e.message || 'Liste alınamadı' });
+    }
+  });
+
+  // Sultan Somatı mobil — tamamlanmış siparişi geri al (masayı tekrar açık sipariş yap)
+  appExpress.post('/api/sultan-manager/revert-completed-order', async (req, res) => {
     try {
       if (activeBranchKey !== 'sultansomati') {
         return res.status(403).json({ success: false, error: 'Bu işlem yalnızca Sultan Somatı şubesinde kullanılabilir.' });
@@ -15382,9 +17160,34 @@ function startAPIServer() {
       if (!orderId || !staffId) {
         return res.status(400).json({ success: false, error: 'Sipariş ve personel bilgisi gerekli' });
       }
+      const staff = (db.staff || []).find((s) => String(s.id) === String(staffId));
+      if (!staff) {
+        return res.status(403).json({ success: false, error: 'Personel bulunamadı.' });
+      }
+      const result = await revertCompletedTableOrderCore(orderId);
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+      res.json(result);
+    } catch (e) {
+      console.error('sultan-manager/revert-completed-order:', e);
+      res.status(500).json({ success: false, error: e.message || 'Geri alınamadı' });
+    }
+  });
+
+  // Sultan Somatı mobil — müdür: kasa adisyonu yazdır
+  appExpress.post('/api/sultan-manager/print-adisyon', async (req, res) => {
+    try {
+      if (activeBranchKey !== 'sultansomati') {
+        return res.status(403).json({ success: false, error: 'Bu işlem yalnızca Sultan Somatı şubesinde kullanılabilir.' });
+      }
+      const { orderId, staffId, discountAmountTL } = req.body || {};
+      if (!orderId || !staffId) {
+        return res.status(400).json({ success: false, error: 'Sipariş ve personel bilgisi gerekli' });
+      }
       const staff = (db.staff || []).find((s) => s.id === staffId);
-      if (!staff || !staff.is_manager) {
-        return res.status(403).json({ success: false, error: 'Bu işlem için müdür yetkisi gereklidir.' });
+      if (!staff) {
+        return res.status(403).json({ success: false, error: 'Personel bulunamadı.' });
       }
       const order = db.tableOrders.find((o) => o.id === orderId);
       if (!order || order.status !== 'pending') {
@@ -15393,6 +17196,19 @@ function startAPIServer() {
       const orderItems = (db.tableOrderItems || []).filter((oi) => oi.order_id === orderId);
       const orderWithItems = { ...order, items: orderItems };
       const adisyonData = buildCashierAdisyonPayloadFromTableOrder(orderWithItems);
+      // Mobil personel indirim tutarını adisyon verisine uygula
+      if (discountAmountTL != null && parseFloat(discountAmountTL) > 0) {
+        const discTL = Math.min(parseFloat(discountAmountTL), adisyonData.subtotal);
+        adisyonData.discountAmount = discTL;
+        adisyonData.finalTotal = Math.round((adisyonData.subtotal - discTL) * 100) / 100;
+        adisyonData.discountInfo = {
+          applied: true,
+          discountPercent: adisyonData.subtotal > 0 ? Math.round((discTL / adisyonData.subtotal) * 10000) / 100 : 0,
+          discountAmount: discTL,
+          subtotal: adisyonData.subtotal,
+          finalTotal: adisyonData.finalTotal
+        };
+      }
       const printRes = await printCashierAdisyonFromData(adisyonData);
       if (!printRes.success) {
         return res.status(400).json(printRes);
@@ -15401,6 +17217,143 @@ function startAPIServer() {
     } catch (e) {
       console.error('sultan-manager/print-adisyon:', e);
       res.status(500).json({ success: false, error: e.message || 'Yazdırılamadı' });
+    }
+  });
+
+  // Sultan: tüm masayı iptal et
+  appExpress.post('/api/sultan-manager/cancel-entire-order', async (req, res) => {
+    try {
+      const { orderId, cancelReason = '', staffId = null } = req.body || {};
+      const order = db.tableOrders.find(o => o.id === orderId);
+      if (!order) return res.status(404).json({ success: false, error: 'Sipariş bulunamadı' });
+      if (order.status !== 'pending') return res.status(400).json({ success: false, error: 'Sipariş zaten tamamlanmış veya iptal edilmiş' });
+
+      const orderItems = db.tableOrderItems.filter(oi => oi.order_id === orderId);
+
+      // Firebase'e grup iptal kaydı
+      if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp && orderItems.length > 0) {
+        try {
+          const now = new Date();
+          const cancelDate = now.toLocaleDateString('tr-TR');
+          const cancelTime = getFormattedTime(now);
+          const items_array = orderItems.map(oi => ({
+            product_name: oi.product_name,
+            quantity: oi.quantity,
+            price: oi.price,
+            isGift: oi.isGift || false
+          }));
+          const total_amount = orderItems.reduce((s, oi) => s + (oi.isGift ? 0 : oi.price * oi.quantity), 0);
+          const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
+          await firebaseAddDoc(cancelRef, {
+            is_group: true,
+            order_id: order.id,
+            table_id: order.table_id,
+            table_name: order.table_name,
+            table_type: order.table_type,
+            cancel_reason: cancelReason || '',
+            cancel_date: cancelDate,
+            cancel_time: cancelTime,
+            items_array,
+            total_amount,
+            source: 'mobile',
+            staff_name: staffId ? (db.staff || []).find(s => s.id === staffId)?.name || null : null,
+            order_staff_name: order.staff_name || null,
+            created_at: firebaseServerTimestamp()
+          });
+        } catch (err) {
+          console.error('cancel-entire-order firebase hatası:', err);
+        }
+      }
+
+      // Siparişi ve item'ları sil
+      const orderIndex = db.tableOrders.findIndex(o => o.id === orderId);
+      if (orderIndex !== -1) db.tableOrders.splice(orderIndex, 1);
+      orderItems.forEach(item => {
+        const idx = db.tableOrderItems.findIndex(oi => oi.id === item.id);
+        if (idx !== -1) db.tableOrderItems.splice(idx, 1);
+      });
+      saveDatabase();
+
+      syncSingleTableToFirebase(order.table_id).catch(err => {
+        console.error('Masa Firebase kaydetme hatası:', err);
+      });
+
+      res.json({ success: true });
+    } catch (e) {
+      console.error('sultan-manager/cancel-entire-order:', e);
+      res.status(500).json({ success: false, error: e.message || 'İptal başarısız' });
+    }
+  });
+
+  // ──── Rezervasyon API ────
+  // Rezervasyon oluştur
+  appExpress.post('/api/reservations', (req, res) => {
+    try {
+      const { tableId, tableName, date, time, peopleCount, adults, children, babies, note, staffId, staffName, guestName, reservationId } = req.body || {};
+      if (!tableId || !date || !time) return res.status(400).json({ success: false, error: 'Zorunlu alanlar eksik (tableId, date, time)' });
+      // Düzenleme mi yoksa yeni oluşturma mı?
+      const existingIdx = reservationId ? db.reservations.findIndex(r => r.id === reservationId) : -1;
+      const id = (existingIdx >= 0) ? reservationId : ('res-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8));
+      const reservation = { id, tableId, tableName: tableName || '', date, time,
+        peopleCount: Number(peopleCount) || 0, adults: Number(adults) || 0,
+        children: Number(children) || 0, babies: Number(babies) || 0,
+        note: note || '', guestName: guestName || '',
+        staffId: staffId || null, staffName: staffName || null,
+        createdAt: (existingIdx >= 0 ? db.reservations[existingIdx].createdAt : new Date().toISOString()) };
+      // Mevcut masa rezervasyonu + aynı id varsa sil
+      db.reservations = db.reservations.filter(r => r.tableId !== tableId && r.id !== id);
+      db.reservations.push(reservation);
+      saveDatabase();
+      res.json({ success: true, reservation });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+  // Rezervasyonları getir (tableId filtresi opsiyonel)
+  appExpress.get('/api/reservations', (req, res) => {
+    try {
+      const { tableId } = req.query;
+      const list = tableId
+        ? db.reservations.filter(r => r.tableId === tableId)
+        : db.reservations;
+      res.json(list);
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+  // Rezervasyon sil
+  appExpress.delete('/api/reservations/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const idx = db.reservations.findIndex(r => r.id === id);
+      if (idx === -1) return res.status(404).json({ success: false, error: 'Rezervasyon bulunamadı' });
+      db.reservations.splice(idx, 1);
+      saveDatabase();
+      res.json({ success: true });
+    } catch (e) {
+      res.status(500).json({ success: false, error: e.message });
+    }
+  });
+  // Rezervasyon yazdır (PDF/HTML tabanlı — termal 58mm)
+  appExpress.post('/api/reservations/print', async (req, res) => {
+    try {
+      const { reservationId } = req.body || {};
+      const reservation = db.reservations.find(r => r.id === reservationId);
+      if (!reservation) return res.status(404).json({ success: false, error: 'Rezervasyon bulunamadı' });
+      const cashierPrinter = db.settings.cashierPrinter;
+      if (!cashierPrinter || !cashierPrinter.printerName) {
+        return res.status(400).json({ success: false, error: 'Kasa yazıcısı ayarlanmamış' });
+      }
+      const html = generateReservationReceiptHTML(reservation);
+      const result = await printToPrinter(cashierPrinter.printerName, cashierPrinter.printerType || 'usb', null, false, null, html);
+      if (result && result.success) {
+        res.json({ success: true });
+      } else {
+        res.status(500).json({ success: false, error: (result && result.error) || 'Yazdırılamadı' });
+      }
+    } catch (e) {
+      console.error('rezervasyon print hatası:', e);
+      res.status(500).json({ success: false, error: e.message });
     }
   });
 

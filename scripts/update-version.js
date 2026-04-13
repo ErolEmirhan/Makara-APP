@@ -57,12 +57,18 @@ function updateVersionFiles(newVersion) {
   console.log(`\n✨ Version başarıyla ${newVersion} olarak güncellendi!\n`);
 }
 
-// Mevcut version'ı oku (index.html'den)
+// Mevcut sürüm: package.json (Electron / navbar ile aynı çizgi); yoksa index.html APP_VERSION
 function getCurrentVersion() {
+  const pkgPath = path.join(__dirname, '../package.json');
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const v = String(pkg.version || '').trim();
+    if (/^\d+\.\d+\.\d+$/.test(v)) return v;
+  } catch (_) {}
   const indexHtmlPath = path.join(__dirname, '../public/index.html');
   const indexHtml = fs.readFileSync(indexHtmlPath, 'utf8');
   const match = indexHtml.match(/const APP_VERSION = '([\d.]+)';/);
-  return match ? match[1] : '2.4.9';
+  return match ? match[1] : '0.0.0';
 }
 
 // Ana işlem

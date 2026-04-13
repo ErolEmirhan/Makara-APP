@@ -10608,6 +10608,14 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         </span>
         <span class="drawer-item__label">Yenile</span>
       </button>
+      <button class="drawer-item" onclick="closeDrawer(); setTimeout(showTransferModal, 280);">
+        <span class="drawer-item__icon" style="background:#e0e7ff;">
+          <svg fill="none" stroke="#4f46e5" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Masa Aktar</span>
+      </button>
       <button class="drawer-item" id="drawerMergeBtn" style="display:none;" onclick="closeDrawer(); setTimeout(showMergeModal, 280);">
         <span class="drawer-item__icon" style="background:#d1fae5;">
           <svg fill="none" stroke="#059669" viewBox="0 0 24 24" stroke-width="2">
@@ -16715,6 +16723,15 @@ function startAPIServer() {
 
       saveDatabase();
 
+      // Masaüstü / patron ekranı (Firebase masalar dinleyicisi) ipc ile aynı veriyi görsün
+      if (mainWindow && mainWindow.webContents) {
+        mainWindow.webContents.send('table-order-updated', {
+          orderId: sourceOrder.id,
+          tableId: targetTableId,
+          sourceTableId: sourceTableId
+        });
+      }
+
       // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
       if (io) {
         io.emit('table-update', {
@@ -16726,6 +16743,11 @@ function startAPIServer() {
           hasOrder: true
         });
       }
+
+      // ipcMain.transfer-table-order ile aynı: makaramasalar Firebase'de kaynak boş, hedef dolu
+      // Mobil istemciye başarı dönmeden önce bitir — admin dashboard anlık dinleyicide eski masa kalmasın
+      await syncSingleTableToFirebase(sourceTableId);
+      await syncSingleTableToFirebase(targetTableId);
 
       res.json({ 
         success: true, 

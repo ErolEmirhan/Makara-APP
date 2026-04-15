@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import Toast from './Toast';
 import { buildSultanTablesFlat } from '../constants/sultanTables';
+import {
+  MAKARA_HAVZAN_MAIN_TABLE_COUNT,
+  MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS,
+} from '../constants/makaraMasaLayout';
 
 const TableTransferModal = ({
   currentOrder,
@@ -11,6 +15,7 @@ const TableTransferModal = ({
   branchKey,
 }) => {
   const isSultanBranch = branchKey === 'sultansomati';
+  const isSuriciBranch = branchKey === 'makarasur';
   const sultanTables = useMemo(() => (isSultanBranch ? buildSultanTablesFlat() : []), [isSultanBranch]);
   const [step, setStep] = useState(1); // 1: source table, 2: target table
   const [tableOrders, setTableOrders] = useState([]);
@@ -25,20 +30,22 @@ const TableTransferModal = ({
     }, 3000);
   };
 
-  const insideTables = Array.from({ length: 20 }, (_, i) => ({
+  const insideCount = isSultanBranch ? 0 : (isSuriciBranch ? 20 : MAKARA_HAVZAN_MAIN_TABLE_COUNT);
+  const insideTables = Array.from({ length: insideCount }, (_, i) => ({
     id: `inside-${i + 1}`,
     number: i + 1,
     type: 'inside',
     name: `Masa ${i + 1}`
   }));
 
-  const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
-  const outsideTables = OUTSIDE_NUMS.map(tableNumber => ({
-    id: `outside-${tableNumber}`,
-    number: tableNumber,
-    type: 'outside',
-    name: `Masa ${tableNumber}`
-  }));
+  const outsideTables = isSuriciBranch
+    ? MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.map((tableNumber) => ({
+        id: `outside-${tableNumber}`,
+        number: tableNumber,
+        type: 'outside',
+        name: `Masa ${tableNumber}`
+      }))
+    : [];
 
   // Paket masaları (hem içeri hem dışarı için)
   const packageTablesInside = Array.from({ length: 5 }, (_, i) => ({

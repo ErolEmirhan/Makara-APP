@@ -78,6 +78,10 @@ const FIREBASE_SULTAN_SOMATI = {
   measurementId: "G-SV23DHVNDG"
 };
 
+/** Makara Havzan: `inside-1` … `inside-99`. Suriçi: eski dışarı numara listesi (IPC/mobil ile uyumlu). */
+const MAKARA_HAVZAN_MAIN_TABLE_COUNT = 99;
+const MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS = [61, 62, 63, 64, 65, 66, 67, 68, 71, 72, 73, 74, 75, 76, 77, 78, 81, 82, 83, 84, 85, 86, 87, 88];
+
 // Çoklu şube yapılandırması
 const BRANCH_CONFIGS = {
   makara: {
@@ -3186,8 +3190,7 @@ function getTableNameFromId(tableId) {
   if (tableId.startsWith('inside-')) return `Masa ${tableId.replace('inside-', '')}`;
   if (tableId.startsWith('outside-')) {
     const num = parseInt(tableId.replace('outside-', ''), 10);
-    const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
-    return `Masa ${OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num)}`;
+    return `Masa ${MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.includes(num) ? num : (MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[num - 1] || num)}`;
   }
   if (tableId.startsWith('package-')) {
     const parts = tableId.split('-');
@@ -12227,14 +12230,13 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         sultanBar.style.display = 'none';
         sultanBar.innerHTML = '';
       }
-      // Tek ekran: tüm masalar (1-20, boşluk, 61-88 (69,70,79,80 hariç), paket)
+      // Havzan: 1-99 + paket | Suriçi: iç 1-20, ayırıcı, dış numaralar, paket
       const insideTables = tables.filter(t => t.id.startsWith('inside-') && !t.id.startsWith('package-'));
       const outsideTables = tables.filter(t => t.id.startsWith('outside-') && !t.id.startsWith('package-'));
       const packageTables = tables.filter(t => t.id.startsWith('package-'));
       
       let html = '';
       
-      // Masalar 1-20 (hafif pembe)
       if (insideTables.length > 0) {
         html += insideTables.map(table => {
           const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
@@ -12252,15 +12254,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         }).join('');
       }
       
-      // 1-20 ile 61-88 arası ayırıcı çizgi (ortada parlak çember)
-      html += '<div style="grid-column: 1 / -1; padding: 20px 0; width: 100%; display: flex; align-items: center; justify-content: center;">';
-      html += '<div style="position: relative; width: 100%; display: flex; align-items: center; justify-content: center;">';
-      html += '<div style="position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; width: 100%; background: linear-gradient(90deg, #e2e8f0, #94a3b8, #e2e8f0); box-shadow: 0 1px 3px rgba(0,0,0,0.08);"></div>';
-      html += '<div style="position: relative; z-index: 10; width: 12px; height: 12px; border-radius: 50%; background: #ffffff; border: 2px solid #94a3b8; box-shadow: 0 2px 8px rgba(148,163,184,0.4), 0 0 0 2px rgba(226,232,240,0.8);"></div>';
-      html += '</div></div>';
-      
-      // Masalar 61-88 (hafif sarı)
       if (outsideTables.length > 0) {
+        html += '<div style="grid-column: 1 / -1; padding: 20px 0; width: 100%; display: flex; align-items: center; justify-content: center;">';
+        html += '<div style="position: relative; width: 100%; display: flex; align-items: center; justify-content: center;">';
+        html += '<div style="position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; width: 100%; background: linear-gradient(90deg, #e2e8f0, #94a3b8, #e2e8f0); box-shadow: 0 1px 3px rgba(0,0,0,0.08);"></div>';
+        html += '<div style="position: relative; z-index: 10; width: 12px; height: 12px; border-radius: 50%; background: #ffffff; border: 2px solid #94a3b8; box-shadow: 0 2px 8px rgba(148,163,184,0.4), 0 0 0 2px rgba(226,232,240,0.8);"></div>';
+        html += '</div></div>';
         html += outsideTables.map(table => {
           const tableIdStr = typeof table.id === 'string' ? '\\'' + table.id + '\\'' : table.id;
           const nameStr = table.name.replace(/'/g, "\\'");
@@ -16290,7 +16289,9 @@ function startAPIServer() {
       return res.json(buildSultanTablesListForApi(db));
     }
     const tables = [];
-    for (let i = 1; i <= 20; i++) {
+    const isSuriciBranch = activeBranchKey === 'makarasur';
+    const insideCount = isSuriciBranch ? 20 : MAKARA_HAVZAN_MAIN_TABLE_COUNT;
+    for (let i = 1; i <= insideCount; i++) {
       const tableId = `inside-${i}`;
       const hasPendingOrder = (db.tableOrders || []).some(
         o => o.table_id === tableId && o.status === 'pending'
@@ -16303,21 +16304,22 @@ function startAPIServer() {
         hasOrder: hasPendingOrder
       });
     }
-    const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
-    OUTSIDE_NUMS.forEach((tableNumber, idx) => {
-      const tableId = `outside-${tableNumber}`;
-      const oldTableId = `outside-${idx + 1}`;
-      const hasPendingOrder = (db.tableOrders || []).some(
-        o => (o.table_id === tableId || o.table_id === oldTableId) && o.status === 'pending'
-      );
-      tables.push({
-        id: tableId,
-        number: tableNumber,
-        type: 'outside',
-        name: `Masa ${tableNumber}`,
-        hasOrder: hasPendingOrder
+    if (isSuriciBranch) {
+      MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.forEach((tableNumber, idx) => {
+        const tableId = `outside-${tableNumber}`;
+        const oldTableId = `outside-${idx + 1}`;
+        const hasPendingOrder = (db.tableOrders || []).some(
+          o => (o.table_id === tableId || o.table_id === oldTableId) && o.status === 'pending'
+        );
+        tables.push({
+          id: tableId,
+          number: tableNumber,
+          type: 'outside',
+          name: `Masa ${tableNumber}`,
+          hasOrder: hasPendingOrder
+        });
       });
-    });
+    }
     // Paket masaları - İçeri
     for (let i = 1; i <= 5; i++) {
       const tableId = `package-inside-${i}`;
@@ -16979,13 +16981,12 @@ function startAPIServer() {
     // Dışarı masalar için hem yeni hem eski format kontrol et
     let tableIdsToCheck = [tableId];
     if (tableId.startsWith('outside-')) {
-      const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
       const tableNumber = parseInt(tableId.replace('outside-', ''), 10) || 0;
-      const idx = OUTSIDE_NUMS.indexOf(tableNumber);
+      const idx = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.indexOf(tableNumber);
       if (idx >= 0) {
         tableIdsToCheck.push(`outside-${idx + 1}`);
-      } else if (tableNumber >= 1 && tableNumber <= 24 && OUTSIDE_NUMS[tableNumber - 1]) {
-        tableIdsToCheck.push(`outside-${OUTSIDE_NUMS[tableNumber - 1]}`);
+      } else if (tableNumber >= 1 && tableNumber <= 24 && MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[tableNumber - 1]) {
+        tableIdsToCheck.push(`outside-${MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[tableNumber - 1]}`);
       }
     }
     
@@ -18434,8 +18435,7 @@ async function syncSingleTableToFirebase(tableId) {
       tableType = 'inside';
     } else if (tableId.startsWith('outside-')) {
       const num = parseInt(tableId.replace('outside-', ''), 10) || 0;
-      const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
-      tableNumber = OUTSIDE_NUMS.includes(num) ? num : (OUTSIDE_NUMS[num - 1] || num);
+      tableNumber = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.includes(num) ? num : (MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[num - 1] || num);
       tableName = `Masa ${tableNumber}`;
       tableType = 'outside';
     } else if (tableId.startsWith('package-inside-')) {

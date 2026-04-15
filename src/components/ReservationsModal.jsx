@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { buildSultanTablesFlat } from '../constants/sultanTables';
-
-const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+import {
+  MAKARA_HAVZAN_MAIN_TABLE_COUNT,
+  MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS,
+} from '../constants/makaraMasaLayout';
 
 const ReservationsModal = ({ branchKey, onClose }) => {
   const isSultanBranch = branchKey === 'sultansomati';
+  const isSuriciBranch = branchKey === 'makarasur';
 
   // Liste | form view
   const [view, setView] = useState('list'); // 'list' | 'form'
@@ -44,10 +47,13 @@ const ReservationsModal = ({ branchKey, onClose }) => {
     if (isSultanBranch) {
       return buildSultanTablesFlat().map(t => ({ id: t.id, name: t.name }));
     }
-    const inside = Array.from({ length: 20 }, (_, i) => ({
+    const insideLen = isSuriciBranch ? 20 : MAKARA_HAVZAN_MAIN_TABLE_COUNT;
+    const inside = Array.from({ length: insideLen }, (_, i) => ({
       id: `inside-${i + 1}`, name: `Masa ${i + 1}`
     }));
-    const outside = OUTSIDE_NUMS.map(n => ({ id: `outside-${n}`, name: `Masa ${n}` }));
+    const outside = isSuriciBranch
+      ? MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.map((n) => ({ id: `outside-${n}`, name: `Masa ${n}` }))
+      : [];
     return [...inside, ...outside];
   })();
 

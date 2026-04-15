@@ -260,6 +260,9 @@
     function isPatronSultanTablesBranch() {
       return activeBranchKey === 'sultansomati';
     }
+    function isPatronHavzanMakaraBranch() {
+      return activeBranchKey === 'makara';
+    }
 
     function buildPatronSultanAllStaticTables() {
       const out = {};
@@ -2023,6 +2026,40 @@
         allStaticTables = {};
         if (isPatronSultanTablesBranch()) {
           allStaticTables = buildPatronSultanAllStaticTables();
+        } else if (isPatronHavzanMakaraBranch()) {
+          for (let i = 1; i <= 99; i++) {
+            allStaticTables[`inside-${i}`] = {
+              table_id: `inside-${i}`,
+              table_name: `Masa ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-inside-${i}`] = {
+              table_id: `package-inside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-outside-${i}`] = {
+              table_id: `package-outside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'outside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
         } else {
           for (let i = 1; i <= 20; i++) {
             allStaticTables[`inside-${i}`] = {
@@ -2085,6 +2122,43 @@
       allStaticTables = {};
       if (isPatronSultanTablesBranch()) {
         allStaticTables = buildPatronSultanAllStaticTables();
+      } else if (isPatronHavzanMakaraBranch()) {
+        for (let i = 1; i <= 99; i++) {
+          const tableId = `inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Masa ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-outside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'outside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
       } else {
         for (let i = 1; i <= 20; i++) {
           const tableId = `inside-${i}`;
@@ -3924,6 +3998,40 @@
         allStaticTables = {};
         if (isPatronSultanTablesBranch()) {
           allStaticTables = buildPatronSultanAllStaticTables();
+        } else if (isPatronHavzanMakaraBranch()) {
+          for (let i = 1; i <= 99; i++) {
+            allStaticTables[`inside-${i}`] = {
+              table_id: `inside-${i}`,
+              table_name: `Masa ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-inside-${i}`] = {
+              table_id: `package-inside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'inside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
+          for (let i = 1; i <= 5; i++) {
+            allStaticTables[`package-outside-${i}`] = {
+              table_id: `package-outside-${i}`,
+              table_name: `Paket ${i}`,
+              table_type: 'outside',
+              table_number: i,
+              is_occupied: false,
+              total_amount: 0,
+              items: []
+            };
+          }
         } else {
           for (let i = 1; i <= 20; i++) {
             allStaticTables[`inside-${i}`] = {
@@ -3989,6 +4097,43 @@
       allStaticTables = {};
       if (isPatronSultanTablesBranch()) {
         allStaticTables = buildPatronSultanAllStaticTables();
+      } else if (isPatronHavzanMakaraBranch()) {
+        for (let i = 1; i <= 99; i++) {
+          const tableId = `inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Masa ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-inside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'inside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
+        for (let i = 1; i <= 5; i++) {
+          const tableId = `package-outside-${i}`;
+          allStaticTables[tableId] = {
+            table_id: tableId,
+            table_name: `Paket ${i}`,
+            table_type: 'outside',
+            table_number: i,
+            is_occupied: false,
+            total_amount: 0,
+            items: []
+          };
+        }
       } else {
         for (let i = 1; i <= 20; i++) {
           const tableId = `inside-${i}`;

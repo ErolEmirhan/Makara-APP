@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import Toast from './Toast';
+import {
+  MAKARA_HAVZAN_MAIN_TABLE_COUNT,
+  MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS,
+} from '../constants/makaraMasaLayout';
+import { buildSultanTablesFlat } from '../constants/sultanTables';
 
 const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
-const TableOrderModal = ({ order, items, customerMode = false, onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems, onGiftApplied }) => {
+const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'makara', onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems, onGiftApplied }) => {
   const [sessionDuration, setSessionDuration] = useState('');
   const [selectedItemDetail, setSelectedItemDetail] = useState(null);
   const [cancellingItemId, setCancellingItemId] = useState(null);
@@ -517,17 +522,30 @@ const TableOrderModal = ({ order, items, customerMode = false, onClose, onComple
     }
   };
 
-  const insideTables = useMemo(() => Array.from({ length: 20 }, (_, i) => ({ id: `inside-${i + 1}`, name: `Masa ${i + 1}` })), []);
-  const OUTSIDE_NUMS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
-  const outsideTables = useMemo(() => OUTSIDE_NUMS.map(n => ({ id: `outside-${n}`, name: `Masa ${n}` })), []);
+  const isSultanBranch = branchKey === 'sultansomati';
+  const isSuriciBranch = branchKey === 'makarasur';
+  const insideCount = isSultanBranch ? 0 : (isSuriciBranch ? 20 : MAKARA_HAVZAN_MAIN_TABLE_COUNT);
+  const insideTables = useMemo(() => Array.from({ length: insideCount }, (_, i) => ({ id: `inside-${i + 1}`, name: `Masa ${i + 1}` })), [insideCount]);
+  const outsideTables = useMemo(
+    () =>
+      isSuriciBranch
+        ? MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.map((n) => ({ id: `outside-${n}`, name: `Masa ${n}` }))
+        : [],
+    [isSuriciBranch]
+  );
   const packageTables = useMemo(() => [
     ...Array.from({ length: 5 }, (_, i) => ({ id: `package-inside-${i + 1}`, name: `Paket ${i + 1}` })),
     ...Array.from({ length: 5 }, (_, i) => ({ id: `package-outside-${i + 1}`, name: `Paket ${i + 1}` }))
   ], []);
   const allTablesForTransfer = useMemo(() => {
+    if (isSultanBranch) {
+      return buildSultanTablesFlat()
+        .map((t) => ({ id: t.id, name: t.name }))
+        .filter((t) => t.id !== order?.table_id);
+    }
     const all = [...insideTables, ...outsideTables, ...packageTables];
     return all.filter(t => t.id !== order?.table_id);
-  }, [insideTables, outsideTables, packageTables, order?.table_id]);
+  }, [isSultanBranch, insideTables, outsideTables, packageTables, order?.table_id]);
 
   const getTransferKey = (item) => `${item.product_id}_${!!item.isGift}`;
   const getTransferableQty = (item) => Math.max(0, (item.quantity || 0) - (item.paid_quantity || 0));

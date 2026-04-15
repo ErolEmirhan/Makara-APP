@@ -16,9 +16,10 @@ import {
   buildSultanTablesFlat,
   parseSultanTableId,
 } from '../constants/sultanTables';
-
-// Masalar 61-88 (69, 70, 79, 80 hariç)
-const OUTSIDE_TABLE_NUMBERS = [61,62,63,64,65,66,67,68,71,72,73,74,75,76,77,78,81,82,83,84,85,86,87,88];
+import {
+  MAKARA_HAVZAN_MAIN_TABLE_COUNT,
+  MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS,
+} from '../constants/makaraMasaLayout';
 
 const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId, autoOpenTableId, onAutoOpenConsumed, onShowReceipt }) => {
   const [selectedType, setSelectedType] = useState('inside'); // 'inside', 'outside', or 'online'
@@ -281,20 +282,23 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     return allSales;
   }, [parseDateTime]);
 
-  // Masalar: 1-20 ve 61-88 (69,70,79,80 hariç)
-  const insideTables = useMemo(() => Array.from({ length: 20 }, (_, i) => ({
+  const insideCount = isSuriciBranch ? 20 : (isSultanBranch ? 20 : MAKARA_HAVZAN_MAIN_TABLE_COUNT);
+  const insideTables = useMemo(() => Array.from({ length: insideCount }, (_, i) => ({
     id: `inside-${i + 1}`,
     number: i + 1,
     type: 'inside',
     name: `Masa ${i + 1}`
-  })), []);
+  })), [insideCount]);
 
-  const outsideTables = useMemo(() => OUTSIDE_TABLE_NUMBERS.map((tableNumber) => ({
-    id: `outside-${tableNumber}`,
-    number: tableNumber,
-    type: 'outside',
-    name: `Masa ${tableNumber}`
-  })), []);
+  const outsideTables = useMemo(() => {
+    if (!isSuriciBranch || isSultanBranch) return [];
+    return MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.map((tableNumber) => ({
+      id: `outside-${tableNumber}`,
+      number: tableNumber,
+      type: 'outside',
+      name: `Masa ${tableNumber}`
+    }));
+  }, [isSuriciBranch, isSultanBranch]);
 
   // Paket masaları (iç + dış hepsi tek blokta)
   const packageTablesInside = useMemo(() => Array.from({ length: 5 }, (_, i) => ({
@@ -741,12 +745,12 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     // Eğer bulunamazsa ve dışarı masası ise eski formatı da kontrol et
     if (!order && tableId.startsWith('outside-')) {
       const tableNumber = parseInt(tableId.replace('outside-', ''), 10) || 0;
-      const idx = OUTSIDE_TABLE_NUMBERS.indexOf(tableNumber);
+      const idx = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.indexOf(tableNumber);
       if (idx >= 0) {
         const oldTableId = `outside-${idx + 1}`;
         order = tableOrders.find(o => o.table_id === oldTableId && o.status === 'pending');
       } else if (tableNumber >= 1 && tableNumber <= 24) {
-        const newNum = OUTSIDE_TABLE_NUMBERS[tableNumber - 1];
+        const newNum = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[tableNumber - 1];
         if (newNum) {
           order = tableOrders.find(o => o.table_id === `outside-${newNum}` && o.status === 'pending');
         }
@@ -814,7 +818,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         };
       } else if (tableId.startsWith('outside-')) {
         const num = parseInt(tableId.replace('outside-', ''), 10);
-        const number = OUTSIDE_TABLE_NUMBERS.includes(num) ? num : (OUTSIDE_TABLE_NUMBERS[num - 1] || num);
+        const number = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.includes(num) ? num : (MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[num - 1] || num);
         table = {
           id: tableId,
           number,
@@ -2325,7 +2329,6 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
             </div>
           ) : (
             <>
-              {/* Masalar: 1-20, boşluk, 61-88 (69,70,79,80 hariç) */}
               <div className="grid grid-cols-10 gap-2 mb-2">
                 {insideTables.map((table) => {
                   const hasOrder = getTableOrder(table.id);
@@ -2356,43 +2359,46 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                   );
                 })}
               </div>
-              {/* 1-20 ile 61-88 arası ayırıcı çizgi */}
-              <div className="w-full py-5 flex items-center justify-center">
-                <div className="relative w-full flex items-center justify-center">
-                  <div className="absolute inset-0 h-0.5 w-full bg-gradient-to-r from-slate-200 via-slate-400 to-slate-200 shadow-sm" />
-                  <div className="relative z-10 w-3 h-3 rounded-full bg-white border-2 border-slate-400 shadow-lg shadow-slate-300/50 ring-2 ring-slate-200/80" />
-                </div>
-              </div>
-              <div className="grid grid-cols-10 gap-2 mb-6">
-                {outsideTables.map((table) => {
-                  const hasOrder = getTableOrder(table.id);
-                  return (
-                <button
-                  key={table.id}
-                  onClick={() => handleTableClick(table)}
-                  className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] p-1.5 ${
-                    hasOrder
-                      ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
-                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
-                  }`}
-                >
-                  {hasOrder ? (
-                    <>
-                      <span className="text-lg md:text-xl font-black text-white tabular-nums leading-none">{table.number}</span>
-                      <span className="text-[9px] md:text-[10px] font-bold text-red-100 text-center leading-tight mt-1 line-clamp-2 px-0.5">{table.name}</span>
-                      <span className="mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">Dolu</span>
-                      <span className="absolute top-1 right-1 w-2 h-2 bg-amber-300 rounded-full animate-pulse" />
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
-                      <span className="mt-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">Boş</span>
-                    </>
-                  )}
-                </button>
-                  );
-                })}
-              </div>
+              {outsideTables.length > 0 && (
+                <>
+                  <div className="w-full py-5 flex items-center justify-center">
+                    <div className="relative w-full flex items-center justify-center">
+                      <div className="absolute inset-0 h-0.5 w-full bg-gradient-to-r from-slate-200 via-slate-400 to-slate-200 shadow-sm" />
+                      <div className="relative z-10 w-3 h-3 rounded-full bg-white border-2 border-slate-400 shadow-lg shadow-slate-300/50 ring-2 ring-slate-200/80" />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-10 gap-2 mb-6">
+                    {outsideTables.map((table) => {
+                      const hasOrder = getTableOrder(table.id);
+                      return (
+                    <button
+                      key={table.id}
+                      onClick={() => handleTableClick(table)}
+                      className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] p-1.5 ${
+                        hasOrder
+                          ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
+                      }`}
+                    >
+                      {hasOrder ? (
+                        <>
+                          <span className="text-lg md:text-xl font-black text-white tabular-nums leading-none">{table.number}</span>
+                          <span className="text-[9px] md:text-[10px] font-bold text-red-100 text-center leading-tight mt-1 line-clamp-2 px-0.5">{table.name}</span>
+                          <span className="mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">Dolu</span>
+                          <span className="absolute top-1 right-1 w-2 h-2 bg-amber-300 rounded-full animate-pulse" />
+                        </>
+                      ) : (
+                        <>
+                          <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
+                          <span className="mt-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">Boş</span>
+                        </>
+                      )}
+                    </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
 
               {/* Paket Masaları - Kurumsal */}
               <div className="mb-6 mt-10">
@@ -2459,6 +2465,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           order={selectedOrder}
           items={orderItems}
           customerMode={isSuriciBranch}
+          branchKey={branchKey}
           onClose={() => {
             setShowModal(false);
             setSelectedOrder(null);

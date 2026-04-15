@@ -3824,14 +3824,13 @@
         sultanBar.style.display = 'none';
         sultanBar.innerHTML = '';
       }
-      // Tek ekran: tüm masalar (1-20, boşluk, 61-88 (69,70,79,80 hariç), paket)
+      // Havzan: 1-99 + paket | Suriçi: iç 1-20, ayırıcı, dış numaralar, paket
       const insideTables = tables.filter(t => t.id.startsWith('inside-') && !t.id.startsWith('package-'));
       const outsideTables = tables.filter(t => t.id.startsWith('outside-') && !t.id.startsWith('package-'));
       const packageTables = tables.filter(t => t.id.startsWith('package-'));
       
       let html = '';
       
-      // Masalar 1-20 (hafif pembe)
       if (insideTables.length > 0) {
         html += insideTables.map(table => {
           const tableIdStr = typeof table.id === 'string' ? '\'' + table.id + '\'' : table.id;
@@ -3849,15 +3848,12 @@
         }).join('');
       }
       
-      // 1-20 ile 61-88 arası ayırıcı çizgi (ortada parlak çember)
-      html += '<div style="grid-column: 1 / -1; padding: 20px 0; width: 100%; display: flex; align-items: center; justify-content: center;">';
-      html += '<div style="position: relative; width: 100%; display: flex; align-items: center; justify-content: center;">';
-      html += '<div style="position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; width: 100%; background: linear-gradient(90deg, #e2e8f0, #94a3b8, #e2e8f0); box-shadow: 0 1px 3px rgba(0,0,0,0.08);"></div>';
-      html += '<div style="position: relative; z-index: 10; width: 12px; height: 12px; border-radius: 50%; background: #ffffff; border: 2px solid #94a3b8; box-shadow: 0 2px 8px rgba(148,163,184,0.4), 0 0 0 2px rgba(226,232,240,0.8);"></div>';
-      html += '</div></div>';
-      
-      // Masalar 61-88 (hafif sarı)
       if (outsideTables.length > 0) {
+        html += '<div style="grid-column: 1 / -1; padding: 20px 0; width: 100%; display: flex; align-items: center; justify-content: center;">';
+        html += '<div style="position: relative; width: 100%; display: flex; align-items: center; justify-content: center;">';
+        html += '<div style="position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); height: 2px; width: 100%; background: linear-gradient(90deg, #e2e8f0, #94a3b8, #e2e8f0); box-shadow: 0 1px 3px rgba(0,0,0,0.08);"></div>';
+        html += '<div style="position: relative; z-index: 10; width: 12px; height: 12px; border-radius: 50%; background: #ffffff; border: 2px solid #94a3b8; box-shadow: 0 2px 8px rgba(148,163,184,0.4), 0 0 0 2px rgba(226,232,240,0.8);"></div>';
+        html += '</div></div>';
         html += outsideTables.map(table => {
           const tableIdStr = typeof table.id === 'string' ? '\'' + table.id + '\'' : table.id;
           const nameStr = table.name.replace(/'/g, "\'");

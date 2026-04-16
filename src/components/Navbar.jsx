@@ -25,6 +25,8 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [managerOpsConfigured, setManagerOpsConfigured] = useState(false);
   const [managerOpsModalStaff, setManagerOpsModalStaff] = useState(null);
   const [managerOpsPin, setManagerOpsPin] = useState('');
+  /** masaüstü müdür işlem şifresi modalı: müdür mü şef mi atanacak */
+  const [managerDesktopOpsMode, setManagerDesktopOpsMode] = useState('manager');
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
@@ -241,6 +243,8 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     }
   };
 
+  const isMakaraHavzanDesktop = !isSuriciBranch && !isSultanBranch;
+
   const runSetStaffManager = async (staff, managerAuthPassword) => {
     try {
       const result = await window.electronAPI.setStaffManager(staff.id, !staff.is_manager, managerAuthPassword);
@@ -258,12 +262,45 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     }
   };
 
+  const runSetStaffChef = async (staff, managerAuthPassword) => {
+    try {
+      if (!window.electronAPI?.setStaffChef) {
+        showToast('Şef ataması bu sürümde yok', 'error');
+        return;
+      }
+      const result = await window.electronAPI.setStaffChef(staff.id, !staff.is_chef, managerAuthPassword);
+      if (result.success) {
+        await loadStaff();
+        setManagerOpsModalStaff(null);
+        setManagerOpsPin('');
+        showToast(staff.is_chef ? 'Şeflik kaldırıldı' : 'Şef olarak atandı', 'success');
+      } else {
+        showToast('Hata: ' + (result.error || 'Bilinmeyen hata'), 'error');
+      }
+    } catch (error) {
+      console.error('Şef atama hatası:', error);
+      showToast('Şef atanamadı: ' + error.message, 'error');
+    }
+  };
+
   const onManagerToggleClick = (staff) => {
+    setManagerDesktopOpsMode('manager');
     if (managerOpsConfigured) {
       setManagerOpsModalStaff(staff);
       setManagerOpsPin('');
     } else {
       runSetStaffManager(staff, undefined);
+    }
+  };
+
+  const onChefToggleClick = (staff) => {
+    if (!isMakaraHavzanDesktop) return;
+    setManagerDesktopOpsMode('chef');
+    if (managerOpsConfigured) {
+      setManagerOpsModalStaff(staff);
+      setManagerOpsPin('');
+    } else {
+      runSetStaffChef(staff, undefined);
     }
   };
 
@@ -395,7 +432,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           >
             {systemTitle}
           </h1>
-          <p className="text-xs text-gray-500 font-medium">v36.0.0</p>
+          <p className="text-xs text-gray-500 font-medium">v37.0.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300">
           <DateTimeDisplay />
@@ -880,6 +917,8 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                         .sort((a, b) => {
                           if (a.is_manager && !b.is_manager) return -1;
                           if (!a.is_manager && b.is_manager) return 1;
+                          if (a.is_chef && !b.is_chef) return -1;
+                          if (!a.is_chef && b.is_chef) return 1;
                           return `${a.name} ${a.surname}`.localeCompare(`${b.name} ${b.surname}`, 'tr');
                         })
                         .map((staff) => (
@@ -922,6 +961,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                                     Müdür
                                   </span>
                                 )}
+                                {!staff.is_manager && staff.is_chef && (
+                                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-600 px-3 py-1 text-[11px] font-extrabold uppercase tracking-widest text-white shadow-md ring-2 ring-amber-200">
+                                    Şef
+                                  </span>
+                                )}
                               </div>
                               <p className="mt-0.5 text-xs font-medium text-slate-500">Kayıt no · {staff.id}</p>
                             </div>
@@ -958,6 +1002,21 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                             >
                               {staff.is_manager ? 'Müdürlük kaldır' : 'Müdür ata'}
                             </button>
+                            {isMakaraHavzanDesktop && (
+                              <button
+                                type="button"
+                                disabled={!!staff.is_manager}
+                                title={staff.is_manager ? 'Müdür aynı anda şef olamaz' : ''}
+                                onClick={() => onChefToggleClick(staff)}
+                                className={`inline-flex min-h-[40px] flex-1 items-center justify-center rounded-xl px-4 text-xs font-bold text-white shadow-md transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45 sm:flex-initial sm:min-w-[140px] sm:text-sm ${
+                                  staff.is_chef
+                                    ? 'bg-gradient-to-r from-orange-600 to-amber-800 shadow-black/10'
+                                    : 'bg-gradient-to-r from-amber-500 to-orange-600 shadow-black/15'
+                                }`}
+                              >
+                                {staff.is_chef ? 'Şefliği kaldır' : 'Şef ata'}
+                              </button>
+                            )}
                           </div>
                         </li>
                       ))}
@@ -1218,9 +1277,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             {managerOpsModalStaff && (
               <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-slate-950/50 px-4 backdrop-blur-sm">
                 <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                  <h4 className="text-base font-semibold text-slate-900">Müdür işlem şifresi</h4>
+                  <h4 className="text-base font-semibold text-slate-900">
+                    {managerDesktopOpsMode === 'chef' ? 'Şef ataması — masaüstü şifresi' : 'Müdür işlem şifresi'}
+                  </h4>
                   <p className="mt-1 text-sm text-slate-600">
-                    {managerOpsModalStaff.name} {managerOpsModalStaff.surname} — masaüstü şifresini girin.
+                    {managerOpsModalStaff.name} {managerOpsModalStaff.surname} — masaüstü müdür işlem şifresini girin.
                   </p>
                   <input
                     type="password"
@@ -1228,7 +1289,13 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                     value={managerOpsPin}
                     onChange={(e) => setManagerOpsPin(e.target.value)}
                     onKeyDown={(e) => {
-                      if (e.key === 'Enter') runSetStaffManager(managerOpsModalStaff, managerOpsPin);
+                      if (e.key === 'Enter') {
+                        if (managerDesktopOpsMode === 'chef') {
+                          runSetStaffChef(managerOpsModalStaff, managerOpsPin);
+                        } else {
+                          runSetStaffManager(managerOpsModalStaff, managerOpsPin);
+                        }
+                      }
                     }}
                     placeholder="Şifre"
                     className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
@@ -1246,7 +1313,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                     </button>
                     <button
                       type="button"
-                      onClick={() => runSetStaffManager(managerOpsModalStaff, managerOpsPin)}
+                      onClick={() =>
+                        managerDesktopOpsMode === 'chef'
+                          ? runSetStaffChef(managerOpsModalStaff, managerOpsPin)
+                          : runSetStaffManager(managerOpsModalStaff, managerOpsPin)
+                      }
                       className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-black"
                     >
                       Onayla

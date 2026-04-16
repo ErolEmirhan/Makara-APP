@@ -28,6 +28,8 @@ let firebaseSetDoc = null;
 let firebaseOnSnapshot = null;
 let firebaseWhere = null;
 let firebaseQuery = null;
+let firebaseOrderBy = null;
+let firebaseLimit = null;
 let storageRef = null;
 let storageUploadBytes = null;
 let storageGetDownloadURL = null;
@@ -252,6 +254,56 @@ function getSalesFirestore() {
   return salesFirestore || firestore;
 }
 
+/** Açık sipariş satırı iptali: Sultan'da tüm personel; Havzan (makara) müdür veya şef; Suriçi'de yalnız müdür */
+function staffHasTableOrderCancelRole(staff) {
+  if (!staff) return false;
+  if (activeBranchKey === 'sultansomati') return true;
+  if (staff.is_manager) return true;
+  if (activeBranchKey === 'makara' && staff.is_chef) return true;
+  return false;
+}
+
+async function fetchFirestoreCancelsLastHours(branchKey, hours) {
+  if (branchKey !== 'makara' || hours <= 0) return [];
+  const fsDb = getSalesFirestore();
+  if (!fsDb || !firebaseCollection || !firebaseGetDocs || !firebaseQuery || !firebaseOrderBy || !firebaseLimit) {
+    return [];
+  }
+  const cut = Date.now() - hours * 3600000;
+  try {
+    const ref = firebaseCollection(fsDb, 'cancels');
+    const q = firebaseQuery(ref, firebaseOrderBy('created_at', 'desc'), firebaseLimit(600));
+    const snap = await firebaseGetDocs(q);
+    const rows = [];
+    snap.forEach((docSnap) => {
+      const d = docSnap.data();
+      let ms = 0;
+      const ca = d.created_at;
+      if (ca && typeof ca.toMillis === 'function') ms = ca.toMillis();
+      else if (ca && typeof ca.seconds === 'number') ms = ca.seconds * 1000;
+      if (!ms) return;
+      if (ms < cut) return;
+      rows.push({
+        id: docSnap.id,
+        product_name: d.product_name || '',
+        quantity: d.quantity,
+        cancel_reason: d.cancel_reason != null ? String(d.cancel_reason) : '',
+        staff_name: d.staff_name || '—',
+        table_name: d.table_name || '',
+        cancel_date: d.cancel_date || '',
+        cancel_time: d.cancel_time || '',
+        is_group: !!d.is_group,
+        items_array: Array.isArray(d.items_array) ? d.items_array : null,
+        source: d.source || ''
+      });
+    });
+    return rows;
+  } catch (e) {
+    console.error('fetchFirestoreCancelsLastHours:', e);
+    return [];
+  }
+}
+
 let mainWindow;
 let dbPath;
 let apiServer = null;
@@ -363,6 +415,8 @@ async function initializeFirebaseForBranch(branchKey) {
     firebaseOnSnapshot = firebaseFirestoreModule.onSnapshot;
     firebaseWhere = firebaseFirestoreModule.where;
     firebaseQuery = firebaseFirestoreModule.query;
+    firebaseOrderBy = firebaseFirestoreModule.orderBy;
+    firebaseLimit = firebaseFirestoreModule.limit;
     storageRef = firebaseStorageModule.ref;
     storageUploadBytes = firebaseStorageModule.uploadBytes;
     storageGetDownloadURL = firebaseStorageModule.getDownloadURL;
@@ -2703,10 +2757,10 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
-  // Sultan Somatı'da tüm personel iptal yetkisine sahip; diğer şubelerde sadece müdür
+  // Sultan: tümü; Havzan: müdür/şef; Suriçi: müdür
   if (staffId && activeBranchKey !== 'sultansomati') {
     const staff = (db.staff || []).find(s => s.id === staffId);
-    if (!staff || !staff.is_manager) {
+    if (!staffHasTableOrderCancelRole(staff)) {
       return { 
         success: false, 
         error: 'İptal yetkisi yok. İptal ettirmek için lütfen müdürle görüşünüz.' 
@@ -2817,6 +2871,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     const cancelStaff = staffId ? (db.staff || []).find(s => s.id === staffId) : null;
     const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
     const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
+    const cancelStaffIsChef = cancelStaff ? (cancelStaff.is_chef || false) : false;
     
     const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
     // Firebase kaydetme işlemini arka planda yap (await kullanmadan)
@@ -2836,6 +2891,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
       staff_id: staffId || null,
       staff_name: cancelStaffName,
       staff_is_manager: cancelStaffIsManager,
+      staff_is_chef: cancelStaffIsChef,
       order_staff_name: orderStaffName, // Siparişi oluşturan garson
       source: 'desktop', // 'desktop' veya 'mobile'
       created_at: firebaseServerTimestamp()
@@ -2894,10 +2950,10 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
-  // Sultan Somatı'da tüm personel iptal yetkisine sahip; diğer şubelerde sadece müdür
+  // Sultan: tümü; Havzan: müdür/şef; Suriçi: müdür
   if (staffId && activeBranchKey !== 'sultansomati') {
     const staff = (db.staff || []).find(s => s.id === staffId);
-    if (!staff || !staff.is_manager) {
+    if (!staffHasTableOrderCancelRole(staff)) {
       return { 
         success: false, 
         error: 'İptal yetkisi yok. İptal ettirmek için lütfen müdürle görüşünüz.' 
@@ -3050,6 +3106,7 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
       const cancelStaff = staffId ? (db.staff || []).find(s => s.id === staffId) : null;
       const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
       const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
+      const cancelStaffIsChef = cancelStaff ? (cancelStaff.is_chef || false) : false;
 
       const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
       
@@ -3069,6 +3126,7 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
           staff_id: staffId || null,
           staff_name: cancelStaffName,
           staff_is_manager: cancelStaffIsManager,
+          staff_is_chef: cancelStaffIsChef,
           order_staff_name: orderStaffName,
           source: 'desktop',
           created_at: firebaseServerTimestamp()
@@ -10656,7 +10714,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         </span>
         <span class="drawer-item__label">Yenile</span>
       </button>
-      <button class="drawer-item" onclick="closeDrawer(); setTimeout(showTransferModal, 280);">
+      <button type="button" class="drawer-item" id="drawerTableTransferBtn" onclick="closeDrawer(); setTimeout(showTransferModal, 280);">
         <span class="drawer-item__icon" style="background:#e0e7ff;">
           <svg fill="none" stroke="#4f46e5" viewBox="0 0 24 24" stroke-width="2">
             <path stroke-linecap="round" stroke-linejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/>
@@ -10704,6 +10762,14 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           </svg>
         </span>
         <span class="drawer-item__label">Satışlar</span>
+      </button>
+      <button type="button" class="drawer-item" id="drawerMakaraCancellationsBtn" style="display:none;" onclick="closeDrawer(); setTimeout(openMakaraRecentCancellationsSheet, 280);">
+        <span class="drawer-item__icon" style="background:#fef2f2;">
+          <svg fill="none" stroke="#dc2626" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">İptaller (24 saat)</span>
       </button>
     </div>
     <div class="drawer-footer">
@@ -11090,7 +11156,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
   </div>
   
   <!-- Sepette ikram işaretle -->
-  <div id="giftMarkModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 2100; align-items: center; justify-content: center; padding: 20px; flex-direction: row;" onclick="if(event.target === this) hideGiftMarkModal()">
+  <div id="giftMarkModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10200; align-items: center; justify-content: center; padding: 20px; flex-direction: row;" onclick="if(event.target === this) hideGiftMarkModal()">
     <div style="background: white; border-radius: 20px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0,0,0,0.35); max-height: 85vh;">
       <div style="background: linear-gradient(135deg, #f59e0b 0%, #ea580c 100%); color: white; padding: 18px 20px;">
         <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -11576,6 +11642,24 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     </div>
   </div>
   
+  <!-- Makara Havzan müdür: son 24 saat iptaller -->
+  <div id="makaraRecentCancellationsSheet" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:2820;align-items:flex-end;justify-content:center;" onclick="if(event.target===this)closeMakaraRecentCancellationsSheet()">
+    <div style="background:#fff;width:100%;max-width:480px;border-radius:22px 22px 0 0;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 -12px 40px rgba(0,0,0,0.22);">
+      <div style="padding:10px 20px 0;flex-shrink:0;">
+        <div style="width:44px;height:5px;background:#e2e8f0;border-radius:3px;margin:0 auto 14px;"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+          <div style="font-size:17px;font-weight:800;color:#0f172a;">İptaller</div>
+          <span style="font-size:12px;font-weight:600;color:#64748b;">Son 24 saat</span>
+        </div>
+        <p style="margin:0 0 12px;font-size:12px;font-weight:600;color:#64748b;line-height:1.45;">İptal edilen ürünler, iptal eden personel ve açıklamalar (Firebase kayıtları).</p>
+      </div>
+      <div id="makaraRecentCancellationsBody" style="flex:1;overflow-y:auto;padding:0 16px 8px;-webkit-overflow-scrolling:touch;font-size:13px;color:#334155;"></div>
+      <div style="padding:12px 20px 24px;flex-shrink:0;">
+        <button type="button" onclick="closeMakaraRecentCancellationsSheet()" style="width:100%;padding:13px;border:none;background:transparent;color:#64748b;font-size:15px;font-weight:600;cursor:pointer;">Kapat</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
   <script>
     const API_URL = '${serverURL}/api';
@@ -11589,6 +11673,64 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     // Sultan Somatı'da tüm personel müdür yetkisine sahiptir
     function hasManagerPermission() {
       return isSultanMobile || !!(currentStaff && currentStaff.is_manager);
+    }
+
+    function canCancelExistingOrderLines() {
+      return hasManagerPermission() || !!(isMakaraHavzanMobile && currentStaff && currentStaff.is_chef);
+    }
+
+    function openMakaraRecentCancellationsSheet() {
+      if (!isMakaraHavzanMobile || !currentStaff || !currentStaff.is_manager) return;
+      var sheet = document.getElementById('makaraRecentCancellationsSheet');
+      var body = document.getElementById('makaraRecentCancellationsBody');
+      if (!sheet || !body) return;
+      body.innerHTML = '<div style="padding:20px;text-align:center;color:#64748b;font-weight:600;">Yükleniyor…</div>';
+      sheet.style.display = 'flex';
+      fetch(API_URL + '/staff/recent-cancellations?staffId=' + encodeURIComponent(currentStaff.id))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (!data.success) {
+            body.innerHTML = '<div style="padding:16px;color:#b91c1c;font-weight:600;">' + (data.error || 'Liste alınamadı') + '</div>';
+            return;
+          }
+          var items = data.items || [];
+          if (!items.length) {
+            body.innerHTML = '<div style="padding:24px;text-align:center;color:#64748b;">Bu sürede iptal kaydı yok.</div>';
+            return;
+          }
+          body.innerHTML = items.map(function(row) {
+            var esc = function(s) {
+              return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+            };
+            var lines = '';
+            if (row.is_group && row.items_array && row.items_array.length) {
+              lines = '<div style="margin-top:8px;font-size:12px;color:#475569;line-height:1.5;">' +
+                row.items_array.map(function(it) {
+                  return esc((it.product_name || '') + ' ×' + (it.quantity != null ? it.quantity : ''));
+                }).join('<br/>') + '</div>';
+            } else {
+              lines = '<div style="margin-top:6px;font-weight:700;color:#0f172a;">' + esc(row.product_name) + (row.quantity != null ? ' ×' + row.quantity : '') + '</div>';
+            }
+            return '<div style="border:1.5px solid #e2e8f0;border-radius:14px;padding:12px 14px;margin-bottom:10px;background:#f8fafc;">' +
+              '<div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;">' +
+                '<span style="font-weight:800;color:#7c3aed;">' + esc(row.table_name || 'Masa') + '</span>' +
+                '<span style="font-size:12px;color:#64748b;">' + esc(row.cancel_date || '') + ' ' + esc(row.cancel_time || '') + '</span>' +
+              '</div>' +
+              lines +
+              '<div style="margin-top:8px;font-size:12px;"><span style="color:#64748b;">Personel:</span> <strong style="color:#0f172a;">' + esc(row.staff_name || '—') + '</strong></div>' +
+              '<div style="margin-top:6px;font-size:12px;"><span style="color:#64748b;">Sebep:</span> <span style="color:#92400e;font-weight:600;">' + esc(row.cancel_reason || '—') + '</span></div>' +
+              (row.source ? '<div style="margin-top:4px;font-size:11px;color:#94a3b8;">Kaynak: ' + esc(row.source) + '</div>' : '') +
+            '</div>';
+          }).join('');
+        })
+        .catch(function() {
+          body.innerHTML = '<div style="padding:16px;color:#b91c1c;font-weight:600;">Bağlantı hatası</div>';
+        });
+    }
+
+    function closeMakaraRecentCancellationsSheet() {
+      var sheet = document.getElementById('makaraRecentCancellationsSheet');
+      if (sheet) sheet.style.display = 'none';
     }
 
     function setSultanLoginChromeActive(on) {
@@ -11617,6 +11759,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       if (mgrOpsBtn) mgrOpsBtn.style.display = hasManagerPermission() ? 'flex' : 'none';
       var allOrdBtn = document.getElementById('drawerAllOrdersBtn');
       if (allOrdBtn) allOrdBtn.style.display = isSultanMobile ? '' : 'none';
+      var makCanBtn = document.getElementById('drawerMakaraCancellationsBtn');
+      if (makCanBtn) makCanBtn.style.display = (isMakaraHavzanMobile && currentStaff && currentStaff.is_manager) ? '' : 'none';
     }
 
     function closeDrawer() {
@@ -11638,13 +11782,19 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         const roleEl = document.getElementById('drawerStaffRole');
         if (avatarEl) avatarEl.textContent = i1 + i2;
         if (nameEl) nameEl.textContent = fullName || 'Personel';
-        if (roleEl) roleEl.textContent = (isSultanMobile || staff.is_manager) ? 'Müdür' : 'Personel';
+        if (roleEl) {
+          if (isSultanMobile || staff.is_manager) roleEl.textContent = 'Müdür';
+          else if (isMakaraHavzanMobile && staff.is_chef) roleEl.textContent = 'Şef';
+          else roleEl.textContent = 'Personel';
+        }
         const mergeBtn = document.getElementById('drawerMergeBtn');
         if (mergeBtn) mergeBtn.style.display = !isSultanMobile && staff.is_manager ? 'flex' : 'none';
         const mgrOpsBtn = document.getElementById('drawerManagerOpsBtn');
         if (mgrOpsBtn) mgrOpsBtn.style.display = (isSultanMobile || staff.is_manager) ? 'flex' : 'none';
         const allOrdersBtn = document.getElementById('drawerAllOrdersBtn');
         if (allOrdersBtn) allOrdersBtn.style.display = isSultanMobile ? 'flex' : 'none';
+        var makCanBtn = document.getElementById('drawerMakaraCancellationsBtn');
+        if (makCanBtn) makCanBtn.style.display = (isMakaraHavzanMobile && staff.is_manager) ? '' : 'none';
       }
     }
 
@@ -12505,7 +12655,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
                 '<span class="order-item-qty">×' + item.quantity + '</span>' +
                 '<span class="order-item-price">' + itemTotal + ' ₺</span>' +
               '</div>' +
-              (hasManagerPermission()
+              (canCancelExistingOrderLines()
                 ? '<button id="cancelBtn_' + item.id + '" onclick="showCancelItemModal(' + item.id + ', ' + item.quantity + ', \\'' + item.product_name.replace(/'/g, "\\'") + '\\')" style="padding: 6px 12px; background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(239, 68, 68, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px;" onmouseover="if(!this.disabled) { this.style.transform=\\'scale(1.05)\\'; this.style.boxShadow=\\'0 4px 12px rgba(239, 68, 68, 0.4)\\'; }" onmouseout="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; this.style.boxShadow=\\'0 2px 8px rgba(239, 68, 68, 0.3)\\'; }" ontouchstart="if(!this.disabled) { this.style.transform=\\'scale(0.95)\\'; }" ontouchend="if(!this.disabled) { this.style.transform=\\'scale(1)\\'; }" class="cancel-item-btn"><span id="cancelBtnText_' + item.id + '">İptal</span><svg id="cancelBtnSpinner_' + item.id + '" style="display: none; width: 14px; height: 14px; animation: spin 1s linear infinite;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>'
                 : '<button onclick="showManagerRequiredMessage()" style="padding: 6px 12px; background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%); color: white; border: none; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 2px 8px rgba(107, 114, 128, 0.3); transition: all 0.3s; white-space: nowrap; display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 70px; opacity: 0.7;" onmouseover="this.style.opacity=\\'0.9\\';" onmouseout="this.style.opacity=\\'0.7\\';"><span>İptal</span></button>') +
             '</div>' +
@@ -16437,7 +16587,8 @@ function startAPIServer() {
       id: s.id,
       name: s.name,
       surname: s.surname,
-      is_manager: s.is_manager || false
+      is_manager: s.is_manager || false,
+      is_chef: s.is_chef || false
     })));
   });
 
@@ -16451,7 +16602,8 @@ function startAPIServer() {
           id: staff.id,
           name: staff.name,
           surname: staff.surname,
-          is_manager: staff.is_manager || false
+          is_manager: staff.is_manager || false,
+          is_chef: staff.is_chef || false
         }
       });
     } else {
@@ -16526,6 +16678,28 @@ function startAPIServer() {
     db.settings.managerOperationsPassword = np;
     saveDatabase();
     res.json({ success: true, message: 'Masaüstü müdür işlem şifresi kaydedildi' });
+  });
+
+  /** Makara Havzan mobil müdür: son 24 saat iptal kayıtları (Firebase cancels) */
+  appExpress.get('/api/staff/recent-cancellations', async (req, res) => {
+    try {
+      const staffIdRaw = req.query.staffId;
+      if (!staffIdRaw) {
+        return res.status(400).json({ success: false, error: 'staffId gerekli' });
+      }
+      if (activeBranchKey !== 'makara') {
+        return res.status(403).json({ success: false, error: 'Bu liste yalnızca Makara Havzan mobil müdürü içindir' });
+      }
+      const staff = (db.staff || []).find((s) => String(s.id) === String(staffIdRaw));
+      if (!staff || !staff.is_manager) {
+        return res.status(403).json({ success: false, error: 'Yetkisiz' });
+      }
+      const items = await fetchFirestoreCancelsLastHours('makara', 24);
+      res.json({ success: true, items });
+    } catch (e) {
+      console.error('recent-cancellations:', e);
+      res.status(500).json({ success: false, error: 'Liste alınamadı' });
+    }
   });
 
   appExpress.get('/api/tables', (req, res) => {
@@ -17016,13 +17190,13 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Ürün ID\'si gerekli' });
       }
 
-      // Sultan Somatı'da tüm personel yetkili; diğer şubelerde sadece müdür
+      // Sultan: tümü; Havzan: müdür/şef; Suriçi: müdür
       if (!staffId) {
         return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
       }
       if (activeBranchKey !== 'sultansomati') {
         const staff = (db.staff || []).find(s => s.id === staffId);
-        if (!staff || !staff.is_manager) {
+        if (!staffHasTableOrderCancelRole(staff)) {
           return res.status(403).json({ 
             success: false, 
             error: 'İptal yetkisi yok. İptal ettirmek için lütfen müdürle görüşünüz.' 
@@ -17163,6 +17337,7 @@ function startAPIServer() {
         const cancelStaff = staffId ? (db.staff || []).find(s => s.id === staffId) : null;
         const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
         const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
+        const cancelStaffIsChef = cancelStaff ? (cancelStaff.is_chef || false) : false;
         
         const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
         // Firebase kaydetme işlemini arka planda yap (await kullanmadan)
@@ -17182,6 +17357,7 @@ function startAPIServer() {
           staff_id: staffId || null,
           staff_name: cancelStaffName,
           staff_is_manager: cancelStaffIsManager,
+          staff_is_chef: cancelStaffIsChef,
           order_staff_name: orderStaffName, // Siparişi oluşturan garson
           source: 'mobile', // 'desktop' veya 'mobile'
           created_at: firebaseServerTimestamp()
@@ -18474,7 +18650,8 @@ ipcMain.handle('create-staff', (event, staffData) => {
     name: name.trim(),
     surname: surname.trim(),
     password: password.toString(),
-    is_manager: false // Varsayılan olarak müdür değil
+    is_manager: false, // Varsayılan olarak müdür değil
+    is_chef: false
   };
   db.staff.push(newStaff);
   saveDatabase();
@@ -18565,7 +18742,8 @@ ipcMain.handle('get-staff', () => {
     id: s.id,
     name: s.name,
     surname: s.surname,
-    is_manager: s.is_manager || false
+    is_manager: s.is_manager || false,
+    is_chef: s.is_chef || false
   }));
 });
 
@@ -18587,11 +18765,35 @@ ipcMain.handle('set-staff-manager', (event, staffId, isManager, managerAuthPassw
         s.is_manager = false;
       }
     });
+    staff.is_chef = false;
   }
   
   staff.is_manager = isManager;
   saveDatabase();
   return { success: true, staff: staff };
+});
+
+/** Makara Havzan: garson ile aynı işlemler + mevcut sipariş satırı iptali (masaüstü müdür şifresi ile) */
+ipcMain.handle('set-staff-chef', (event, staffId, isChef, managerAuthPassword) => {
+  if (activeBranchKey !== 'makara') {
+    return { success: false, error: 'Şef ataması yalnızca Makara Havzan şubesinde kullanılır' };
+  }
+  if (!db.staff) db.staff = [];
+  if (isManagerOperationsPasswordConfigured() && !verifyManagerOperationsPassword(managerAuthPassword)) {
+    return { success: false, error: 'Masaüstü müdür işlem şifresi hatalı veya girilmedi' };
+  }
+  const staff = db.staff.find((s) => s.id === staffId);
+  if (!staff) {
+    return { success: false, error: 'Personel bulunamadı' };
+  }
+  if (isChef) {
+    staff.is_chef = true;
+    staff.is_manager = false;
+  } else {
+    staff.is_chef = false;
+  }
+  saveDatabase();
+  return { success: true, staff };
 });
 
 ipcMain.handle('get-manager-ops-password-configured', () => ({
@@ -18602,7 +18804,16 @@ ipcMain.handle('verify-staff-pin', (event, password) => {
   if (!db.staff) db.staff = [];
   const staff = db.staff.find(s => s.password === password.toString());
   if (staff) {
-    return { success: true, staff: { id: staff.id, name: staff.name, surname: staff.surname } };
+    return {
+      success: true,
+      staff: {
+        id: staff.id,
+        name: staff.name,
+        surname: staff.surname,
+        is_manager: staff.is_manager || false,
+        is_chef: staff.is_chef || false
+      }
+    };
   }
   return { success: false, error: 'Şifre hatalı' };
 });

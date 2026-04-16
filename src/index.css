@@ -303,3 +303,21 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Mobil personel — minimal splash (tek sembol) */
+@keyframes mobile-splash-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+}
+
+.mobile-splash-symbol {
+  animation: mobile-splash-breathe 0.85s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+

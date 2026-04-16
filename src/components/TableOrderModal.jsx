@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Toast from './Toast';
 import {
   MAKARA_HAVZAN_MAIN_TABLE_COUNT,
@@ -33,7 +33,6 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
   const [processingSplitPayment, setProcessingSplitPayment] = useState(false);
   const [showAmountPaymentModal, setShowAmountPaymentModal] = useState(false);
   const [amountPaymentValue, setAmountPaymentValue] = useState('');
-  const initialOrderTotalRef = useRef(null);
   const [showGiftSelectModal, setShowGiftSelectModal] = useState(false);
   /** @type {Record<string, number>} grup anahtarı → ikram adedi (0 = atla) */
   const [giftQtyByGroupKey, setGiftQtyByGroupKey] = useState({});
@@ -105,6 +104,12 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
     if (v < 0) v = 0;
     if (v > maxQty) v = maxQty;
     setGiftQtyByGroupKey((prev) => ({ ...prev, [key]: v }));
+  };
+
+  const adjustGiftQty = (key, maxQty, delta) => {
+    const cur = Math.max(0, Math.min(maxQty, Number(giftQtyByGroupKey[key]) || 0));
+    const next = Math.max(0, Math.min(maxQty, cur + delta));
+    setGiftQtyByGroupKey((prev) => ({ ...prev, [key]: next }));
   };
 
   const hasAnyGiftQty = useMemo(
@@ -191,14 +196,6 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
     return () => clearInterval(interval);
   }, [order.order_date, order.order_time]);
 
-  // Başlangıç toplam tutarını tek seferlik sakla (Parçalı Ödeme 1/2, 1/3... hep buna göre)
-  useEffect(() => {
-    if (order && items?.length && initialOrderTotalRef.current === null) {
-      const sumItems = items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0);
-      initialOrderTotalRef.current = roundMoney(sumItems);
-    }
-  }, [order, items]);
-
   // Başlangıç toplam tutarı (ikram edilen ürünler hariç) - groupedItems kullan
   const originalTotalAmount = groupedItems.reduce((sum, item) => {
     if (item.isGift) return sum;
@@ -220,9 +217,9 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
     ? roundMoney(remainingFromBackend)
     : roundMoney(remainingAmount);
   
-  // Parçalı ödeme ile ödenen tutar (tutar bazlı parçalı ödeme varsa)
-  const initialTotal = initialOrderTotalRef.current ?? roundMoney(originalTotalAmount);
-  const partialPaymentPaid = roundMoney(initialTotal - splitPaymentRemainingAmount);
+  // Parçalı ödeme ile ödenen tutar (tutar bazlı parçalı ödeme varsa) — güncel sepet toplamına göre (yeni ürün sonrası da doğru)
+  const basisOrderTotal = roundMoney(originalTotalAmount);
+  const partialPaymentPaid = roundMoney(basisOrderTotal - splitPaymentRemainingAmount);
   const hasPartialPayment = partialPaymentPaid > 0.01; // Parçalı ödeme yapılmış mı?
 
   // Tutarlı ödeme: Kullanıcının girdiği tutar ile ödeme
@@ -310,16 +307,16 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
     }
   };
 
-  // Parçalı ödeme: 1/2, 1/3, ... 1/10 (DAİMA KALAN TUTARA GÖRE, küsüratsız tam lira)
+  // Parçalı ödeme: 1/2, 1/3, ... 1/10 — güncel sipariş toplamının 1/x'i, kalandan fazla olamaz (UI ile aynı)
   const handleSplitFractionPayment = async (denominator) => {
     const remaining = splitPaymentRemainingAmount;
     if (remaining <= 0) {
       showToast('Kalan tutar yok', 'info');
       return;
     }
-    // Tam lira: küsürat yok (1/3 = 33 TL, son taksitte küçük fark olabilir)
-    const targetAmount = Math.floor(remaining / denominator);
-    const payAmount = targetAmount;
+    const basisTotal = roundMoney(originalTotalAmount);
+    const fractionAmount = Math.floor(basisTotal / denominator);
+    const payAmount = Math.min(fractionAmount, Math.floor(remaining));
     if (payAmount <= 0) {
       showToast('Kalan tutar bu bölme için uygun değil', 'info');
       return;
@@ -865,25 +862,13 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
               </span>
             </div>
             
-            {/* Parçalı Ödeme Detayları */}
+            {/* Tutar bazlı kısmi ödeme sonrası kalan (parçalı ödeme etiketi gösterilmez) */}
             {(hasPartialPayment || partialPaymentPaid > 0.01) && (
-              <div className="bg-gradient-to-br from-violet-50 to-pink-50 theme-sultan:to-emerald-50 rounded-lg p-4 border border-violet-200 space-y-2">
-                <div className="flex items-center gap-2 mb-2">
-                  <svg className="w-5 h-5 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                  </svg>
-                  <span className="text-sm font-bold text-violet-700 uppercase tracking-wide">Parçalı Ödeme Bilgileri</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-semibold text-gray-700">Parçalı ödeme ile ödenen:</span>
-                  <span className="text-lg font-bold text-violet-700">₺{partialPaymentPaid.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-semibold text-gray-700">Kalan tutar:</span>
-                  <span className={`text-lg font-bold ${splitPaymentRemainingAmount > 0.01 ? 'text-orange-600' : 'text-fuchsia-600 theme-sultan:text-green-600'}`}>
-                    ₺{splitPaymentRemainingAmount.toFixed(2)}
-                  </span>
-                </div>
+              <div className="flex justify-between items-center bg-gray-50 rounded-lg p-4 border border-gray-200">
+                <span className="text-sm font-semibold text-gray-700">Kalan tutar</span>
+                <span className={`text-lg font-bold ${splitPaymentRemainingAmount > 0.01 ? 'text-orange-600' : 'text-fuchsia-600 theme-sultan:text-green-600'}`}>
+                  ₺{splitPaymentRemainingAmount.toFixed(2)}
+                </span>
               </div>
             )}
             
@@ -1707,8 +1692,7 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
             <div className="p-6">
               <div className="grid grid-cols-3 gap-3">
                 {[2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => {
-                  const initialTotal = initialOrderTotalRef.current ?? roundMoney(originalTotalAmount);
-                  const fractionAmount = Math.floor(initialTotal / n);
+                  const fractionAmount = Math.floor(basisOrderTotal / n);
                   const payAmount = Math.min(fractionAmount, Math.floor(splitPaymentRemainingAmount));
                   const isDisabled = payAmount <= 0;
                   return (
@@ -1735,79 +1719,96 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
 
       {showGiftSelectModal && (
         <div
-          className="fixed inset-0 z-[2100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
+          className="fixed inset-0 z-[2100] flex items-center justify-center p-3 sm:p-4 bg-black/50 backdrop-blur-sm animate-fade-in"
           onClick={() => !applyingGift && setShowGiftSelectModal(false)}
         >
           <div
-            className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-hidden border border-amber-100 theme-sultan:border-emerald-100"
+            className="bg-white rounded-xl shadow-2xl w-full max-w-5xl max-h-[min(94vh,920px)] flex flex-col overflow-hidden border border-gray-200 theme-sultan:border-emerald-100"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-6 py-5 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 theme-sultan:from-emerald-600 theme-sultan:to-teal-600 text-white">
-              <h3 className="text-xl font-bold">İkram seçimi</h3>
-              <p className="text-sm text-white/90 mt-1 leading-relaxed">
-                Her ürün için ikram adedini girin; tümünü ikramlamak zorunda değilsiniz. 0 bıraktığınız
-                satırlar değişmez. Kısmi ödenmiş veya zaten ikram olan ürünler burada görünmez.
-              </p>
+            <div className="px-4 py-3 sm:px-5 sm:py-3.5 border-b border-gray-100 flex flex-wrap items-center justify-between gap-2 shrink-0 bg-gray-50/80">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">İkram</h3>
+                <p className="text-xs text-gray-500 mt-0.5">+ / − ile adet; 0 bırakılan satır değişmez.</p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={applyingGift}
+                  onClick={() => setShowGiftSelectModal(false)}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Kapat
+                </button>
+                <button
+                  type="button"
+                  disabled={applyingGift || !hasAnyGiftQty}
+                  onClick={handleConfirmGiftSelection}
+                  className="px-5 py-2 rounded-lg text-sm font-bold text-white bg-amber-600 theme-sultan:bg-emerald-600 hover:opacity-95 disabled:opacity-50"
+                >
+                  {applyingGift ? '…' : 'Uygula'}
+                </button>
+              </div>
             </div>
-            <div className="p-5 max-h-[min(50vh,360px)] overflow-y-auto space-y-2">
-              {giftEligibleGroups.map((g) => {
-                const k = groupRowKey(g);
-                const maxQ = Number(g.quantity) || 0;
-                const lineTotal = Number(g.price) * maxQ;
-                const val = Math.min(
-                  Math.max(0, Number(giftQtyByGroupKey[k]) || 0),
-                  maxQ
-                );
-                const active = val > 0;
-                return (
-                  <div
-                    key={k}
-                    className={`p-3.5 rounded-xl border-2 transition-all ${
-                      active
-                        ? 'border-amber-400 bg-amber-50/90 theme-sultan:border-emerald-400 theme-sultan:bg-emerald-50/90 shadow-sm'
-                        : 'border-gray-200 bg-gray-50/50'
-                    }`}
-                  >
-                    <p className="font-semibold text-gray-900 truncate">{g.product_name}</p>
-                    <p className="text-xs text-gray-600 mt-0.5">
-                      Sepette {maxQ} adet · toplam <span className="font-bold">₺{lineTotal.toFixed(2)}</span>
-                    </p>
-                    <div className="flex flex-wrap items-center gap-2 mt-3">
-                      <label className="text-xs font-semibold text-gray-700 whitespace-nowrap">İkram adedi</label>
-                      <input
-                        type="number"
-                        min={0}
-                        max={maxQ}
-                        inputMode="numeric"
-                        value={giftQtyByGroupKey[k] ?? ''}
-                        placeholder="0"
-                        disabled={applyingGift}
-                        onChange={(e) => setGiftQtyForGroup(k, maxQ, e.target.value)}
-                        className="w-20 px-2 py-2 rounded-lg border-2 border-gray-200 text-center text-base font-bold text-gray-900 focus:border-amber-500 theme-sultan:focus:border-emerald-500 focus:ring-0 disabled:opacity-50"
-                      />
-                      <span className="text-xs text-gray-500">/ en fazla {maxQ}</span>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-            <div className="px-5 pb-5 pt-0 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-              <button
-                type="button"
-                disabled={applyingGift}
-                onClick={() => setShowGiftSelectModal(false)}
-                className="px-5 py-3 rounded-xl font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 transition-colors"
-              >
-                Vazgeç
-              </button>
-              <button
-                type="button"
-                disabled={applyingGift || !hasAnyGiftQty}
-                onClick={handleConfirmGiftSelection}
-                className="px-6 py-3 rounded-xl font-bold text-white bg-gradient-to-r from-amber-600 to-orange-600 theme-sultan:from-emerald-600 theme-sultan:to-teal-600 hover:opacity-95 disabled:opacity-50 shadow-lg transition-all"
-              >
-                {applyingGift ? 'Uygulanıyor…' : 'İkramı uygula'}
-              </button>
+
+            <div className="min-h-0 flex-1 overflow-auto">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 z-[1] bg-white shadow-[0_1px_0_0_rgb(229_231_235)]">
+                  <tr className="text-left text-gray-500 text-xs font-semibold uppercase tracking-wide">
+                    <th className="px-3 py-2 sm:px-4">Ürün</th>
+                    <th className="px-2 py-2 w-14 sm:w-16 text-center">Sepet</th>
+                    <th className="px-3 py-2 w-[9.5rem] sm:w-40 text-right">İkram</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {giftEligibleGroups.map((g) => {
+                    const k = groupRowKey(g);
+                    const maxQ = Number(g.quantity) || 0;
+                    const val = Math.min(
+                      Math.max(0, Number(giftQtyByGroupKey[k]) || 0),
+                      maxQ
+                    );
+                    return (
+                      <tr
+                        key={k}
+                        className={val > 0 ? 'bg-amber-50/60 theme-sultan:bg-emerald-50/50' : 'bg-white'}
+                      >
+                        <td className="px-3 py-2 sm:px-4 align-middle">
+                          <span className="font-medium text-gray-900 line-clamp-2">{g.product_name}</span>
+                        </td>
+                        <td className="px-2 py-2 text-center tabular-nums text-gray-600 align-middle">
+                          {maxQ}
+                        </td>
+                        <td className="px-3 py-1.5 align-middle">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              disabled={applyingGift || val <= 0}
+                              onClick={() => adjustGiftQty(k, maxQ, -1)}
+                              className="w-9 h-9 rounded-lg border border-gray-200 bg-white text-lg font-bold text-gray-700 leading-none hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                              aria-label="Azalt"
+                            >
+                              −
+                            </button>
+                            <span className="min-w-[2rem] text-center font-bold tabular-nums text-gray-900">
+                              {val}
+                            </span>
+                            <button
+                              type="button"
+                              disabled={applyingGift || val >= maxQ}
+                              onClick={() => adjustGiftQty(k, maxQ, 1)}
+                              className="w-9 h-9 rounded-lg border border-gray-200 bg-white text-lg font-bold text-gray-700 leading-none hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed"
+                              aria-label="Artır"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>

@@ -103,7 +103,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteStaff: (staffId) => ipcRenderer.invoke('delete-staff', staffId),
   getStaff: () => ipcRenderer.invoke('get-staff'),
   verifyStaffPin: (password) => ipcRenderer.invoke('verify-staff-pin', password),
-  setStaffManager: (staffId, isManager) => ipcRenderer.invoke('set-staff-manager', staffId, isManager),
+  setStaffManager: (staffId, isManager, managerAuthPassword) =>
+    ipcRenderer.invoke('set-staff-manager', staffId, isManager, managerAuthPassword),
+  getManagerOpsPasswordConfigured: () => ipcRenderer.invoke('get-manager-ops-password-configured'),
   // Image optimization API
   optimizeAllProductImages: () => ipcRenderer.invoke('optimize-all-product-images'),
   // Real-time updates

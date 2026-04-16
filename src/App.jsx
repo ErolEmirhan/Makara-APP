@@ -213,6 +213,7 @@ function App() {
           } catch (_) {}
           setIsBranchReady(true);
           setCurrentView(key === 'makarasur' || key === 'sultansomati' ? 'tables' : 'pos');
+          if (key === 'makara') setUserType('Admin');
         }
       } catch (e) {
         console.error('Otomatik şube bağlantısı:', e);
@@ -1149,6 +1150,7 @@ function App() {
       setSelectedBranchKey(normalized);
       setIsBranchReady(true);
       setCurrentView(normalized === 'makarasur' || normalized === 'sultansomati' ? 'tables' : 'pos');
+      if (normalized === 'makara') setUserType('Admin');
       try {
         localStorage.setItem(BRANCH_ONBOARDING_KEY, '1');
         localStorage.setItem(LAST_BRANCH_SPLASH_KEY, normalized);
@@ -1187,6 +1189,7 @@ function App() {
       setSelectedBranchKey(normalized);
       setSplashBranchKey(normalized);
       setCurrentView(normalized === 'makarasur' || normalized === 'sultansomati' ? 'tables' : 'pos');
+      if (normalized === 'makara') setUserType('Admin');
       setSelectedTable(null);
       setCart([]);
       setOrderNote('');

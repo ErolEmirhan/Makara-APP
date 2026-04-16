@@ -571,7 +571,9 @@ let db = {
   tableOrderItems: [],
   settings: {
     adminPin: '1234',
-    cashierPrinter: null // { printerName, printerType } - Kasa yazıcısı ayarı
+    cashierPrinter: null, // { printerName, printerType } - Kasa yazıcısı ayarı
+    /** Masaüstünde müdür seç / müdürlük kaldır için zorunlu (mobil müdür tarafından belirlenir) */
+    managerOperationsPassword: null
   },
   printerAssignments: [], // { printerName, printerType, category_id }
   yanUrunler: [], // Local kayıtlı yan ürünler (Firebase'e gitmez) - { id, name, price }
@@ -595,6 +597,10 @@ function initDatabase() {
       // cashierPrinter yoksa ekle
       if (db.settings && db.settings.cashierPrinter === undefined) {
         db.settings.cashierPrinter = null;
+        saveDatabase();
+      }
+      if (db.settings && db.settings.managerOperationsPassword === undefined) {
+        db.settings.managerOperationsPassword = null;
         saveDatabase();
       }
       
@@ -9786,6 +9792,37 @@ function generateMobileHTML(serverURL, mobileBranchKey = 'makara') {
     body.sultan-mobile #sultanSearchLaunchRow {
       display: block !important;
     }
+    /* Makara Havzan: Sultan ile aynı ürün arama akışı (buton + tam ekran) */
+    body.makara-mobile #sultanInlineSearchRow {
+      display: none !important;
+    }
+    body.makara-mobile #sultanSearchLaunchRow {
+      display: block !important;
+    }
+    body.makara-mobile .sultan-search-launch-btn {
+      background: linear-gradient(135deg, #18181b 0%, #27272a 100%);
+      color: #fafafa;
+      box-shadow: 0 6px 20px rgba(24, 24, 27, 0.35);
+    }
+    body.makara-mobile .sultan-immersive-overlay__header {
+      background: linear-gradient(180deg, #f4f4f5 0%, #ffffff 100%);
+    }
+    body.makara-mobile #sultanImmersiveSearchInput {
+      border-color: #e4e4e7;
+    }
+    body.makara-mobile #sultanImmersiveSearchInput:focus {
+      border-color: #18181b;
+      box-shadow: 0 0 0 4px rgba(24, 24, 27, 0.15);
+    }
+    body.makara-mobile.sultan-immersive-search-open .cart {
+      z-index: 10060 !important;
+    }
+    body.makara-mobile.sultan-immersive-search-open .sultan-immersive-overlay__body {
+      padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px));
+    }
+    body.makara-mobile #productsGridScrollWrap.sultan-grid-placeholder {
+      min-height: 120px;
+    }
     .sultan-search-launch-btn {
       width: 100%;
       display: flex;
@@ -10601,6 +10638,14 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         </span>
         <span class="drawer-item__label">Şifre Değiştir</span>
       </button>
+      <button class="drawer-item" id="drawerManagerOpsBtn" style="display:none;" onclick="closeDrawer(); setTimeout(showManagerOpsPasswordModal, 280);">
+        <span class="drawer-item__icon" style="background:#fef3c7;">
+          <svg fill="none" stroke="#b45309" viewBox="0 0 24 24" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
+          </svg>
+        </span>
+        <span class="drawer-item__label">Masaüstü müdür şifresi</span>
+      </button>
       <div class="drawer-divider"></div>
       <div class="drawer-section-label">İşlemler</div>
       <button class="drawer-item" onclick="closeDrawer(); setTimeout(refreshAllData, 280);">
@@ -10742,6 +10787,34 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           <button onclick="closeChangePasswordModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #666; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.2s;">
             İptal
           </button>
+        </div>
+      </div>
+    </div>
+
+    <div id="managerOpsPasswordModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 10001; align-items: center; justify-content: center; padding: 20px;">
+      <div style="background: white; border-radius: 16px; padding: 30px; max-width: 400px; width: 100%; box-shadow: 0 20px 60px rgba(0,0,0,0.3);">
+        <h3 style="margin: 0 0 12px; font-size: 20px; font-weight: bold; color: #333;">Masaüstü müdür işlem şifresi</h3>
+        <p style="margin: 0 0 16px; font-size: 13px; color: #64748b; line-height: 1.45;">Bu şifre, bilgisayardaki personel listesinde müdür atama ve kaldırma için kullanılır.</p>
+        <div id="managerOpsCurrentRow" style="margin-bottom: 15px; display: none;">
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #555;">Mevcut masaüstü şifresi</label>
+          <input type="password" id="managerOpsCurrentPassword" placeholder="Kayıtlı şifre" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; box-sizing: border-box;">
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #555;">Personel giriş şifreniz</label>
+          <input type="password" id="managerOpsStaffPassword" placeholder="Doğrulama için" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; box-sizing: border-box;">
+        </div>
+        <div style="margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #555;">Yeni masaüstü şifresi</label>
+          <input type="password" id="managerOpsNewPassword" placeholder="En az 4 karakter" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; box-sizing: border-box;">
+        </div>
+        <div style="margin-bottom: 20px;">
+          <label style="display: block; margin-bottom: 6px; font-size: 14px; font-weight: 600; color: #555;">Yeni şifre (tekrar)</label>
+          <input type="password" id="managerOpsNewPassword2" placeholder="Tekrar" style="width: 100%; padding: 12px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 15px; box-sizing: border-box;" onkeypress="if(event.key === 'Enter') submitManagerOpsPassword()">
+        </div>
+        <p id="managerOpsPasswordError" style="color: #ef4444; font-size: 13px; margin: 0 0 15px; display: none;"></p>
+        <div style="display: flex; gap: 10px;">
+          <button type="button" onclick="submitManagerOpsPassword()" style="flex: 1; padding: 12px; background: linear-gradient(135deg, #d97706, #f59e0b); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;">Kaydet</button>
+          <button type="button" onclick="closeManagerOpsPasswordModal()" style="flex: 1; padding: 12px; background: #f3f4f6; color: #666; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer;">İptal</button>
         </div>
       </div>
     </div>
@@ -11510,6 +11583,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     const MOBILE_BRANCH_KEY = ${JSON.stringify(mobileBranchKey)};
     const isSultanMobile = MOBILE_BRANCH_KEY === 'sultansomati';
     const isMakaraHavzanMobile = MOBILE_BRANCH_KEY === 'makara';
+    const useImmersiveProductSearch = isSultanMobile || isMakaraHavzanMobile;
     let sultanAllOrdersHighlightTableId = null;
 
     // Sultan Somatı'da tüm personel müdür yetkisine sahiptir
@@ -11539,6 +11613,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       if (salesHistBtn) salesHistBtn.style.display = isSultanMobile ? '' : 'none';
       var mergeBtn = document.getElementById('drawerMergeBtn');
       if (mergeBtn) mergeBtn.style.display = !isSultanMobile && currentStaff && currentStaff.is_manager ? '' : 'none';
+      var mgrOpsBtn = document.getElementById('drawerManagerOpsBtn');
+      if (mgrOpsBtn) mgrOpsBtn.style.display = hasManagerPermission() ? 'flex' : 'none';
       var allOrdBtn = document.getElementById('drawerAllOrdersBtn');
       if (allOrdBtn) allOrdBtn.style.display = isSultanMobile ? '' : 'none';
     }
@@ -11565,6 +11641,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         if (roleEl) roleEl.textContent = (isSultanMobile || staff.is_manager) ? 'Müdür' : 'Personel';
         const mergeBtn = document.getElementById('drawerMergeBtn');
         if (mergeBtn) mergeBtn.style.display = !isSultanMobile && staff.is_manager ? 'flex' : 'none';
+        const mgrOpsBtn = document.getElementById('drawerManagerOpsBtn');
+        if (mgrOpsBtn) mgrOpsBtn.style.display = (isSultanMobile || staff.is_manager) ? 'flex' : 'none';
         const allOrdersBtn = document.getElementById('drawerAllOrdersBtn');
         if (allOrdersBtn) allOrdersBtn.style.display = isSultanMobile ? 'flex' : 'none';
       }
@@ -11637,10 +11715,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       if (isSultanMobile) {
         document.documentElement.classList.add('sultan-mobile-root');
         document.body.classList.add('sultan-mobile');
-        initSultanImmersiveSearchUI();
       } else if (isMakaraHavzanMobile) {
         document.documentElement.classList.add('makara-mobile-root');
         document.body.classList.add('makara-mobile');
+      }
+      if (useImmersiveProductSearch) {
+        initSultanImmersiveSearchUI();
       }
       // Cart'ı başlat
       initializeCart();
@@ -12324,7 +12404,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
     
     async function selectTable(id, name, type) {
-      if (isSultanMobile) {
+      if (useImmersiveProductSearch) {
         forceCloseSultanImmersiveSearchNoAnim();
       }
       selectedTable = { id, name, type };
@@ -12455,7 +12535,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
     
     function goBackToTables() {
-      if (isSultanMobile) {
+      if (useImmersiveProductSearch) {
         forceCloseSultanImmersiveSearchNoAnim();
       }
       const immClear = document.getElementById('sultanImmersiveSearchInput');
@@ -13382,7 +13462,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
     
     function forceCloseSultanImmersiveSearchNoAnim() {
-      if (!isSultanMobile) return;
+      if (!useImmersiveProductSearch) return;
       const overlay = document.getElementById('sultanImmersiveSearchOverlay');
       if (overlay) {
         overlay.classList.remove('sultan-immersive-overlay--open');
@@ -13396,7 +13476,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
     
     function closeSultanImmersiveSearch() {
-      if (!isSultanMobile) return;
+      if (!useImmersiveProductSearch) return;
       const overlay = document.getElementById('sultanImmersiveSearchOverlay');
       if (!overlay) return;
       resetSultanImmersiveSearchText();
@@ -13411,7 +13491,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
     
     function openSultanImmersiveSearch() {
-      if (!isSultanMobile) return;
+      if (!useImmersiveProductSearch) return;
       const overlay = document.getElementById('sultanImmersiveSearchOverlay');
       const mount = document.getElementById('sultanImmersiveProductsMount');
       const grid = document.getElementById('productsGrid');
@@ -13442,7 +13522,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
     
     function initSultanImmersiveSearchUI() {
-      if (!isSultanMobile) return;
+      if (!useImmersiveProductSearch) return;
       const openBtn = document.getElementById('sultanOpenImmersiveSearchBtn');
       const closeBtn = document.getElementById('sultanImmersiveSearchCloseBtn');
       const imm = document.getElementById('sultanImmersiveSearchInput');
@@ -13586,7 +13666,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         if (!gridEarly) return;
         // Kart yeniden render olurken aktif kart durumunu sıfırla
         if (isSultanMobile) sultanActiveCardId = null;
-        if (isSultanMobile && isSultanImmersiveSearchOpen() && !searchQuery) {
+        if (useImmersiveProductSearch && isSultanImmersiveSearchOpen() && !searchQuery) {
           gridEarly.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 48px 20px; color: #64748b; font-size: 16px; font-weight: 600; line-height: 1.5;">Aramak istediğiniz ürünün adını yukarıdaki kutuya yazın.</div>';
           return;
         }
@@ -13835,8 +13915,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       hideTurkishCoffeeModal();
       showToast('success', 'Eklendi', productName + ' sepete eklendi');
 
-      // Sultan Somatı immersive araması açıksa arama sorgusunu koru, kapatma
-      if (!(isSultanMobile && isSultanImmersiveSearchOpen())) {
+      // Tam ekran ürün araması açıksa arama sorgusunu koru, kapatma
+      if (!(useImmersiveProductSearch && isSultanImmersiveSearchOpen())) {
         const searchInputEl = document.getElementById('searchInput');
         if (searchInputEl) {
           searchInputEl.value = '';
@@ -14023,8 +14103,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       }
       updateCart();
       
-      // Sultan immersive araması açıkken arama sorgusunu koruyup kapatma
-      if (!(isSultanMobile && isSultanImmersiveSearchOpen())) {
+      // Tam ekran ürün araması açıkken arama sorgusunu koruyup kapatma
+      if (!(useImmersiveProductSearch && isSultanImmersiveSearchOpen())) {
         const searchInputEl = document.getElementById('searchInput');
         if (searchInputEl) {
           searchInputEl.value = '';
@@ -14351,6 +14431,94 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         }
       } catch (error) {
         console.error('Şifre değiştirme hatası:', error);
+        errorDiv.textContent = 'Bağlantı hatası';
+        errorDiv.style.display = 'block';
+      }
+    }
+
+    async function showManagerOpsPasswordModal() {
+      if (!currentStaff || !hasManagerPermission()) {
+        showToast('error', 'Yetki yok', 'Bu işlemi yalnızca müdür yapabilir.');
+        return;
+      }
+      const err = document.getElementById('managerOpsPasswordError');
+      if (err) { err.style.display = 'none'; err.textContent = ''; }
+      document.getElementById('managerOpsStaffPassword').value = '';
+      document.getElementById('managerOpsNewPassword').value = '';
+      document.getElementById('managerOpsNewPassword2').value = '';
+      document.getElementById('managerOpsCurrentPassword').value = '';
+      var configured = false;
+      try {
+        var r = await fetch(API_URL + '/staff/manager-ops-configured');
+        var j = await r.json();
+        configured = !!j.configured;
+      } catch (e) {}
+      var curRow = document.getElementById('managerOpsCurrentRow');
+      if (curRow) curRow.style.display = configured ? 'block' : 'none';
+      document.getElementById('managerOpsPasswordModal').style.display = 'flex';
+      setTimeout(function() {
+        var el = configured ? document.getElementById('managerOpsCurrentPassword') : document.getElementById('managerOpsStaffPassword');
+        if (el) el.focus();
+      }, 100);
+    }
+
+    function closeManagerOpsPasswordModal() {
+      document.getElementById('managerOpsPasswordModal').style.display = 'none';
+      var err = document.getElementById('managerOpsPasswordError');
+      if (err) { err.style.display = 'none'; }
+    }
+
+    async function submitManagerOpsPassword() {
+      if (!currentStaff) return;
+      var staffPassword = document.getElementById('managerOpsStaffPassword').value;
+      var newPwd = document.getElementById('managerOpsNewPassword').value;
+      var newPwd2 = document.getElementById('managerOpsNewPassword2').value;
+      var currentRow = document.getElementById('managerOpsCurrentRow');
+      var needCurrent = currentRow && currentRow.style.display !== 'none';
+      var currentPwd = document.getElementById('managerOpsCurrentPassword').value;
+      var errorDiv = document.getElementById('managerOpsPasswordError');
+      if (!staffPassword || !newPwd || !newPwd2) {
+        errorDiv.textContent = 'Lütfen tüm alanları doldurun';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      if (needCurrent && !currentPwd) {
+        errorDiv.textContent = 'Mevcut masaüstü şifresini girin';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      if (newPwd !== newPwd2) {
+        errorDiv.textContent = 'Yeni şifreler eşleşmiyor';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      if (newPwd.length < 4) {
+        errorDiv.textContent = 'Yeni şifre en az 4 karakter olmalıdır';
+        errorDiv.style.display = 'block';
+        return;
+      }
+      try {
+        var body = {
+          staffId: currentStaff.id,
+          staffPassword: staffPassword,
+          newManagerOpsPassword: newPwd
+        };
+        if (needCurrent) body.currentManagerOpsPassword = currentPwd;
+        var res = await fetch(API_URL + '/staff/manager-operations-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        var data = await res.json();
+        if (data.success) {
+          showToast('success', 'Kaydedildi', data.message || 'Şifre kaydedildi');
+          closeManagerOpsPasswordModal();
+        } else {
+          errorDiv.textContent = data.error || 'Kaydedilemedi';
+          errorDiv.style.display = 'block';
+        }
+      } catch (e) {
+        console.error(e);
         errorDiv.textContent = 'Bağlantı hatası';
         errorDiv.style.display = 'block';
       }
@@ -15644,9 +15812,11 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       setTimeout(function() {
         if (sendBtn) sendBtn.disabled = false;
         if (sendBtnContent) sendBtnContent.innerHTML = originalSendHTML;
-        // Sultan Somatı: sipariş sonrası otomatik masalar bölümüne dön
+        // Sultan Somatı / Makara Havzan mobil: sipariş sonrası masalar ekranına dön
         if (isSultanMobile) {
           sultanNotes = {};
+        }
+        if (isSultanMobile || isMakaraHavzanMobile) {
           goBackToTables();
         }
       }, 1000);
@@ -15669,28 +15839,38 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         });
     }
 
-    // ── Donanım Geri Tuşu (Android) — uygulamadan çıkmak yerine önceki ekrana dön ──
+    // ── Donanım Geri Tuşu (Android / PWA) — önce üst katman, uygulama kapanmasın ──
     (function() {
-      // Başlangıç state'i push et (her zaman popstate tetiklensin diye)
-      history.pushState({ mobileNav: true }, '');
-
       function _isVisible(id) {
         var el = document.getElementById(id);
-        return el && el.style.display !== 'none' && el.style.display !== '';
+        if (!el) return false;
+        try {
+          var cs = window.getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden') return false;
+          if (parseFloat(cs.opacity) === 0) return false;
+        } catch (e) {
+          return false;
+        }
+        return true;
       }
 
       function handleMobileBack() {
         // En üstteki katmanı kapat, öncelik sırasıyla:
 
+        // 0. Yayın mesajı (tam ekran, yüksek z-index)
+        if (_isVisible('broadcastMessageModal')) { closeBroadcastMessage(); return; }
+
         // 1. Dinamik sultan not modalı
-        var snm = document.getElementById('sultanNoteModal');
-        if (snm && snm.style.display === 'flex') { closeSultanNoteModal(); return; }
+        if (_isVisible('sultanNoteModal')) { closeSultanNoteModal(); return; }
 
         // 2. Türk kahvesi / Menengiç modalı
         if (_isVisible('turkishCoffeeModal')) { hideTurkishCoffeeModal(); return; }
 
-        // 3. Sultan immersive arama
-        if (isSultanMobile && isSultanImmersiveSearchOpen()) { closeSultanImmersiveSearch(); return; }
+        // 3. Tam ekran ürün araması (Sultan / Makara Havzan)
+        if (useImmersiveProductSearch && isSultanImmersiveSearchOpen()) { closeSultanImmersiveSearch(); return; }
+
+        // 3b. Müdür işlemleri şifre modalı
+        if (_isVisible('managerOpsPasswordModal')) { closeManagerOpsPasswordModal(); return; }
 
         // 4. Şifre değiştirme modalı
         if (_isVisible('changePasswordModal')) { closeChangePasswordModal(); return; }
@@ -15714,7 +15894,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         if (_isVisible('sultanSalesHistorySheet')) { closeSultanSalesHistorySheet(); return; }
         if (_isVisible('sultanAllOrdersSheet')) { closeSultanAllOrdersSheet(); return; }
 
-        // 7c. Ödeme sheet
+        // 7d. Ödeme sheet
         if (_isVisible('sultanPaymentSheet')) { closeSultanPaymentSheet(); return; }
 
         // 8. Yönetici sheet
@@ -15735,22 +15915,43 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         if (_isVisible('transferModal')) { hideTransferModal(); return; }
         if (_isVisible('mergeModal')) { hideMergeModal(); return; }
 
-        // 13. Drawer (yan menü)
-        var drawer = document.getElementById('drawerOverlay');
-        if (drawer && (drawer.style.display === 'block' || drawer.classList.contains('open'))) { closeDrawer(); return; }
+        // 13. Drawer (opacity ile açılır; kapalıyken opacity:0 → _isVisible false)
+        if (_isVisible('drawerOverlay')) { closeDrawer(); return; }
 
         // 14. Sipariş ekranından masalara dön
         if (_isVisible('orderSection')) { goBackToTables(); return; }
 
-        // Masalar ekranındayız, çıkışı engelle — state'i yeniden ekle
-        history.pushState({ mobileNav: true }, '');
+        // Masalar / ana ekran: geçmişi tazele — uygulama kapanmasın
+        try {
+          history.pushState({ mobileNav: true }, '');
+        } catch (e2) {}
       }
 
-      window.addEventListener('popstate', function(e) {
-        // Geri tuşu basıldığında hep bir state daha push et ki bir sonraki basışta da çalışsın
-        history.pushState({ mobileNav: true }, '');
-        handleMobileBack();
-      });
+      function bindHistoryTrap() {
+        if (!window.history || !window.history.pushState) return;
+        try {
+          history.pushState({ mobileNav: true }, '');
+        } catch (e) {}
+        window.addEventListener('popstate', function() {
+          try {
+            history.pushState({ mobileNav: true }, '');
+          } catch (e3) {}
+          handleMobileBack();
+        });
+        window.addEventListener('pageshow', function(ev) {
+          if (ev && ev.persisted) {
+            try {
+              history.pushState({ mobileNav: true }, '');
+            } catch (e4) {}
+          }
+        });
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bindHistoryTrap);
+      } else {
+        bindHistoryTrap();
+      }
     })();
     // ──────────────────────────────────────────────────────────────────────────────
   </script>
@@ -16282,6 +16483,49 @@ function startAPIServer() {
     saveDatabase();
     
     res.json({ success: true, message: 'Şifre başarıyla değiştirildi' });
+  });
+
+  /** Masaüstünde müdür seç / kaldır için kullanılan şifre tanımlı mı (mobil müdür belirler) */
+  appExpress.get('/api/staff/manager-ops-configured', (req, res) => {
+    const p = db.settings && db.settings.managerOperationsPassword;
+    const configured = typeof p === 'string' && p.length > 0;
+    res.json({ configured });
+  });
+
+  /** Mobil müdür: masaüstü müdür işlem şifresi belirle / güncelle */
+  appExpress.post('/api/staff/manager-operations-password', (req, res) => {
+    const { staffId, staffPassword, newManagerOpsPassword, currentManagerOpsPassword } = req.body || {};
+    if (!staffId || !staffPassword || !newManagerOpsPassword) {
+      return res.status(400).json({ success: false, error: 'Personel, giriş şifresi ve yeni şifre gerekli' });
+    }
+    const np = newManagerOpsPassword.toString();
+    if (np.length < 4) {
+      return res.status(400).json({ success: false, error: 'Yeni şifre en az 4 karakter olmalıdır' });
+    }
+    const staff = (db.staff || []).find((s) => String(s.id) === String(staffId));
+    if (!staff) {
+      return res.status(404).json({ success: false, error: 'Personel bulunamadı' });
+    }
+    if (staff.password !== staffPassword.toString()) {
+      return res.status(401).json({ success: false, error: 'Giriş şifresi hatalı' });
+    }
+    const canSet = !!(staff.is_manager || activeBranchKey === 'sultansomati');
+    if (!canSet) {
+      return res.status(403).json({ success: false, error: 'Bu işlemi yalnızca müdür yapabilir' });
+    }
+    const already = isManagerOperationsPasswordConfigured();
+    if (already) {
+      const cur = (currentManagerOpsPassword === undefined || currentManagerOpsPassword === null)
+        ? ''
+        : String(currentManagerOpsPassword);
+      if (cur !== (db.settings.managerOperationsPassword || '').toString()) {
+        return res.status(401).json({ success: false, error: 'Mevcut masaüstü müdür işlem şifresi hatalı' });
+      }
+    }
+    if (!db.settings) db.settings = {};
+    db.settings.managerOperationsPassword = np;
+    saveDatabase();
+    res.json({ success: true, message: 'Masaüstü müdür işlem şifresi kaydedildi' });
   });
 
   appExpress.get('/api/tables', (req, res) => {
@@ -18203,6 +18447,18 @@ ipcMain.handle('generate-qr-code', async () => {
   }
 });
 
+function isManagerOperationsPasswordConfigured() {
+  const p = db.settings && db.settings.managerOperationsPassword;
+  return typeof p === 'string' && p.length > 0;
+}
+
+function verifyManagerOperationsPassword(input) {
+  if (!isManagerOperationsPasswordConfigured()) return true;
+  const a = (db.settings.managerOperationsPassword || '').toString();
+  const b = (input === undefined || input === null) ? '' : String(input);
+  return a === b;
+}
+
 // Staff Management IPC Handlers
 ipcMain.handle('create-staff', (event, staffData) => {
   const { name, surname, password } = staffData;
@@ -18313,9 +18569,12 @@ ipcMain.handle('get-staff', () => {
   }));
 });
 
-// Müdür atama/kaldırma
-ipcMain.handle('set-staff-manager', (event, staffId, isManager) => {
+// Müdür atama/kaldırma (managerAuthPassword: managerOperationsPassword tanımlıysa zorunlu)
+ipcMain.handle('set-staff-manager', (event, staffId, isManager, managerAuthPassword) => {
   if (!db.staff) db.staff = [];
+  if (isManagerOperationsPasswordConfigured() && !verifyManagerOperationsPassword(managerAuthPassword)) {
+    return { success: false, error: 'Masaüstü müdür işlem şifresi hatalı veya girilmedi' };
+  }
   const staff = db.staff.find(s => s.id === staffId);
   if (!staff) {
     return { success: false, error: 'Personel bulunamadı' };
@@ -18334,6 +18593,10 @@ ipcMain.handle('set-staff-manager', (event, staffId, isManager) => {
   saveDatabase();
   return { success: true, staff: staff };
 });
+
+ipcMain.handle('get-manager-ops-password-configured', () => ({
+  configured: isManagerOperationsPasswordConfigured()
+}));
 
 ipcMain.handle('verify-staff-pin', (event, password) => {
   if (!db.staff) db.staff = [];

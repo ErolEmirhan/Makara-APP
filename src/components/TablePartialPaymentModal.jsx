@@ -9,8 +9,6 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
   const [selectedQuantities, setSelectedQuantities] = useState({}); // { itemId: quantity } - Başlangıçta tümü 0
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
   const [showSplitFractionPanel, setShowSplitFractionPanel] = useState(false);
-  // Parçalı ödemede 1/2, 1/3... daima baştaki toplam tutara göre hesaplansın
-  const initialOrderTotalRef = useRef(null);
   // Ödeme sonrası parent refetch edene kadar ödenen kalemlerin doğru bölümde görünmesi için
   const lastPaymentUpdatesRef = useRef({});
 
@@ -20,14 +18,6 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
       setToast(prev => ({ ...prev, show: false }));
     }, 3000);
   };
-
-  // Baştaki toplam tutarı tek seferlik sakla (Parçalı Ödeme 1/2, 1/3... hep buna göre – kalem toplamı)
-  useEffect(() => {
-    if (order && items?.length && initialOrderTotalRef.current === null) {
-      const sumItems = items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0);
-      initialOrderTotalRef.current = roundMoney(sumItems);
-    }
-  }, [order, items, totalAmount]);
 
   useEffect(() => {
     // Items'ı ödeme durumuna göre hazırla
@@ -110,16 +100,18 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     setSelectedQuantities(initialQuantities);
   }, [items]);
 
-  // Parçalı ödeme: 1/2, 1/3, ... 1/10 (DAİMA KALAN TUTARA GÖRE, küsüratsız tam lira)
+  // Parçalı ödeme: 1/2, 1/3, ... 1/10 — güncel kalem toplamına göre (yeni ürün sonrası da doğru), kalandan fazla alınmaz
   const handleSplitFractionPayment = async (denominator) => {
     const remaining = remainingAmount;
     if (remaining <= 0) {
       showToast('Kalan tutar yok', 'info');
       return;
     }
-    // Tam lira: küsürat yok (1/3 = 33 TL, son taksitte küçük fark olabilir)
-    const targetAmount = Math.floor(remaining / denominator);
-    const payAmount = targetAmount;
+    const basisTotal = roundMoney(
+      items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0)
+    );
+    const fractionAmount = Math.floor(basisTotal / denominator);
+    const payAmount = Math.min(fractionAmount, Math.floor(remaining));
     if (payAmount <= 0) {
       showToast('Kalan tutar bu bölme için uygun değil', 'info');
       return;
@@ -592,7 +584,6 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
     return sum + (item.price * item.groupedQuantity);
   }, 0));
 
-  const initialTotal = initialOrderTotalRef.current ?? originalTotalAmount;
   // Parçalı ödeme tutar bazlı alındığı için kalan = backend order.total_amount (tek kaynak)
   const remainingFromBackend = Number(order?.total_amount);
   const useBackendRemaining = typeof remainingFromBackend === 'number' && remainingFromBackend >= 0;
@@ -603,7 +594,7 @@ const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComple
         const paidQty = item.groupedPaidQuantity || 0;
         return sum + (item.price * paidQty);
       }, 0));
-  const paidAmount = roundMoney(initialTotal - remainingAmount);
+  const paidAmount = roundMoney(originalTotalAmount - remainingAmount);
 
   // Tutar bazlı parçalı ödeme alınmışsa (kalem bazlı ödenen yok, sadece order.total_amount düşmüş)
   const paidFromItems = roundMoney(effectiveItems.reduce((sum, item) => {

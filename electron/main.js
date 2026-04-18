@@ -13814,8 +13814,6 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         
         const gridEarly = document.getElementById('productsGrid');
         if (!gridEarly) return;
-        // Kart yeniden render olurken aktif kart durumunu sıfırla
-        if (isSultanMobile) sultanActiveCardId = null;
         if (useImmersiveProductSearch && isSultanImmersiveSearchOpen() && !searchQuery) {
           gridEarly.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; padding: 48px 20px; color: #64748b; font-size: 16px; font-weight: 600; line-height: 1.5;">Aramak istediğiniz ürünün adını yukarıdaki kutuya yazın.</div>';
           return;
@@ -13982,6 +13980,9 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           Promise.all(batch.map(loadProductImage)).catch(() => {});
         }, 100 * (Math.floor(i / 8) + 1));
       }
+      if (isSultanMobile) {
+        syncSultanProductCardUIFromCart();
+      }
       });
     }
     
@@ -14139,7 +14140,44 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       const indicator = document.getElementById(cardId + '-ni');
       if (indicator) indicator.style.display = note ? 'block' : 'none';
       closeSultanNoteModal();
+      throttle('updateCart', updateCart, 50);
+      updateNoteButton();
       showToast('success', 'Not Kaydedildi', note ? ('"' + note.substring(0, 30) + (note.length > 30 ? '...' : '') + '"') : 'Not temizlendi');
+    }
+
+    /** Sultan: arama sonrası grid yenilenince +/- ve not noktasını sepetten geri yükle */
+    function syncSultanProductCardUIFromCart() {
+      if (!isSultanMobile) return;
+      var grid = document.getElementById('productsGrid');
+      if (!grid) return;
+      var cards = grid.querySelectorAll('.product-card[id^="product-card-"]');
+      cards.forEach(function(card) {
+        var fullId = card.id;
+        var row = document.getElementById(fullId + '-sqr');
+        var val = document.getElementById(fullId + '-sqv');
+        var ni = document.getElementById(fullId + '-ni');
+        if (ni) {
+          var sn = sultanNotes[fullId];
+          ni.style.display = sn && String(sn).trim() ? 'block' : 'none';
+        }
+        if (!row || !val) return;
+        var pid = fullId.replace(/^product-card-/, '');
+        var nameEl = card.querySelector('.product-name');
+        var pname = nameEl ? nameEl.textContent.trim() : '';
+        var item = cart.find(function(it) {
+          if (it.isGift) return false;
+          if (String(it.id) !== String(pid)) return false;
+          return !pname || it.name === pname;
+        });
+        if (!item || item.quantity <= 0) {
+          row.style.display = 'none';
+          card.style.outline = '';
+        } else {
+          row.style.display = 'flex';
+          val.textContent = String(item.quantity);
+          card.style.outline = '2px solid #059669';
+        }
+      });
     }
     // ─────────────────────────────────────────────────────────────────────
 
@@ -14158,29 +14196,28 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       const row = document.getElementById(cardId + '-sqr');
       if (!row) return;
       const isOpen = row.style.display === 'flex';
-      // Her kart bağımsız olarak açılıp kapanır; başka kartlar etkilenmez
+      // Açıkken tekrar ürün kartına basınca +/- kapanmasın (arama yenilemesinde syncSultanProductCardUIFromCart ile de korunur)
       if (isOpen) {
-        _sultanCloseCard(cardId);
-      } else {
-        // Sepetteki mevcut miktarı göster; yoksa 1 ekle
-        const isYanUrun = typeof productId === 'string' && productId.startsWith('yan_urun_');
-        const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
-        let qty;
-        if (existing) {
-          qty = existing.quantity;
-        } else {
-          const extraNote = sultanNotes[cardId] || null;
-          cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun, lineId: nextCartLineId++, extraNote });
-          qty = 1;
-          updateCart();
-        }
-        const val = document.getElementById(cardId + '-sqv');
-        if (val) val.textContent = qty;
-        row.style.display = 'flex';
-        sultanActiveCardId = cardId;
-        const card = document.getElementById(cardId);
-        if (card) card.style.outline = '2px solid #059669';
+        return;
       }
+      // Sepetteki mevcut miktarı göster; yoksa 1 ekle
+      const isYanUrun = typeof productId === 'string' && productId.startsWith('yan_urun_');
+      const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
+      let qty;
+      if (existing) {
+        qty = existing.quantity;
+      } else {
+        const extraNote = sultanNotes[cardId] || null;
+        cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun, lineId: nextCartLineId++, extraNote });
+        qty = 1;
+        updateCart();
+      }
+      const val = document.getElementById(cardId + '-sqv');
+      if (val) val.textContent = qty;
+      row.style.display = 'flex';
+      sultanActiveCardId = cardId;
+      const card = document.getElementById(cardId);
+      if (card) card.style.outline = '2px solid #059669';
     }
 
     function sultanCardDec(productId, name, price, cardId) {
@@ -14317,6 +14354,9 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       const cartItemCountEl = document.getElementById('cartItemCount');
       if (cartItemCountEl) {
         cartItemCountEl.textContent = totalItems + ' ürün';
+      }
+      if (isSultanMobile) {
+        syncSultanProductCardUIFromCart();
       }
       schedulePrepareReceipts();
       });

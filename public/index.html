@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=33.0.1">
+  <link rel="manifest" href="/manifest.json?v=38.0.1">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '33.0.1';
+      const APP_VERSION = '38.0.1';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -316,6 +316,17 @@
       if (metaTheme) metaTheme.setAttribute('content', isSultan ? '#ca8a04' : '#dc2626');
     }
 
+    /** Havzan (makara-16344) vs Suriçi (makarasurici): localStorage satış/iptal önbeliği şubeye göre ayrılır */
+    function getPatronFirestoreCacheKeys() {
+      const b = activeBranchKey || 'makara';
+      return {
+        sales: `patron_sales_cache_${b}`,
+        salesTs: `patron_sales_cache_ts_${b}`,
+        cancels: `patron_cancels_cache_${b}`,
+        cancelsTs: `patron_cancels_cache_ts_${b}`
+      };
+    }
+
     function updateDashboardHeaderTitle() {
       syncAdminBranchThemeClass();
       const badgeEl = document.getElementById('navbarBranchBadge');
@@ -328,6 +339,15 @@
       const branchLabel = BRANCH_DISPLAY[activeBranchKey] || (activeBranchKey || 'HAVZAN').toUpperCase();
       if (badgeEl) badgeEl.textContent = branchLabel;
       if (subEl) subEl.textContent = 'Admin Paneli · Anlık takip';
+      const pmSub = document.querySelector('.pm-header-subtitle');
+      if (pmSub) {
+        const DATA_DB = {
+          makara: 'Katalog: Havzan (makara-16344)',
+          makarasur: 'Katalog: Suriçi (makarasurici)',
+          sultansomati: 'Katalog: Sultan Somatı (tek Firebase)'
+        };
+        pmSub.textContent = DATA_DB[activeBranchKey] || 'Yönetim Ekranı';
+      }
       updateBottomNavBranchChip();
     }
 
@@ -711,10 +731,11 @@
         return;
       }
 
-      // Önce cache'den kontrol et
+      // Önce cache'den kontrol et (şube bazlı — Havzan / Suriçi karışmasın)
       try {
-        const cachedSales = localStorage.getItem('sales_cache');
-        const cacheTimestamp = localStorage.getItem('sales_cache_timestamp');
+        const ck = getPatronFirestoreCacheKeys();
+        const cachedSales = localStorage.getItem(ck.sales);
+        const cacheTimestamp = localStorage.getItem(ck.salesTs);
         const now = Date.now();
         
         // Cache 2 dakikadan yeni ise kullan (read quota tasarrufu için)
@@ -858,10 +879,11 @@
 
         allSales = sales; // Tüm satışları sakla
         
-        // Cache'e kaydet (read quota tasarrufu için)
+        // Cache'e kaydet (read quota tasarrufu için, şube bazlı)
         try {
-          localStorage.setItem('sales_cache', JSON.stringify(sales));
-          localStorage.setItem('sales_cache_timestamp', Date.now().toString());
+          const ck = getPatronFirestoreCacheKeys();
+          localStorage.setItem(ck.sales, JSON.stringify(sales));
+          localStorage.setItem(ck.salesTs, Date.now().toString());
         } catch (e) {
           console.warn('Cache yazma hatası:', e);
         }
@@ -893,10 +915,11 @@
     async function loadCancels() {
       if (!db) return;
       
-      // Önce cache'den kontrol et
+      // Önce cache'den kontrol et (şube bazlı)
       try {
-        const cachedCancels = localStorage.getItem('cancels_cache');
-        const cacheTimestamp = localStorage.getItem('cancels_cache_timestamp');
+        const ck = getPatronFirestoreCacheKeys();
+        const cachedCancels = localStorage.getItem(ck.cancels);
+        const cacheTimestamp = localStorage.getItem(ck.cancelsTs);
         const now = Date.now();
         
         // Cache 5 dakikadan yeni ise kullan
@@ -931,10 +954,11 @@
         
         allCancels = cancels;
         
-        // Cache'e kaydet
+        // Cache'e kaydet (şube bazlı)
         try {
-          localStorage.setItem('cancels_cache', JSON.stringify(cancels));
-          localStorage.setItem('cancels_cache_timestamp', Date.now().toString());
+          const ck = getPatronFirestoreCacheKeys();
+          localStorage.setItem(ck.cancels, JSON.stringify(cancels));
+          localStorage.setItem(ck.cancelsTs, Date.now().toString());
         } catch (e) {
           console.warn('Cache yazma hatası:', e);
         }
@@ -977,10 +1001,11 @@
         
         allCancels = cancels;
         
-        // Cache'e kaydet
+        // Cache'e kaydet (şube bazlı)
         try {
-          localStorage.setItem('cancels_cache', JSON.stringify(cancels));
-          localStorage.setItem('cancels_cache_timestamp', Date.now().toString());
+          const ck = getPatronFirestoreCacheKeys();
+          localStorage.setItem(ck.cancels, JSON.stringify(cancels));
+          localStorage.setItem(ck.cancelsTs, Date.now().toString());
         } catch (e) {
           console.warn('Cache yazma hatası:', e);
         }
@@ -1102,10 +1127,11 @@
 
         allSales = sales; // Tüm satışları sakla
         
-        // Cache'e kaydet (read quota tasarrufu için)
+        // Cache'e kaydet (read quota tasarrufu için, şube bazlı)
         try {
-          localStorage.setItem('sales_cache', JSON.stringify(sales));
-          localStorage.setItem('sales_cache_timestamp', Date.now().toString());
+          const ck = getPatronFirestoreCacheKeys();
+          localStorage.setItem(ck.sales, JSON.stringify(sales));
+          localStorage.setItem(ck.salesTs, Date.now().toString());
         } catch (e) {
           console.warn('Cache yazma hatası:', e);
         }
@@ -3365,6 +3391,12 @@
         periodInfo = 'Tüm Zamanlar';
       }
 
+      const reportBranchHint = {
+        makara: 'Havzan veritabanı — satış ve ürün fiyatları bu şubeye aittir.',
+        makarasur: 'Suriçi veritabanı — satış ve ürün fiyatları bu şubeye aittir.',
+        sultansomati: 'Sultan Somatı veritabanı — satış ve ürün fiyatları bu şubeye aittir.'
+      }[activeBranchKey] || '';
+
       let html = `
         <div class="reports-container">
           <div class="reports-header">
@@ -3376,7 +3408,7 @@
                   <span>Analiz Et</span>
                 </button>
               </div>
-              <p class="reports-subtitle">Kapsamlı satış analizi ve istatistikler</p>
+              <p class="reports-subtitle">Kapsamlı satış analizi ve istatistikler${reportBranchHint ? ` · ${reportBranchHint}` : ''}</p>
             </div>
             <div class="date-filter-wrapper">
               <button class="date-filter-trigger" onclick="toggleDateFilterModal(event)">
@@ -8308,7 +8340,21 @@
       previousTableStates = {};
       isFirstTablesLoad = true;
 
+      // Katalog / ürün listesi bellekleri (Havzan vs Suriçi farklı Firestore projeleri)
+      productAdminCategories = [];
+      productAdminProducts = [];
+      if (typeof gorselEkleAllProducts !== 'undefined') gorselEkleAllProducts.length = 0;
+      categoryViewDate = null;
+      lastReportSales = null;
+
       const ok = initFirebaseForBranch(nextBranch);
+
+      try {
+        localStorage.removeItem('sales_cache');
+        localStorage.removeItem('sales_cache_timestamp');
+        localStorage.removeItem('cancels_cache');
+        localStorage.removeItem('cancels_cache_timestamp');
+      } catch (_) {}
       if (!ok) {
         if (typeof showToast === 'function') showToast('error', 'Hata', 'Şube bağlantısı kurulamadı.');
         return;
@@ -8317,6 +8363,14 @@
       try { await loadAdminPins(); } catch (_) {}
       await loadSales();
       try { loadCancels(); } catch (_) {}
+
+      try {
+        const pm = document.getElementById('productManagementModal');
+        if (pm && pm.classList.contains('open') && typeof loadProductManagementData === 'function') {
+          loadProductManagementData();
+        }
+      } catch (_) {}
+
       renderCurrentView();
       if (typeof showToast === 'function') {
         const label = (BRANCH_CONFIGS[nextBranch] && BRANCH_CONFIGS[nextBranch].label) || nextBranch;

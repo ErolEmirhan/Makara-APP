@@ -59,8 +59,8 @@ const FIREBASE_MAKARA_TABLES = {
   appId: "1:840151572206:web:0afaf93deea636309e5dff",
   measurementId: "G-2S0J3566ZY"
 };
-// Suriçi: sadece POS satışları + iptal kayıtları bu projede; katalog Havzan ile aynı store
-const FIREBASE_SURICI_SALES = {
+// Makara Sur (iç şube): katalog, ürün görselleri, stok, masa senkronu ve satış/iptal tek projede
+const FIREBASE_MAKARASURICI = {
   apiKey: "AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo",
   authDomain: "makarasurici.firebaseapp.com",
   projectId: "makarasurici",
@@ -95,9 +95,8 @@ const BRANCH_CONFIGS = {
   makarasur: {
     key: 'makarasur',
     label: 'Makara Sur',
-    mainFirebase: FIREBASE_MAKARA_MAIN,
-    tablesFirebase: FIREBASE_MAKARA_TABLES,
-    salesFirebase: FIREBASE_SURICI_SALES
+    mainFirebase: FIREBASE_MAKARASURICI,
+    tablesFirebase: FIREBASE_MAKARASURICI
   },
   sultansomati: {
     key: 'sultansomati',
@@ -796,7 +795,7 @@ function flushSaveDatabaseSync() {
 // Firebase'e kategori kaydetme fonksiyonu
 async function saveCategoryToFirebase(category) {
   if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
-    return;
+    return false;
   }
   
   try {
@@ -807,15 +806,17 @@ async function saveCategoryToFirebase(category) {
       order_index: category.order_index || 0
     }, { merge: true });
     console.log(`✅ Kategori Firebase'e kaydedildi: ${category.name} (ID: ${category.id})`);
+    return true;
   } catch (error) {
     console.error(`❌ Kategori Firebase'e kaydedilemedi (${category.name}):`, error);
+    return false;
   }
 }
 
 // Firebase'e ürün kaydetme fonksiyonu
 async function saveProductToFirebase(product) {
   if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
-    return;
+    return false;
   }
   
   try {
@@ -830,14 +831,33 @@ async function saveProductToFirebase(product) {
     if (product.description) payload.description = product.description;
     if (product.gluten_free === true) payload.gluten_free = true;
     if (product.per_person === true) payload.per_person = true;
-    await firebaseSetDoc(productRef, payload, { merge: true });
+    if (product.trackStock === true) payload.trackStock = true;
+    if (product.stock !== undefined && product.stock !== null) payload.stock = Number(product.stock) || 0;
+    const trySet = async (body) => firebaseSetDoc(productRef, body, { merge: true });
+    try {
+      await trySet(payload);
+    } catch (errFirst) {
+      const msg = String(errFirst?.message || '');
+      const sizeProblem =
+        msg.includes('longer than') ||
+        msg.includes('exceed') ||
+        errFirst?.code === 'invalid-argument';
+      if (sizeProblem && payload.image) {
+        console.warn(`⚠️ Görsel çok büyük, ürün ${product.name} için görsel atlanıp diğer alanlar yazılıyor`);
+        await trySet({ ...payload, image: null });
+      } else {
+        throw errFirst;
+      }
+    }
     console.log(`✅ Ürün Firebase'e kaydedildi: ${product.name} (ID: ${product.id}, Fiyat: ${parseFloat(product.price) || 0})`);
+    return true;
   } catch (error) {
     console.error(`❌ Ürün Firebase'e kaydedilemedi (${product.name}):`, error);
     const msg = String(error?.message || '');
     if (msg.includes('longer than') || msg.includes('exceed') || error?.code === 'invalid-argument') {
       console.error('   Firestore belge boyutu sınırı (yakl. 1 MB): görsel çok büyükse Ayarlar’dan daha küçük dosya seçin.');
     }
+    return false;
   }
 }
 
@@ -11248,6 +11268,44 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     </div>
   </div>
   
+  <!-- Sultan Şalgam Acılı / Acısız (mobil şube) -->
+  <div id="salgamChoiceModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10100; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideSalgamChoiceModal()">
+    <div style="background: white; border-radius: 24px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;">
+      <div style="background: linear-gradient(135deg, #7c2d12 0%, #9a3412 100%); color: white; padding: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0; font-size: 22px; font-weight: 900;">Şalgam</h2>
+          <button onclick="hideSalgamChoiceModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold; transition: all 0.3s;">×</button>
+        </div>
+      </div>
+      <div style="padding: 24px;">
+        <p style="margin: 0 0 20px 0; font-size: 15px; color: #6b7280; font-weight: 600; text-align: center;">Lütfen tercihinizi seçin:</p>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <button onclick="selectSalgamOption('Acılı')" style="padding: 18px 24px; background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border: 2px solid #e5e7eb; border-radius: 16px; font-size: 17px; font-weight: 700; color: #1f2937; cursor: pointer;">Acılı</button>
+          <button onclick="selectSalgamOption('Acısız')" style="padding: 18px 24px; background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border: 2px solid #e5e7eb; border-radius: 16px; font-size: 17px; font-weight: 700; color: #1f2937; cursor: pointer;">Acısız</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <!-- Sultan Ayran Açık / Kapalı (mobil şube) -->
+  <div id="ayranChoiceModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10100; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) hideAyranChoiceModal()">
+    <div style="background: white; border-radius: 24px; width: 100%; max-width: 420px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;">
+      <div style="background: linear-gradient(135deg, #0369a1 0%, #0284c7 100%); color: white; padding: 24px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0; font-size: 22px; font-weight: 900;">Ayran</h2>
+          <button onclick="hideAyranChoiceModal()" style="background: rgba(255,255,255,0.2); border: none; color: white; width: 36px; height: 36px; border-radius: 10px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: bold;">×</button>
+        </div>
+      </div>
+      <div style="padding: 24px;">
+        <p style="margin: 0 0 20px 0; font-size: 15px; color: #6b7280; font-weight: 600; text-align: center;">Nasıl gönderilsin?</p>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+          <button onclick="selectAyranOption('Açık')" style="padding: 18px 24px; background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border: 2px solid #e5e7eb; border-radius: 16px; font-size: 17px; font-weight: 700; color: #1f2937; cursor: pointer;">Açık</button>
+          <button onclick="selectAyranOption('Kapalı')" style="padding: 18px 24px; background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%); border: 2px solid #e5e7eb; border-radius: 16px; font-size: 17px; font-weight: 700; color: #1f2937; cursor: pointer;">Kapalı</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  
   <!-- İptal Açıklaması Modal (Fiş yazdırıldıktan sonra) -->
   <div id="cancelReasonModal" style="display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 2910; align-items: center; justify-content: center; padding: 20px; backdrop-filter: blur(4px);" onclick="if(event.target === this) return;">
     <div style="background: white; border-radius: 24px; width: 100%; max-width: 480px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 25px 70px rgba(0,0,0,0.4); animation: slideUp 0.3s ease;">
@@ -13877,17 +13935,42 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         const isOutOfStock = trackStock && stock !== null && stock === 0;
         const isLowStock = trackStock && stock !== null && stock > 0 && stock <= 5;
         // Türk Kahvesi ve Menengiç Kahve için özel modal açma
-        const isTurkishCoffee = prod.name.toLowerCase().includes('türk kahvesi') || prod.name.toLowerCase().includes('turk kahvesi');
-        const isMenengicCoffee = prod.name.toLowerCase().includes('menengiç kahve') || prod.name.toLowerCase().includes('menengic kahve');
+        const nmLower = prod.name.toLowerCase();
+        var nmLcTr = nmLower;
+        try { nmLcTr = String(prod.name || '').normalize('NFKC').toLocaleLowerCase('tr-TR'); } catch (_e2) { nmLcTr = nmLower; }
+        const isTurkishCoffee = nmLower.includes('türk kahvesi') || nmLower.includes('turk kahvesi');
+        const isMenengicCoffee = nmLower.includes('menengiç kahve') || nmLower.includes('menengic kahve');
         const needsCoffeeModal = isTurkishCoffee || isMenengicCoffee;
+        const salgamHasPick = /\bacılı\b/i.test(nmLower) || /\bacısız\b/i.test(nmLower) || /\bacisiz\b/i.test(nmLower);
+        const needsSalgamModal = !!(isSultanMobile && (nmLcTr.includes('şalgam') || nmLcTr.includes('salgam')) && !salgamHasPick);
+        // "ayran" alt string (tr küçültme ile); \b latin sınırına takılmamak için
+        var pnLcNorm = nmLcTr;
+        try {
+          pnLcNorm = String(prod.name || '').normalize('NFKC').toLocaleLowerCase('tr-TR');
+        } catch (_ePl) { pnLcNorm = nmLcTr; }
+        var hasStandaloneAyranWord = pnLcNorm.indexOf('ayran') >= 0;
+        try {
+          if (/\bhayran\b/i.test(pnLcNorm)) hasStandaloneAyranWord = false;
+        } catch (_eHy) {}
+        try {
+          if (/şalgam|salgam/i.test(pnLcNorm) && /ayran/i.test(pnLcNorm)) hasStandaloneAyranWord = false;
+        } catch (_eHz) {}
+        const needsAyranModal = !!(isSultanMobile && hasStandaloneAyranWord && !needsSalgamModal);
+        // +/- ve not yalnızca Türk kahvesi modalında saklanır; şalgam/ayranda da gösterilir
+        const hideSultanInlineForCoffeeModalOnly = needsCoffeeModal;
+
         // ID'yi string olarak geç (yan ürünler için gerekli)
         const productIdStr = typeof prod.id === 'string' ? '\\'' + prod.id + '\\'' : prod.id;
         const escapedName = prod.name.replace(/'/g, "\\'");
         const onClickHandler = isOutOfStock ? '' : (needsCoffeeModal
           ? 'onclick="showTurkishCoffeeModal(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ')"'
-          : (isSultanMobile
-              ? 'onclick="toggleSultanCard(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ', \\'' + cardId + '\\')"'
-              : 'onclick="addToCart(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ')"'));
+          : (needsSalgamModal
+              ? 'onclick="showSalgamChoiceModal(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ')"'
+              : (needsAyranModal
+                  ? 'onclick="showAyranChoiceModal(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ')"'
+                  : (isSultanMobile
+                      ? 'onclick="toggleSultanCard(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ', \\'' + cardId + '\\')"'
+                      : 'onclick="addToCart(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ')"'))));
         const cardStyle = isOutOfStock ? backgroundStyle + ' opacity: 0.6; cursor: not-allowed; pointer-events: none;' : backgroundStyle;
         
         // Kilit ikonu (sadece stok 0 olduğunda)
@@ -13903,7 +13986,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         }
 
         // Sultan Somatı: sağ üst köşe miktar kontrolü (dikey, büyük, modern) — anlık sepet
-        const sultanInlineQty = (isSultanMobile && !isOutOfStock && !needsCoffeeModal)
+        const sultanInlineQty = (isSultanMobile && !isOutOfStock && !hideSultanInlineForCoffeeModalOnly)
           ? '<div id="' + cardId + '-sqr" style="position:absolute;top:8px;right:8px;display:none;flex-direction:column;align-items:center;background:#fff;border:1.5px solid #a7f3d0;border-radius:14px;overflow:hidden;box-shadow:0 3px 14px rgba(5,150,105,0.22);z-index:5;min-width:36px;">' +
             '<button onclick="event.stopPropagation();sultanCardInc(' + productIdStr + ', \\'' + escapedName + '\\', ' + prod.price + ', \\'' + cardId + '\\')" style="width:36px;height:34px;border:none;border-bottom:1.5px solid #a7f3d0;background:#059669;font-size:20px;font-weight:700;cursor:pointer;color:#fff;display:flex;align-items:center;justify-content:center;padding:0;line-height:1;touch-action:manipulation;">+</button>' +
             '<span id="' + cardId + '-sqv" style="font-size:16px;font-weight:900;color:#065f46;width:36px;text-align:center;height:32px;line-height:32px;background:#f0fdf4;letter-spacing:-0.5px;">1</span>' +
@@ -13912,7 +13995,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           : '';
 
         // Sultan Somatı: sol alt köşe not butonu
-        const sultanNoteBtn = (isSultanMobile && !isOutOfStock && !needsCoffeeModal)
+        const sultanNoteBtn = (isSultanMobile && !isOutOfStock && !hideSultanInlineForCoffeeModalOnly)
           ? '<button onclick="event.stopPropagation();openSultanNote(' + productIdStr + ', \\'' + escapedName + '\\', \\'' + cardId + '\\')" style="position:relative;width:28px;height:28px;border-radius:50%;border:1.5px solid #e2e8f0;background:#f8fafc;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:0;">' +
             '<svg width="13" height="13" viewBox="0 0 13 13" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="2.2" cy="6.5" r="1.2" fill="#94a3b8"/><circle cx="6.5" cy="6.5" r="1.2" fill="#94a3b8"/><circle cx="10.8" cy="6.5" r="1.2" fill="#94a3b8"/></svg>' +
             '<span id="' + cardId + '-ni" style="display:none;position:absolute;top:-1px;right:-1px;width:7px;height:7px;background:#059669;border-radius:50%;border:1.5px solid #fff;"></span>' +
@@ -13920,7 +14003,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           : '';
 
         // Kart HTML — Sultan mobile için yeni düzen, diğerleri için eski düzen
-        if (isSultanMobile && !isOutOfStock && !needsCoffeeModal) {
+        if (isSultanMobile && !isOutOfStock && !hideSultanInlineForCoffeeModalOnly) {
           return '<div id="' + cardId + '" class="product-card" ' + onClickHandler + ' style="' + cardStyle + ' position: relative; overflow: hidden; display:flex; flex-direction:column;">' +
             lockIcon +
             sultanInlineQty +
@@ -14077,6 +14160,143 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       }
     }
 
+    let pendingSalgamProduct = null;
+    let pendingAyranProduct = null;
+
+    function buildSalgamDisplayName(originalName, optionAcili) {
+      let prefix = '';
+      const rg = new RegExp('^(.*?)\\s*(şalgam|salgam)\\s*$', 'i');
+      const match = String(originalName || '').match(rg);
+      if (match && match[1] && match[1].trim()) prefix = match[1].trim() + ' ';
+      return prefix + optionAcili + ' Şalgam';
+    }
+
+    function buildAyranDisplayName(originalName, optionAcik) {
+      let prefix = '';
+      const rg = new RegExp('^(.*?)\\s*(ayran)\\s*$', 'i');
+      const match = String(originalName || '').match(rg);
+      if (match && match[1] && match[1].trim()) prefix = match[1].trim() + ' ';
+      return prefix + optionAcik + ' Ayran';
+    }
+
+    function showSalgamChoiceModal(productId, name, price) {
+      pendingSalgamProduct = { id: productId, name: name, price: price };
+      var el = document.getElementById('salgamChoiceModal');
+      if (el) el.style.display = 'flex';
+    }
+
+    function hideSalgamChoiceModal() {
+      var el = document.getElementById('salgamChoiceModal');
+      if (el) el.style.display = 'none';
+      pendingSalgamProduct = null;
+    }
+
+    function showAyranChoiceModal(productId, name, price) {
+      pendingAyranProduct = { id: productId, name: name, price: price };
+      var el = document.getElementById('ayranChoiceModal');
+      if (el) el.style.display = 'flex';
+    }
+
+    function hideAyranChoiceModal() {
+      var el = document.getElementById('ayranChoiceModal');
+      if (el) el.style.display = 'none';
+      pendingAyranProduct = null;
+    }
+
+    function selectSalgamOption(option) {
+      if (!pendingSalgamProduct) {
+        hideSalgamChoiceModal();
+        return;
+      }
+      var product = products.find(function(p) { return p.id === pendingSalgamProduct.id; });
+      if (product) {
+        var trackStock = product.trackStock === true;
+        var stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
+        var isOutOfStock = trackStock && stock !== null && stock === 0;
+        if (isOutOfStock) {
+          showToast('error', 'Stok Yok', pendingSalgamProduct.name + ' için stok kalmadı');
+          hideSalgamChoiceModal();
+          return;
+        }
+      }
+      var productName = buildSalgamDisplayName(pendingSalgamProduct.name, option);
+      var existing = cart.find(function(item) {
+        return String(item.id) === String(pendingSalgamProduct.id) && item.name === productName && !item.isGift;
+      });
+      if (existing) {
+        existing.quantity++;
+      } else {
+        var isYanUrun = typeof pendingSalgamProduct.id === 'string' && String(pendingSalgamProduct.id).indexOf('yan_urun_') === 0;
+        cart.push({
+          id: pendingSalgamProduct.id,
+          name: productName,
+          price: pendingSalgamProduct.price,
+          quantity: 1,
+          isGift: false,
+          isYanUrun: isYanUrun,
+          lineId: nextCartLineId++
+        });
+      }
+      updateCart();
+      hideSalgamChoiceModal();
+      showToast('success', 'Eklendi', productName + ' sepete eklendi');
+      if (!(useImmersiveProductSearch && isSultanImmersiveSearchOpen())) {
+        var searchInputEl = document.getElementById('searchInput');
+        if (searchInputEl) {
+          searchInputEl.value = '';
+          searchQuery = '';
+          renderProducts();
+        }
+      }
+    }
+
+    function selectAyranOption(option) {
+      if (!pendingAyranProduct) {
+        hideAyranChoiceModal();
+        return;
+      }
+      var product = products.find(function(p) { return p.id === pendingAyranProduct.id; });
+      if (product) {
+        var trackStock = product.trackStock === true;
+        var stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
+        var isOutOfStock = trackStock && stock !== null && stock === 0;
+        if (isOutOfStock) {
+          showToast('error', 'Stok Yok', pendingAyranProduct.name + ' için stok kalmadı');
+          hideAyranChoiceModal();
+          return;
+        }
+      }
+      var productName = buildAyranDisplayName(pendingAyranProduct.name, option);
+      var existing = cart.find(function(item) {
+        return String(item.id) === String(pendingAyranProduct.id) && item.name === productName && !item.isGift;
+      });
+      if (existing) {
+        existing.quantity++;
+      } else {
+        var isYanUrun2 = typeof pendingAyranProduct.id === 'string' && String(pendingAyranProduct.id).indexOf('yan_urun_') === 0;
+        cart.push({
+          id: pendingAyranProduct.id,
+          name: productName,
+          price: pendingAyranProduct.price,
+          quantity: 1,
+          isGift: false,
+          isYanUrun: isYanUrun2,
+          lineId: nextCartLineId++
+        });
+      }
+      updateCart();
+      hideAyranChoiceModal();
+      showToast('success', 'Eklendi', productName + ' sepete eklendi');
+      if (!(useImmersiveProductSearch && isSultanImmersiveSearchOpen())) {
+        var searchInputEl = document.getElementById('searchInput');
+        if (searchInputEl) {
+          searchInputEl.value = '';
+          searchQuery = '';
+          renderProducts();
+        }
+      }
+    }
+
     // ── Sultan Somatı: Ürün Notu ──────────────────────────────────────────
     let sultanNotes = {}; // cardId -> not metni
     let _sultanNoteCtx = { cardId: null, productId: null, name: null };
@@ -14164,17 +14384,28 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         var pid = fullId.replace(/^product-card-/, '');
         var nameEl = card.querySelector('.product-name');
         var pname = nameEl ? nameEl.textContent.trim() : '';
-        var item = cart.find(function(it) {
-          if (it.isGift) return false;
-          if (String(it.id) !== String(pid)) return false;
-          return !pname || it.name === pname;
-        });
-        if (!item || item.quantity <= 0) {
+        var qty = 0;
+        if (!pname) {
+          var anyIdOnly = cart.find(function(it) { return !it.isGift && String(it.id) === String(pid); });
+          qty = anyIdOnly ? (anyIdOnly.quantity || 0) : 0;
+        } else {
+          var grouped = findSultanCartLinesForPidAndCatalog(pid, pname);
+          if (grouped.length) qty = _sultanSumQty(grouped);
+          else {
+            var lone = cart.find(function(it) {
+              if (it.isGift) return false;
+              if (String(it.id) !== String(pid)) return false;
+              return !pname || it.name === pname;
+            });
+            qty = lone ? (lone.quantity || 0) : 0;
+          }
+        }
+        if (qty <= 0) {
           row.style.display = 'none';
           card.style.outline = '';
         } else {
           row.style.display = 'flex';
-          val.textContent = String(item.quantity);
+          val.textContent = String(qty);
           card.style.outline = '2px solid #059669';
         }
       });
@@ -14183,6 +14414,39 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
 
     // ── Sultan Somatı: Kart İçi Anlık Miktar Seçici ─────────────────────
     let sultanActiveCardId = null;
+
+    /** Katalog kart adı ile sepet satırını eşle (şalgam/ayran varyant adları dahil) */
+    function cartLineMatchesSultanCardCatalogName(catalogName, cartLineName) {
+      if (String(catalogName || '') === String(cartLineName || '')) return true;
+      try {
+        var ca = String(catalogName || '').normalize('NFKC').toLocaleLowerCase('tr-TR');
+        var cl = String(cartLineName || '').normalize('NFKC').toLocaleLowerCase('tr-TR');
+        if (ca.includes('şalgam') || ca.includes('salgam'))
+          return (cl.includes('şalgam') || cl.includes('salgam')) && /\b(acılı|acısız)\b/i.test(cl);
+        if (ca.includes('ayran'))
+          return /\bayran\b/i.test(cl) && /(\baçık\b|\bkapalı\b|\bacik\b|\bkapali\b)/i.test(cl);
+      } catch (_eCc) {}
+      return false;
+    }
+
+    function findSultanCartLinesForPidAndCatalog(pid, catalogName) {
+      return cart.filter(function(it) {
+        if (it.isGift || String(it.id) !== String(pid)) return false;
+        return cartLineMatchesSultanCardCatalogName(catalogName, it.name);
+      });
+    }
+
+    /** Çok varyant varsa +/- bu satırı güncellesin */
+    function pickSultanTouchLine(lines) {
+      if (!lines || !lines.length) return null;
+      if (lines.length === 1) return lines[0];
+      lines = lines.slice().sort(function(a, b) { return ((b.lineId || 0) - (a.lineId || 0)); });
+      return lines[0];
+    }
+
+    function _sultanSumQty(lines) {
+      return lines.reduce(function(s, ln) { return s + (ln.quantity || 0); }, 0);
+    }
 
     function _sultanCloseCard(cardId) {
       const row = document.getElementById(cardId + '-sqr');
@@ -14202,15 +14466,20 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       }
       // Sepetteki mevcut miktarı göster; yoksa 1 ekle
       const isYanUrun = typeof productId === 'string' && productId.startsWith('yan_urun_');
-      const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
       let qty;
-      if (existing) {
-        qty = existing.quantity;
+      var groupLines = findSultanCartLinesForPidAndCatalog(productId, name);
+      if (groupLines.length) {
+        qty = _sultanSumQty(groupLines);
       } else {
-        const extraNote = sultanNotes[cardId] || null;
-        cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun, lineId: nextCartLineId++, extraNote });
-        qty = 1;
-        updateCart();
+        const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
+        if (existing) {
+          qty = existing.quantity;
+        } else {
+          const extraNote = sultanNotes[cardId] || null;
+          cart.push({ id: productId, name, price, quantity: 1, isGift: false, isYanUrun, lineId: nextCartLineId++, extraNote });
+          qty = 1;
+          updateCart();
+        }
       }
       const val = document.getElementById(cardId + '-sqv');
       if (val) val.textContent = qty;
@@ -14221,16 +14490,17 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
     }
 
     function sultanCardDec(productId, name, price, cardId) {
-      const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
-      if (!existing) { _sultanCloseCard(cardId); return; }
-      if (existing.quantity <= 1) {
-        cart.splice(cart.indexOf(existing), 1);
+      var grp = findSultanCartLinesForPidAndCatalog(productId, name);
+      var touch = grp.length ? pickSultanTouchLine(grp) : cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
+      if (!touch) { _sultanCloseCard(cardId); return; }
+      if (touch.quantity <= 1) {
+        cart.splice(cart.indexOf(touch), 1);
         updateCart();
-        _sultanCloseCard(cardId);
+        if (!_sultanSumQty(findSultanCartLinesForPidAndCatalog(productId, name))) _sultanCloseCard(cardId);
       } else {
-        existing.quantity--;
+        touch.quantity--;
         const val = document.getElementById(cardId + '-sqv');
-        if (val) val.textContent = existing.quantity;
+        if (val) val.textContent = String(_sultanSumQty(findSultanCartLinesForPidAndCatalog(productId, name)));
         updateCart();
       }
     }
@@ -14246,11 +14516,12 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           if (cur >= stock) { showToast('error', 'Stok Yetersiz', 'Maksimum ' + stock + ' adet eklenebilir.'); return; }
         }
       }
-      const existing = cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
-      if (existing) {
-        existing.quantity++;
+      var grp2 = findSultanCartLinesForPidAndCatalog(productId, name);
+      var tgt = grp2.length ? pickSultanTouchLine(grp2) : cart.find(item => String(item.id) === String(productId) && item.name === name && !item.isGift);
+      if (tgt) {
+        tgt.quantity++;
         const val = document.getElementById(cardId + '-sqv');
-        if (val) val.textContent = existing.quantity;
+        if (val) val.textContent = String(_sultanSumQty(findSultanCartLinesForPidAndCatalog(productId, name)));
         updateCart();
       }
     }
@@ -14303,6 +14574,38 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       // Sepeti otomatik açma - kullanıcı manuel olarak açacak
     }
     
+    /** Sultan: sepet üstünde seçim özeti (2× Acılı, 1× Acısız şalgam vb.) */
+    function buildSultanCartVariantSummaryHtml() {
+      if (!isSultanMobile || cart.length === 0) return '';
+      var salgAcili = 0, salgAcisiz = 0, yerAcik = 0, yerKapali = 0;
+      cart.forEach(function(it) {
+        if (it.isGift) return;
+        var n = String(it.name || '');
+        var q = it.quantity || 0;
+        var nLo = n.toLowerCase();
+        if (nLo.indexOf('şalgam') >= 0 || nLo.indexOf('salgam') >= 0) {
+          if (/\bacılı\b/i.test(n) && !/\bacısız\b/i.test(n) && !/\bacisiz\b/i.test(n)) salgAcili += q;
+          else if (/\bacısız\b/i.test(n) || /\bacisiz\b/i.test(n)) salgAcisiz += q;
+          return;
+        }
+        if (/\bayran\b/i.test(nLo)) {
+          if (/\baçık\b/i.test(n) || /\bacik\b/i.test(n)) yerAcik += q;
+          else if (/\bkapalı\b/i.test(n) || /\bkapali\b/i.test(n)) yerKapali += q;
+        }
+      });
+      if (!(salgAcili || salgAcisiz || yerAcik || yerKapali)) return '';
+      var parts = [];
+      var salgBits = [];
+      if (salgAcili) salgBits.push(salgAcili + '× Acılı');
+      if (salgAcisiz) salgBits.push(salgAcisiz + '× Acısız');
+      if (salgBits.length) parts.push('Şalgam: ' + salgBits.join(', '));
+      var ayBits = [];
+      if (yerAcik) ayBits.push(yerAcik + '× Açık');
+      if (yerKapali) ayBits.push(yerKapali + '× Kapalı');
+      if (ayBits.length) parts.push('Ayran: ' + ayBits.join(', '));
+      return '<div class="sultan-cart-variant-summary" style="font-size:12px;font-weight:800;color:#0f766e;background:linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%);border:1px solid #a7f3d0;border-radius:12px;padding:10px 12px;margin-bottom:10px;line-height:1.45;">' + parts.join(' · ') + '</div>';
+    }
+    
     // PERFORMANS: updateCart'ı throttle et (zaten throttle çağrılıyor ama fonksiyon da optimize)
     let updateCartScheduled = false;
     function updateCart() {
@@ -14327,7 +14630,8 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       if (cart.length === 0) {
         itemsDiv.innerHTML = '<div class="cart-empty">Sepet boş</div>';
       } else {
-        itemsDiv.innerHTML = cart.map(item => {
+        var sultanCartSummaryHtml = buildSultanCartVariantSummaryHtml();
+        itemsDiv.innerHTML = sultanCartSummaryHtml + cart.map(item => {
           const lid = item.lineId;
           const esc = String(item.name).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
           const giftCls = item.isGift ? ' cart-item-gift' : '';
@@ -16055,6 +16359,10 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
 
         // 2. Türk kahvesi / Menengiç modalı
         if (_isVisible('turkishCoffeeModal')) { hideTurkishCoffeeModal(); return; }
+
+        // 2b. Sultan şalgam / ayran seçim modalları
+        if (_isVisible('salgamChoiceModal')) { hideSalgamChoiceModal(); return; }
+        if (_isVisible('ayranChoiceModal')) { hideAyranChoiceModal(); return; }
 
         // 3. Tam ekran ürün araması (Sultan / Makara Havzan)
         if (useImmersiveProductSearch && isSultanImmersiveSearchOpen()) { closeSultanImmersiveSearch(); return; }

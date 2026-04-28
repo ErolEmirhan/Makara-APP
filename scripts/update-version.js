@@ -24,9 +24,9 @@ function updateVersionFiles(newVersion) {
     `const APP_VERSION = '${newVersion}';`
   );
   
-  // Manifest link güncelle
+  // Manifest link güncelle (opsiyonel ek sorgu parçalarını da yakala)
   indexHtml = indexHtml.replace(
-    /<link rel="manifest" href="\/manifest\.json\?v=[\d.]+">/,
+    /<link rel="manifest" href="\/manifest\.json[^"]*">/,
     `<link rel="manifest" href="/manifest.json?v=${newVersion}">`
   );
   
@@ -40,10 +40,11 @@ function updateVersionFiles(newVersion) {
   // start_url'e timestamp ekle (PWA güncellemesi için)
   const timestamp = Date.now();
   manifest.start_url = `/?v=${newVersion}&_t=${timestamp}`;
-  manifest.icons = manifest.icons.map(icon => ({
-    ...icon,
-    src: icon.src.replace(/\?v=[\d.]+/, `?v=${newVersion}&t=${timestamp}`)
-  }));
+  // İkon URL'lerini her seferinde temiz sürüm + tek timestamp ile yaz (uzun &&t= zincirleri oluşmasın)
+  manifest.icons = (manifest.icons || []).map((icon) => {
+    const base = String(icon.src || '/patron.png').split('?')[0];
+    return { ...icon, src: `${base}?v=${newVersion}&t=${timestamp}` };
+  });
   fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n', 'utf8');
   console.log('✅ public/manifest.json güncellendi');
 

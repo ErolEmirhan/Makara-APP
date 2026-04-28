@@ -7,17 +7,24 @@
     @apply box-border;
   }
   
-  body {
-    @apply m-0 p-0 font-sans antialiased;
-    background: linear-gradient(135deg, #f0f4ff 0%, #e0e7ff 50%, #fce7f3 100%);
+  html {
+    background: transparent !important;
   }
 
-  body.body-theme-sultan {
-    background: linear-gradient(135deg, #ecfdf5 0%, #d1fae5 50%, #ccfbf1 100%);
+  body {
+    @apply m-0 p-0 font-sans antialiased;
+    /** Electron şeffaf pencerede gerçek masaüstü görünsün; POS gradient App içinde boyanır */
+    background: transparent !important;
   }
 
   #root {
     @apply min-h-screen;
+    background: transparent;
+  }
+
+  /** Eski tema sınıfı — arka plan artık App kökündeki gradient ile */
+  body.body-theme-sultan {
+    background: transparent !important;
   }
 }
 

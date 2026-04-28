@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog, webContents } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, webContents, net } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -1709,10 +1709,19 @@ function createWindow() {
     },
     frame: false,
     title: 'MAKARA POS',
-    backgroundColor: '#f0f4ff',
+    /** Launcher sırasında gerçek masaüstü duvar kağıdı görünsün diye şeffaf */
+    transparent: true,
+    backgroundColor: '#00000000',
     autoHideMenuBar: true, // Menü çubuğunu gizle
-    fullscreen: true, // Tam ekran modu
-    kiosk: true // Kiosk modu - görev çubuğu ve diğer Windows öğelerini gizler
+    fullscreen: false,
+    kiosk: false
+  });
+
+  /** Launcher'dan önce: masaüstü benzeri şeffaf alan (tam ekran kilidi yok) */
+  mainWindow.once('ready-to-show', () => {
+    try {
+      mainWindow.maximize();
+    } catch (_) {}
   });
 
   // F12 ile DevTools aç/kapa
@@ -18693,6 +18702,70 @@ self.addEventListener('fetch', (event) => {
   apiServer = server;
   return { serverURL, localIP };
 }
+
+ipcMain.handle('finish-launcher-ui', () => {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+    mainWindow.setFullScreen(true);
+    mainWindow.setKiosk(true);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: String(e?.message || e) };
+  }
+});
+
+/** Renderer launcher: gerçek HTTP ile internet erişimi (CORS’suz ana süreç) */
+ipcMain.handle('check-internet-connectivity', async () => {
+  const urls = [
+    'https://clients3.google.com/generate_204',
+    'https://connectivitycheck.gstatic.com/generate_204'
+  ];
+  const TIMEOUT_MS = 12000;
+
+  const probe = (url) =>
+    new Promise((resolve) => {
+      let settled = false;
+      const finish = (ok) => {
+        if (settled) return;
+        settled = true;
+        resolve(ok);
+      };
+      try {
+        const request = net.request({ method: 'GET', url });
+        const timer = setTimeout(() => {
+          try {
+            request.abort();
+          } catch (_) {}
+          finish(false);
+        }, TIMEOUT_MS);
+
+        request.on('response', (response) => {
+          clearTimeout(timer);
+          try {
+            response.destroy();
+          } catch (_) {}
+          const code = response.statusCode || 0;
+          finish(code >= 200 && code < 400);
+        });
+        request.on('error', () => {
+          clearTimeout(timer);
+          finish(false);
+        });
+        request.on('abort', () => {
+          clearTimeout(timer);
+          finish(false);
+        });
+        request.end();
+      } catch (_) {
+        finish(false);
+      }
+    });
+
+  for (const url of urls) {
+    if (await probe(url)) return true;
+  }
+  return false;
+});
 
 ipcMain.handle('quit-app', () => {
   flushSaveDatabaseSync();

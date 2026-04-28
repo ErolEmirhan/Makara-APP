@@ -13,6 +13,8 @@ import SplitPaymentModal from './components/SplitPaymentModal';
 import RoleSplash from './components/RoleSplash';
 import SaleSuccessToast from './components/SaleSuccessToast';
 import PrintToast from './components/PrintToast';
+import LauncherScreen from './components/LauncherScreen';
+import SupportNoticeModal, { SUPPORT_NOTICE_STORAGE_KEY } from './components/SupportNoticeModal';
 import SplashScreen from './components/SplashScreen';
 import CatalogSyncProgressBar from './components/CatalogSyncProgressBar';
 import ExitSplash from './components/ExitSplash';
@@ -46,6 +48,8 @@ function readSplashBranchKeyFromStorage() {
 }
 
 function App() {
+  /** İnternet kapısı geçilmeden ana içerik render edilmez */
+  const [launcherPassed, setLauncherPassed] = useState(false);
   const [showSplash, setShowSplash] = useState(true);
   const [splashBranchKey, setSplashBranchKey] = useState(readSplashBranchKeyFromStorage);
   const [selectedBranchKey, setSelectedBranchKey] = useState('');
@@ -104,6 +108,8 @@ function App() {
   const searchInputRef = useRef(null);
   const preparedReceiptsRef = useRef({}); // Sepetteyken hazırlanan fişler (metin)
   const preparedPrintJobIdRef = useRef(null); // Sepetteyken hazırlanan fiş job id — Adisyon Yazdır / Masaya Kaydet anında yazdırılır
+  const [supportNoticeOpen, setSupportNoticeOpen] = useState(false);
+  const supportNoticeOpenedRef = useRef(false);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -155,6 +161,26 @@ function App() {
     document.body.classList.toggle('body-theme-sultan', isSultanBranch);
     return () => document.body.classList.remove('body-theme-sultan');
   }, [isSultanBranch]);
+
+  /** Launcher bittiğinde tam ekran + kiosk’u yeniden aç (şeffaf masaüstü sadece launcher için) */
+  useEffect(() => {
+    if (!launcherPassed || typeof window === 'undefined') return;
+    const api = window.electronAPI;
+    if (!api?.finishLauncherUi) return;
+    api.finishLauncherUi().catch(() => {});
+  }, [launcherPassed]);
+
+  /** İş ortakları duyurusu: splash + şube kapısı hazır olunca (bir daha gösterme işaretlenmedikçe her oturumda) */
+  useEffect(() => {
+    if (!launcherPassed || showSplash || !branchGateResolved) return;
+    if (supportNoticeOpenedRef.current) return;
+    try {
+      if (localStorage.getItem(SUPPORT_NOTICE_STORAGE_KEY) === '1') return;
+    } catch (_) {}
+    supportNoticeOpenedRef.current = true;
+    const id = window.setTimeout(() => setSupportNoticeOpen(true), 520);
+    return () => clearTimeout(id);
+  }, [launcherPassed, showSplash, branchGateResolved]);
 
   // Açılış splash’i için güncel şube (Electron; ilk karede localStorage yedeği)
   useEffect(() => {
@@ -1200,6 +1226,10 @@ function App() {
     }
   };
 
+  if (!launcherPassed) {
+    return <LauncherScreen onPassed={() => setLauncherPassed(true)} />;
+  }
+
   if (!showSplash && !isBranchReady && !branchGateResolved) {
     return (
       <>
@@ -1211,6 +1241,7 @@ function App() {
           <div className="h-12 w-12 rounded-full border-4 border-pink-200 border-t-pink-600 animate-spin" />
           <p className="text-slate-600 font-medium text-center">Şube bağlanıyor…</p>
         </div>
+        <SupportNoticeModal open={supportNoticeOpen} onClose={() => setSupportNoticeOpen(false)} />
       </>
     );
   }
@@ -1320,6 +1351,7 @@ function App() {
           </div>
 
         </div>
+        <SupportNoticeModal open={supportNoticeOpen} onClose={() => setSupportNoticeOpen(false)} />
       </>
     );
   };
@@ -1740,6 +1772,8 @@ function App() {
           onClose={() => setToast({ message: '', type: 'info', show: false })}
         />
       )}
+
+      <SupportNoticeModal open={supportNoticeOpen} onClose={() => setSupportNoticeOpen(false)} />
 
       {showSuriciNameModal && (
         <div className="fixed inset-0 z-[120] bg-black/55 backdrop-blur-sm flex items-center justify-center p-4">

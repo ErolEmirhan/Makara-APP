@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  checkInternetConnectivity: () => ipcRenderer.invoke('check-internet-connectivity'),
+  /** Launcher kapandıktan sonra POS için tam ekran/kiosk */
+  finishLauncherUi: () => ipcRenderer.invoke('finish-launcher-ui'),
   getBranchOptions: () => ipcRenderer.invoke('get-branch-options'),
   getActiveBranch: () => ipcRenderer.invoke('get-active-branch'),
   activateBranch: (branchKey) => ipcRenderer.invoke('activate-branch', branchKey),

@@ -39,15 +39,15 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
   if (!products.length) {
     return (
       <div
-        className="pos-catalog flex-1 flex flex-col items-center justify-center min-h-[12rem] rounded-[var(--pos-radius-lg)] border border-dashed border-slate-200 bg-slate-50/50 text-center px-6 py-10 theme-sultan:border-emerald-200/80"
+        className="pos-catalog flex-1 flex flex-col items-center justify-center min-h-[12rem] rounded-[var(--pos-radius-lg)] border border-dashed border-slate-200 dark:border-slate-600 bg-slate-50/50 dark:bg-slate-900/40 text-center px-6 py-10 theme-sultan:border-emerald-200/80 dark:theme-sultan:border-emerald-800/60"
         role="status"
       >
-        <p className="text-slate-500 font-medium" style={{ fontSize: 'var(--pos-fs-product)' }}>
+        <p className="text-slate-500 dark:text-slate-300 font-medium" style={{ fontSize: 'var(--pos-fs-product)' }}>
           {isSearchMode
             ? 'Tüm kategorilerde eşleşen ürün yok.'
             : 'Bu kategoride gösterilecek ürün yok.'}
         </p>
-        <p className="text-slate-400 mt-2" style={{ fontSize: 'var(--pos-fs-meta)' }}>
+        <p className="text-slate-400 dark:text-slate-500 mt-2" style={{ fontSize: 'var(--pos-fs-meta)' }}>
           {isSearchMode
             ? 'Farklı bir arama deneyin veya aramayı temizleyip kategori seçin.'
             : 'Başka bir kategori seçin.'}
@@ -78,12 +78,12 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
               key={product.id}
               role="listitem"
               className={`
-                group relative flex flex-col rounded-[var(--pos-radius-md)] border bg-white overflow-hidden
+                group relative flex flex-col rounded-[var(--pos-radius-md)] border bg-white dark:bg-slate-800/95 overflow-hidden
                 transition-[box-shadow,transform,border-color] duration-200 ease-out touch-manipulation
                 ${
                   isOutOfStock
-                    ? 'border-slate-200 opacity-60 cursor-not-allowed grayscale-[0.2]'
-                    : 'border-slate-200/90 cursor-pointer hover:border-slate-300 hover:shadow-[0_6px_20px_-8px_rgba(15,23,42,0.14)] active:scale-[0.99] theme-sultan:hover:border-emerald-200/90'
+                    ? 'border-slate-200 dark:border-slate-600 opacity-60 cursor-not-allowed grayscale-[0.2]'
+                    : 'border-slate-200/90 dark:border-slate-600/90 cursor-pointer hover:border-slate-300 dark:hover:border-slate-500 hover:shadow-[0_6px_20px_-8px_rgba(15,23,42,0.14)] dark:hover:shadow-[0_8px_24px_-8px_rgba(0,0,0,0.45)] active:scale-[0.99] theme-sultan:hover:border-emerald-200/90 dark:theme-sultan:hover:border-emerald-600/70'
                 }
               `}
               style={{
@@ -110,8 +110,8 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
                 <div className="flex flex-col flex-1 min-w-0 py-3 pl-3 pr-3">
                   <div className="flex items-start justify-between gap-2 min-w-0">
                     <h3
-                      className={`font-semibold text-slate-900 break-words hyphens-auto flex-1 min-w-0 ${
-                        isOutOfStock ? 'text-slate-500' : ''
+                      className={`font-semibold text-slate-900 dark:text-slate-100 break-words hyphens-auto flex-1 min-w-0 ${
+                        isOutOfStock ? 'text-slate-500 dark:text-slate-400' : ''
                       }`}
                       style={{ fontSize: 'var(--pos-fs-product)', lineHeight: 1.35 }}
                     >
@@ -119,7 +119,7 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
                     </h3>
                     {!isOutOfStock && (
                       <span
-                        className="shrink-0 tabular-nums font-bold text-slate-900 bg-slate-50 border border-slate-200/90 rounded-[var(--pos-radius-sm)] px-2 py-0.5 theme-sultan:bg-emerald-50/80 theme-sultan:border-emerald-200/60"
+                        className="shrink-0 tabular-nums font-bold text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-700/90 border border-slate-200/90 dark:border-slate-600 rounded-[var(--pos-radius-sm)] px-2 py-0.5 theme-sultan:bg-emerald-50/80 theme-sultan:border-emerald-200/60 dark:theme-sultan:bg-emerald-950/50 dark:theme-sultan:border-emerald-700/60"
                         style={{ fontSize: 'var(--pos-fs-price)', lineHeight: 1.2 }}
                       >
                         ₺{Number(product.price).toFixed(2)}
@@ -148,7 +148,7 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
 
                   {product.description ? (
                     <p
-                      className="text-slate-500 mt-1.5 line-clamp-2 text-left"
+                      className="text-slate-500 dark:text-slate-400 mt-1.5 line-clamp-2 text-left"
                       style={{ fontSize: 'var(--pos-fs-meta)', lineHeight: 1.4 }}
                       title={product.description}
                     >
@@ -156,7 +156,7 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
                     </p>
                   ) : null}
 
-                  <div className="mt-auto pt-2.5 flex items-center justify-between gap-2 border-t border-slate-100">
+                  <div className="mt-auto pt-2.5 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-700">
                     {isOutOfStock ? (
                       <span
                         className="font-semibold text-slate-500 tabular-nums"
@@ -166,7 +166,7 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
                       </span>
                     ) : (
                       <span
-                        className="text-slate-400 font-medium"
+                        className="text-slate-400 dark:text-slate-500 font-medium"
                         style={{ fontSize: 'var(--pos-fs-overline)' }}
                       >
                         Sepete eklemek için dokunun
@@ -174,7 +174,7 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
                     )}
                     {!isOutOfStock && (
                       <span
-                        className="shrink-0 rounded-[var(--pos-radius-sm)] px-2 py-0.5 font-semibold text-pink-700 bg-pink-50 border border-pink-100 opacity-80 group-hover:opacity-100 transition-opacity theme-sultan:text-emerald-800 theme-sultan:bg-emerald-50 theme-sultan:border-emerald-100 max-sm:opacity-100"
+                        className="shrink-0 rounded-[var(--pos-radius-sm)] px-2 py-0.5 font-semibold text-pink-700 bg-pink-50 border border-pink-100 opacity-80 group-hover:opacity-100 transition-opacity theme-sultan:text-emerald-800 theme-sultan:bg-emerald-50 theme-sultan:border-emerald-100 dark:text-pink-200 dark:bg-pink-950/60 dark:border-pink-800/60 dark:theme-sultan:text-emerald-200 dark:theme-sultan:bg-emerald-950/50 dark:theme-sultan:border-emerald-800/50 max-sm:opacity-100"
                         style={{ fontSize: 'var(--pos-fs-overline)' }}
                       >
                         Ekle

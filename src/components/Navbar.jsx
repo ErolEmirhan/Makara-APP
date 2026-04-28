@@ -4,8 +4,9 @@ import PinModal from './PinModal';
 import SettingsSplash from './SettingsSplash';
 import DateTimeDisplay from './DateTimeDisplay';
 import Toast from './Toast';
+import ThemeToggle from './ThemeToggle';
 
-const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit, onLogout, onOpenSettings, systemTitle = 'Makara Satış Sistemi', isSuriciBranch = false, isSultanBranch = false }) => {
+const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit, onLogout, onOpenSettings, systemTitle = 'Makara Satış Sistemi', isSuriciBranch = false, isSultanBranch = false, themeMode = 'light', setThemeMode }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showHamburgerMenu, setShowHamburgerMenu] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -390,14 +391,14 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
 
   return (
-    <nav className="h-20 bg-white/90 backdrop-blur-xl border-b border-pink-200 theme-sultan:border-emerald-200 px-8 flex items-center justify-between shadow-lg relative z-50">
+    <nav className="h-20 bg-white/90 dark:bg-slate-900/92 backdrop-blur-xl border-b border-pink-200 dark:border-slate-700/90 theme-sultan:border-emerald-800/40 px-8 flex items-center justify-between shadow-lg relative z-50">
       {/* Sol üst: Hamburger menü butonu */}
       <div className="flex items-center space-x-4">
         <div ref={hamburgerMenuRef} className="flex items-center">
           <button
             type="button"
             onClick={toggleHamburgerMenu}
-            className="w-11 h-11 rounded-xl flex flex-col items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 hover:text-gray-900 transition-all duration-200 shadow-sm hover:shadow"
+            className="w-11 h-11 rounded-xl flex flex-col items-center justify-center gap-1.5 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 hover:text-gray-900 dark:hover:text-white transition-all duration-200 shadow-sm hover:shadow"
             aria-label="Menüyü aç"
             title="Menü"
           >
@@ -408,7 +409,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
 
         {!isSultanBranch && (
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-lg overflow-hidden bg-white p-1">
+          <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-lg overflow-hidden bg-white dark:bg-slate-800 p-1 ring-1 ring-slate-200/80 dark:ring-slate-600">
             <img
               src="./logo.png"
               alt="Makara Logo"
@@ -427,14 +428,17 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             className={
               isSultanBranch
                 ? 'text-lg sm:text-xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 bg-clip-text text-transparent'
-                : 'text-lg font-bold text-pink-500 theme-sultan:text-emerald-500'
+                : 'text-lg font-bold text-pink-500 dark:text-pink-400 theme-sultan:text-emerald-500 dark:theme-sultan:text-emerald-400'
             }
           >
             {systemTitle}
           </h1>
-          <p className="text-xs text-gray-500 font-medium">v39.0.0</p>
+          <p className="text-xs text-gray-500 dark:text-slate-400 font-medium">v40.0.0</p>
         </div>
-        <div className="ml-4 pl-4 border-l border-gray-300">
+        <div className="ml-4 pl-4 border-l border-gray-300 dark:border-slate-600 flex items-center gap-3">
+          {typeof setThemeMode === 'function' && (
+            <ThemeToggle themeMode={themeMode} onThemeChange={setThemeMode} />
+          )}
           <DateTimeDisplay />
         </div>
       </div>
@@ -442,7 +446,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       <div className="flex items-center space-x-4">
         <button
           onClick={handleOpenMobileModal}
-          className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-zinc-900 text-white hover:bg-black hover:shadow-lg"
+          className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-zinc-900 dark:bg-violet-700 text-white hover:bg-black dark:hover:bg-violet-600 hover:shadow-lg"
         >
           <div className="flex items-center space-x-2">
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -456,7 +460,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
             currentView === 'tables'
               ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg transform scale-105'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
+              : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 hover:text-gray-800 dark:hover:text-white'
           }`}
         >
           <div className="flex items-center space-x-2">
@@ -471,7 +475,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
             currentView === 'pos'
               ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg transform scale-105'
-              : 'bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800'
+              : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 hover:text-gray-800 dark:hover:text-white'
           }`}
         >
           <div className="flex items-center space-x-2">
@@ -491,7 +495,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           <>
             <button
               onClick={() => setShowSettingsSplash(true)}
-              className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-gray-100 text-gray-600 hover:bg-gray-200 hover:text-gray-800"
+              className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 hover:text-gray-800 dark:hover:text-white"
             >
               <div className="flex items-center space-x-2">
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -504,14 +508,14 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           </>
         )}
 
-        <div className="relative ml-4 pl-4 border-l border-gray-300" ref={menuRef}>
+        <div className="relative ml-4 pl-4 border-l border-gray-300 dark:border-slate-600" ref={menuRef}>
           <button
             onClick={() => setShowUserMenu(!showUserMenu)}
             className="flex items-center space-x-3 hover:opacity-80 transition-opacity"
           >
             <div className="text-right">
-              <p className="text-xs text-gray-500">Kullanıcı Tipi</p>
-              <p className="text-sm font-medium text-gray-800 flex items-center space-x-1">
+              <p className="text-xs text-gray-500 dark:text-slate-400">Kullanıcı Tipi</p>
+              <p className="text-sm font-medium text-gray-800 dark:text-slate-100 flex items-center space-x-1">
                 <span>{userType}</span>
                 <svg className={`w-4 h-4 transition-transform ${showUserMenu ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -531,10 +535,10 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
           {/* Dropdown Menu - Modern & Professional */}
           {showUserMenu && (
-            <div className="absolute right-0 top-full mt-3 w-64 bg-white rounded-xl shadow-lg border border-gray-200 overflow-hidden animate-fade-in z-[100]">
+            <div className="absolute right-0 top-full mt-3 w-64 bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-gray-200 dark:border-slate-600 overflow-hidden animate-fade-in z-[100]">
               {/* Header */}
-              <div className="px-4 py-3 border-b border-gray-100 bg-gradient-to-r from-blue-50/50 to-indigo-50/50">
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">Kullanıcı Tipi</p>
+              <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-700 bg-gradient-to-r from-blue-50/50 to-indigo-50/50 dark:from-slate-700/80 dark:to-slate-800/80">
+                <p className="text-xs font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider">Kullanıcı Tipi</p>
               </div>
 
               {/* Options */}
@@ -544,21 +548,21 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                   className={`w-full flex items-center space-x-3 p-3.5 rounded-lg transition-all duration-200 ${
                     userType === 'Admin'
                       ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md'
-                      : 'hover:bg-blue-50/50 text-gray-700'
+                      : 'hover:bg-blue-50/50 dark:hover:bg-slate-700/80 text-gray-700 dark:text-slate-200'
                   }`}
                 >
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
                     userType === 'Admin'
                       ? 'bg-white/20'
-                      : 'bg-blue-100'
+                      : 'bg-blue-100 dark:bg-blue-900/50'
                   }`}>
                     <svg className={`w-5 h-5 ${userType === 'Admin' ? 'text-white' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                     </svg>
                   </div>
                   <div className="text-left flex-1 min-w-0">
-                    <p className={`font-semibold text-sm ${userType === 'Admin' ? 'text-white' : 'text-gray-900'}`}>Admin</p>
-                    <p className={`text-xs ${userType === 'Admin' ? 'text-white/80' : 'text-gray-500'}`}>Tüm yetkilere sahip</p>
+                    <p className={`font-semibold text-sm ${userType === 'Admin' ? 'text-white' : 'text-gray-900 dark:text-slate-100'}`}>Admin</p>
+                    <p className={`text-xs ${userType === 'Admin' ? 'text-white/80' : 'text-gray-500 dark:text-slate-400'}`}>Tüm yetkilere sahip</p>
                   </div>
                   {userType === 'Admin' && (
                     <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -572,21 +576,21 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                   className={`w-full flex items-center space-x-3 p-3.5 rounded-lg transition-all duration-200 mt-1 ${
                     userType === 'Personel'
                       ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-indigo-600 theme-sultan:to-teal-600 text-white shadow-md'
-                      : 'hover:bg-pink-50 theme-sultan:hover:bg-pink-50 theme-sultan:bg-emerald-50/50 text-gray-700'
+                      : 'hover:bg-pink-50 theme-sultan:hover:bg-pink-50 dark:hover:bg-slate-700/80 theme-sultan:bg-emerald-50/50 dark:theme-sultan:bg-emerald-950/30 text-gray-700 dark:text-slate-200'
                   }`}
                 >
                   <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
                     userType === 'Personel'
                       ? 'bg-white/20'
-                      : 'bg-pink-100 theme-sultan:bg-emerald-100'
+                      : 'bg-pink-100 theme-sultan:bg-emerald-100 dark:bg-pink-900/40 dark:theme-sultan:bg-emerald-900/40'
                   }`}>
                     <svg className={`w-5 h-5 ${userType === 'Personel' ? 'text-white' : 'text-pink-600 theme-sultan:text-emerald-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                     </svg>
                   </div>
                   <div className="text-left flex-1 min-w-0">
-                    <p className={`font-semibold text-sm ${userType === 'Personel' ? 'text-white' : 'text-gray-900'}`}>Personel</p>
-                    <p className={`text-xs ${userType === 'Personel' ? 'text-white/80' : 'text-gray-500'}`}>Satış yapabilir</p>
+                    <p className={`font-semibold text-sm ${userType === 'Personel' ? 'text-white' : 'text-gray-900 dark:text-slate-100'}`}>Personel</p>
+                    <p className={`text-xs ${userType === 'Personel' ? 'text-white/80' : 'text-gray-500 dark:text-slate-400'}`}>Satış yapabilir</p>
                   </div>
                   {userType === 'Personel' && (
                     <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -597,10 +601,10 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               </div>
 
               {/* Status Info */}
-              <div className={`px-4 py-2.5 border-t border-gray-100 ${
+              <div className={`px-4 py-2.5 border-t border-gray-100 dark:border-slate-700 ${
                 userType === 'Admin' 
-                  ? 'bg-blue-50/50' 
-                  : 'bg-pink-50 theme-sultan:bg-emerald-50/50'
+                  ? 'bg-blue-50/50 dark:bg-slate-900/60' 
+                  : 'bg-pink-50 theme-sultan:bg-emerald-50/50 dark:bg-slate-900/50 dark:theme-sultan:bg-emerald-950/40'
               }`}>
                 <p className={`text-xs text-center font-medium ${
                   userType === 'Admin' 
@@ -612,10 +616,10 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               </div>
 
               {/* Çıkış Butonu */}
-              <div className="border-t border-gray-100 p-2">
+              <div className="border-t border-gray-100 dark:border-slate-700 p-2">
                 <button
                   onClick={() => setShowExitConfirm(true)}
-                  className="w-full flex items-center justify-center space-x-2 p-3 rounded-lg hover:bg-red-50 transition-all duration-200 text-gray-600 hover:text-red-600"
+                  className="w-full flex items-center justify-center space-x-2 p-3 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/40 transition-all duration-200 text-gray-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400"
                   title="Çıkış Yap"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -640,15 +644,15 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           />
           <div
             id="hamburger-panel"
-            className="fixed left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-white shadow-2xl flex flex-col border-r border-gray-200"
+            className="fixed left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-white dark:bg-slate-900 shadow-2xl flex flex-col border-r border-gray-200 dark:border-slate-700"
             style={{ zIndex: 9999, animation: 'slideInLeft 0.2s ease-out' }}
           >
-            <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-              <span className="font-bold text-gray-800">Menü</span>
+            <div className="p-4 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
+              <span className="font-bold text-gray-800 dark:text-slate-100">Menü</span>
               <button
                 type="button"
                 onClick={() => setShowHamburgerMenu(false)}
-                className="w-9 h-9 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-600"
+                className="w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 flex items-center justify-center text-gray-600 dark:text-slate-300"
                 aria-label="Menüyü kapat"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -659,7 +663,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             <div className="flex-1 overflow-y-auto py-2">
               <button
                 onClick={() => closeHamburgerAnd(() => setCurrentView('pos'))}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${currentView === 'pos' ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-800 theme-sultan:text-emerald-800' : 'text-gray-700'}`}
+                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors ${currentView === 'pos' ? 'bg-pink-50 theme-sultan:bg-emerald-50 dark:bg-pink-950/40 dark:theme-sultan:bg-emerald-950/40 text-pink-800 theme-sultan:text-emerald-800 dark:text-pink-200 dark:theme-sultan:text-emerald-200' : 'text-gray-700 dark:text-slate-200'}`}
               >
                 <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -668,7 +672,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               </button>
               <button
                 onClick={() => closeHamburgerAnd(() => setCurrentView('tables'))}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors ${currentView === 'tables' ? 'bg-pink-50 theme-sultan:bg-emerald-50 text-pink-800 theme-sultan:text-emerald-800' : 'text-gray-700'}`}
+                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors ${currentView === 'tables' ? 'bg-pink-50 theme-sultan:bg-emerald-50 dark:bg-pink-950/40 dark:theme-sultan:bg-emerald-950/40 text-pink-800 theme-sultan:text-emerald-800 dark:text-pink-200 dark:theme-sultan:text-emerald-200' : 'text-gray-700 dark:text-slate-200'}`}
               >
                 <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
@@ -677,7 +681,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               </button>
               <button
                 onClick={() => closeHamburgerAnd(handleOpenMobileModal)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
               >
                 <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
@@ -687,7 +691,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               {userType === 'Admin' && (
                 <button
                   onClick={() => closeHamburgerAnd(() => setShowSettingsSplash(true))}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
                 >
                   <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -696,10 +700,10 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                   <span className="font-medium">Ayarlar</span>
                 </button>
               )}
-              <div className="my-2 border-t border-gray-100" />
+              <div className="my-2 border-t border-gray-100 dark:border-slate-700" />
               <button
                 onClick={toggleFullscreen}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
               >
                 <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
@@ -709,7 +713,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               {typeof window !== 'undefined' && window.electronAPI?.checkForUpdates && (
                 <button
                   onClick={handleCheckUpdates}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
                 >
                   <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -720,7 +724,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               {userType === 'Admin' && (
                 <button
                   onClick={handleQuickLock}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 hover:bg-gray-50 transition-colors"
+                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
                 >
                   <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
@@ -728,10 +732,10 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                   <span className="font-medium">Hızlı Kilit</span>
                 </button>
               )}
-              <div className="my-2 border-t border-gray-100" />
+              <div className="my-2 border-t border-gray-100 dark:border-slate-700" />
               <button
                 onClick={() => closeHamburgerAnd(() => setShowExitConfirm(true))}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left text-red-600 hover:bg-red-50 transition-colors"
+                className="w-full flex items-center gap-3 px-4 py-3 text-left text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
               >
                 <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
@@ -747,21 +751,21 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       {/* Çıkış Onay Modal */}
       {showExitConfirm && createPortal(
         <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-start justify-center pt-8 z-[9999] animate-fade-in" style={{ zIndex: 9999 }}>
-          <div className="bg-white/95 backdrop-blur-xl border-2 border-red-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl animate-scale-in">
+          <div className="bg-white/95 dark:bg-slate-900/98 backdrop-blur-xl border-2 border-red-200 dark:border-red-900/60 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl animate-scale-in">
             <div className="text-center mb-6">
               <div className="w-20 h-20 mx-auto mb-4 rounded-full bg-gradient-to-br from-red-500 to-pink-500 theme-sultan:to-emerald-500 flex items-center justify-center">
                 <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>
               </div>
-              <h3 className="text-2xl font-bold text-gray-800 mb-2">Çıkış Yap</h3>
-                  <p className="text-gray-600">Çıkış yapıp giriş ekranına dönmek istediğinize emin misiniz?</p>
+              <h3 className="text-2xl font-bold text-gray-800 dark:text-slate-100 mb-2">Çıkış Yap</h3>
+                  <p className="text-gray-600 dark:text-slate-400">Çıkış yapıp giriş ekranına dönmek istediğinize emin misiniz?</p>
             </div>
             
             <div className="flex space-x-4">
               <button
                 onClick={() => setShowExitConfirm(false)}
-                className="flex-1 py-4 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-600 hover:text-gray-800 font-semibold text-lg transition-all duration-300"
+                className="flex-1 py-4 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 rounded-xl text-gray-600 dark:text-slate-300 hover:text-gray-800 dark:hover:text-white font-semibold text-lg transition-all duration-300"
               >
                 İptal
               </button>

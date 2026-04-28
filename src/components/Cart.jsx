@@ -29,7 +29,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
           </div>
           <div>
             <h2 className="text-2xl font-bold gradient-text">Sepet</h2>
-            <p className="text-sm text-gray-500">{cart.length > 0 ? `${cart.length} ürün` : 'Ürün seçin'}</p>
+            <p className="text-sm text-gray-500 dark:text-slate-400">{cart.length > 0 ? `${cart.length} ürün` : 'Ürün seçin'}</p>
           </div>
         </div>
       </div>
@@ -37,11 +37,11 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
       <div className="flex-1 overflow-y-auto scrollbar-custom space-y-2 mb-6">
         {cart.length === 0 ? (
           <div className="text-center py-12">
-            <svg className="w-24 h-24 mx-auto text-pink-200 theme-sultan:text-emerald-200 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-24 h-24 mx-auto text-pink-200 theme-sultan:text-emerald-200 dark:text-pink-800/80 dark:theme-sultan:text-emerald-800/70 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
             </svg>
-            <p className="text-gray-600">Sepetiniz boş</p>
-            <p className="text-sm text-gray-500 mt-2">Ürün eklemek için tıklayın</p>
+            <p className="text-gray-600 dark:text-slate-300">Sepetiniz boş</p>
+            <p className="text-sm text-gray-500 dark:text-slate-500 mt-2">Ürün eklemek için tıklayın</p>
           </div>
         ) : (
           cart.map((item) => {
@@ -52,10 +52,10 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
             return (
             <div 
               key={item.id} 
-              className={`bg-white rounded-lg border transition-all duration-200 animate-fade-in ${
+              className={`bg-white dark:bg-slate-800/95 rounded-lg border transition-all duration-200 animate-fade-in ${
                 isGift 
-                  ? 'border-fuchsia-200 theme-sultan:border-green-200 bg-gradient-to-br from-fuchsia-50 theme-sultan:from-green-50/40 to-white shadow-sm' 
-                  : 'border-gray-200/60 hover:border-gray-300/80 hover:shadow-md shadow-sm'
+                  ? 'border-fuchsia-200 theme-sultan:border-green-200 bg-gradient-to-br from-fuchsia-50 theme-sultan:from-green-50/40 to-white dark:from-fuchsia-950/40 dark:to-slate-900 shadow-sm dark:border-fuchsia-800/60' 
+                  : 'border-gray-200/60 dark:border-slate-600 hover:border-gray-300/80 dark:hover:border-slate-500 hover:shadow-md shadow-sm'
               }`}
               style={{ padding: '14px' }}
             >
@@ -65,7 +65,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-2">
                     <h4 className={`font-semibold text-base leading-tight flex-1 truncate ${
-                      isGift ? 'text-gray-400 line-through' : 'text-gray-900'
+                      isGift ? 'text-gray-400 line-through dark:text-slate-500' : 'text-gray-900 dark:text-slate-100'
                     }`}>
                       {item.name}
                     </h4>
@@ -81,32 +81,32 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                   
                   {/* Alt Satır - Birim Fiyat ve Miktar */}
                   <div className="flex items-center gap-4">
-                    <span className="text-xs text-gray-500">Birim: <span className={`font-medium ${isGift ? 'text-gray-400 line-through' : 'text-gray-700'}`}>₺{item.price.toFixed(2)}</span></span>
+                    <span className="text-xs text-gray-500 dark:text-slate-400">Birim: <span className={`font-medium ${isGift ? 'text-gray-400 line-through dark:text-slate-500' : 'text-gray-700 dark:text-slate-300'}`}>₺{item.price.toFixed(2)}</span></span>
                     
                     {/* Miktar Kontrolü */}
-                    <div className="flex items-center gap-1 bg-gray-50 rounded-md p-0.5 border border-gray-200/60">
+                    <div className="flex items-center gap-1 bg-gray-50 dark:bg-slate-900/80 rounded-md p-0.5 border border-gray-200/60 dark:border-slate-600">
                       <button
                         onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
-                        className="w-7 h-7 bg-white hover:bg-gray-100 active:bg-gray-200 border border-gray-200 hover:border-gray-300 rounded flex items-center justify-center transition-all duration-150 active:scale-95"
+                        className="w-7 h-7 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700 active:bg-gray-200 dark:active:bg-slate-600 border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 rounded flex items-center justify-center transition-all duration-150 active:scale-95"
                         title="Azalt"
                       >
-                        <svg className="w-3.5 h-3.5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                        <svg className="w-3.5 h-3.5 text-gray-700 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
                         </svg>
                       </button>
                       
                       <div className="w-8 h-7 flex items-center justify-center">
-                        <span className="text-sm font-bold text-gray-900">
+                        <span className="text-sm font-bold text-gray-900 dark:text-slate-100">
                           {item.quantity}
                         </span>
                       </div>
                       
                       <button
                         onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
-                        className="w-7 h-7 bg-white hover:bg-gray-100 active:bg-gray-200 border border-gray-200 hover:border-gray-300 rounded flex items-center justify-center transition-all duration-150 active:scale-95"
+                        className="w-7 h-7 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700 active:bg-gray-200 dark:active:bg-slate-600 border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 rounded flex items-center justify-center transition-all duration-150 active:scale-95"
                         title="Artır"
                       >
-                        <svg className="w-3.5 h-3.5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                        <svg className="w-3.5 h-3.5 text-gray-700 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                         </svg>
                       </button>
@@ -155,10 +155,10 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
         )}
       </div>
 
-      <div className="border-t border-pink-200 theme-sultan:border-emerald-200 pt-6 space-y-4">
+      <div className="border-t border-pink-200 theme-sultan:border-emerald-200 dark:border-slate-600 pt-6 space-y-4">
         {cart.length > 0 && (
           <div className="flex justify-between items-center pb-4">
-            <span className="text-sm text-gray-500">Sepeti temizle</span>
+            <span className="text-sm text-gray-500 dark:text-slate-400">Sepeti temizle</span>
             <button
               onClick={onClearCart}
               className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
@@ -169,11 +169,11 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
         )}
 
         <div className="flex justify-between items-center">
-          <span className="text-gray-600">Ara Toplam</span>
-          <span className="text-gray-800 font-medium">₺{totalAmount.toFixed(2)}</span>
+          <span className="text-gray-600 dark:text-slate-400">Ara Toplam</span>
+          <span className="text-gray-800 dark:text-slate-200 font-medium">₺{totalAmount.toFixed(2)}</span>
         </div>
         
-        <div className="flex justify-between items-center text-lg font-bold text-gray-900">
+        <div className="flex justify-between items-center text-lg font-bold text-gray-900 dark:text-slate-100">
           <span>TOPLAM</span>
           <span className="text-3xl bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-400 theme-sultan:to-emerald-400 bg-clip-text text-transparent">
             ₺{totalAmount.toFixed(2)}
@@ -184,7 +184,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
         {cart.length > 0 && (
           <button
             onClick={() => setShowNoteModal(true)}
-            className="w-full py-2 px-3 rounded-lg text-sm font-medium transition-all duration-300 bg-amber-50 hover:bg-amber-100 border border-amber-200 hover:border-amber-300 text-amber-700 flex items-center justify-between"
+            className="w-full py-2 px-3 rounded-lg text-sm font-medium transition-all duration-300 bg-amber-50 dark:bg-amber-950/35 hover:bg-amber-100 dark:hover:bg-amber-950/55 border border-amber-200 dark:border-amber-800/70 hover:border-amber-300 dark:hover:border-amber-700 text-amber-700 dark:text-amber-300 flex items-center justify-between"
           >
             <div className="flex items-center space-x-2">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -207,7 +207,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
               disabled={cart.length === 0 || isSavingToTable}
               className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 flex items-center justify-center gap-2 ${
                 cart.length === 0 || isSavingToTable
-                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  ? 'bg-gray-600 dark:bg-slate-700 text-gray-400 dark:text-slate-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
               }`}
             >
@@ -232,7 +232,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
               disabled={cart.length === 0}
               className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
                 cart.length === 0
-                  ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                  ? 'bg-gray-600 dark:bg-slate-700 text-gray-400 dark:text-slate-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
               }`}
             >
@@ -250,7 +250,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
             disabled={cart.length === 0}
             className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
               cart.length === 0
-                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                ? 'bg-gray-600 dark:bg-slate-700 text-gray-400 dark:text-slate-500 cursor-not-allowed'
                 : 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-lime-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
             }`}
           >
@@ -267,7 +267,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
       {/* Order Note Modal */}
       {showNoteModal && createPortal(
         <div className="fixed inset-0 bg-black/80 backdrop-blur-lg flex items-center justify-center z-[999] animate-fade-in px-4">
-          <div className="bg-white rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden border border-slate-200/80 dark:border-slate-600">
             <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500"></div>
             
             <button
@@ -275,9 +275,9 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                 setShowNoteModal(false);
                 setNoteText(orderNote || '');
               }}
-              className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-all hover:rotate-90"
+              className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 flex items-center justify-center transition-all hover:rotate-90"
             >
-              <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-6 h-6 text-gray-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
@@ -289,12 +289,12 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                 </svg>
               </div>
               <h2 className="text-2xl font-bold gradient-text mb-2">Sipariş Notu</h2>
-              <p className="text-sm text-gray-500">Sipariş içeriği ile ilgili not ekleyin</p>
+              <p className="text-sm text-gray-500 dark:text-slate-400">Sipariş içeriği ile ilgili not ekleyin</p>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">
                   Not (Örn: Sütü az olacak, Ekstra peynir, vs.)
                 </label>
                 <textarea
@@ -309,12 +309,12 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                     const newValue = e.target.value;
                     setNoteText(newValue);
                   }}
-                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 focus:border-amber-500 focus:outline-none transition-all resize-none"
+                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800/80 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-500 focus:outline-none transition-all resize-none"
                   placeholder="Sipariş notunuzu buraya yazın..."
                   rows="4"
                   maxLength={200}
                 />
-                <p className="text-xs text-gray-400 mt-1 text-right">{noteText.length}/200</p>
+                <p className="text-xs text-gray-400 dark:text-slate-500 mt-1 text-right">{noteText.length}/200</p>
               </div>
 
               <div className="flex space-x-3">
@@ -323,7 +323,7 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
                     setShowNoteModal(false);
                     setNoteText(orderNote || '');
                   }}
-                  className="flex-1 px-6 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-all"
+                  className="flex-1 px-6 py-3 bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200 rounded-xl font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"
                 >
                   İptal
                 </button>

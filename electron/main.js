@@ -187,6 +187,8 @@ let branchSettingsPath = null;
 let categoriesRealtimeUnsubscribe = null;
 let productsRealtimeUnsubscribe = null;
 let broadcastsRealtimeUnsubscribe = null;
+/** Makara Havzan: masalar projesi `tables` koleksiyonu — çoklu kasa PC senkronu (Firestore → yerel db) */
+let makaraTablesRealtimeUnsubscribe = null;
 /** Şube değişince eski arka plan warmup iptal etmek için */
 let branchWarmupGeneration = 0;
 let saveDatabaseTimer = null;
@@ -382,6 +384,7 @@ async function initializeFirebaseForBranch(branchKey) {
   try { categoriesRealtimeUnsubscribe?.(); } catch (_) {}
   try { productsRealtimeUnsubscribe?.(); } catch (_) {}
   try { broadcastsRealtimeUnsubscribe?.(); } catch (_) {}
+  try { stopMakaraTablesFirestorePullListener(); } catch (_) {}
   categoriesRealtimeUnsubscribe = null;
   productsRealtimeUnsubscribe = null;
   broadcastsRealtimeUnsubscribe = null;
@@ -453,9 +456,15 @@ async function initializeFirebaseForBranch(branchKey) {
     }
 
     console.log(`✅ Firebase branch aktif: ${branch.key}`);
+    if (branch.key === 'makara') {
+      startMakaraTablesFirestorePullListener();
+    } else {
+      stopMakaraTablesFirestorePullListener();
+    }
     return true;
   } catch (error) {
     console.error(`❌ Firebase branch başlatılamadı (${branch.key}):`, error);
+    try { stopMakaraTablesFirestorePullListener(); } catch (_) {}
     firestore = null;
     firebaseWriteBatch = null;
     storage = null;
@@ -19287,6 +19296,197 @@ ipcMain.handle('send-broadcast-message', async (event, message) => {
   return { success: true, message: 'Mesaj başarıyla gönderildi' };
 });
 
+function makaraRoundMoney(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function makaraTableLineFingerprint(obj) {
+  const pid = obj.product_id;
+  const pidStr = typeof pid === 'string' ? pid : String(pid);
+  const note = String(obj.item_note || '').trim();
+  return [
+    pidStr,
+    Number(obj.quantity) || 0,
+    makaraRoundMoney(obj.price),
+    obj.isGift ? 1 : 0,
+    note,
+    obj.is_paid ? 1 : 0,
+    Number(obj.paid_quantity) || 0
+  ].join('|');
+}
+
+function makaraLocalPendingFingerprintForTable(tableId) {
+  const order = (db.tableOrders || []).find((o) => o.table_id === tableId && o.status === 'pending');
+  if (!order) return 'empty';
+  const items = (db.tableOrderItems || []).filter((oi) => oi.order_id === order.id);
+  if (items.length === 0) return 'empty';
+  const lines = items.map((i) => makaraTableLineFingerprint(i)).sort().join(';');
+  return `${makaraRoundMoney(order.total_amount)}|${String(order.order_note || '').trim()}|${lines}`;
+}
+
+function makaraRemoteTableFingerprint(data) {
+  if (!data || !data.is_occupied || !Array.isArray(data.items) || data.items.length === 0) {
+    return 'empty';
+  }
+  const lines = data.items
+    .map((i) =>
+      makaraTableLineFingerprint({
+        product_id: i.product_id,
+        quantity: i.quantity,
+        price: i.price,
+        isGift: i.isGift,
+        item_note: i.item_note,
+        is_paid: i.is_paid,
+        paid_quantity: i.paid_quantity
+      })
+    )
+    .sort()
+    .join(';');
+  return `${makaraRoundMoney(data.total_amount)}|${String(data.order_note || '').trim()}|${lines}`;
+}
+
+function deletePendingTableOrderAndItemsForTable(tableId) {
+  const order = (db.tableOrders || []).find((o) => o.table_id === tableId && o.status === 'pending');
+  if (!order) return false;
+  db.tableOrderItems = (db.tableOrderItems || []).filter((oi) => oi.order_id !== order.id);
+  db.tableOrders = (db.tableOrders || []).filter((o) => o.id !== order.id);
+  return true;
+}
+
+/**
+ * Makara Havzan: Firestore `tables/{tableId}` → yerel db. Stok hareketi yapmaz (kaynak başka kasadır).
+ * Kendi gönderdiğimiz snapshot ile yerel özet aynıysa no-op (yankı döngüsü yok).
+ */
+function applyMakaraRemoteTableDocument(tableId, data) {
+  const remoteFp = makaraRemoteTableFingerprint(data);
+  const localFp = makaraLocalPendingFingerprintForTable(tableId);
+  if (remoteFp === localFp) return false;
+
+  const isEmptyRemote =
+    !data ||
+    data.is_occupied === false ||
+    !Array.isArray(data.items) ||
+    data.items.length === 0;
+
+  if (isEmptyRemote) {
+    return deletePendingTableOrderAndItemsForTable(tableId);
+  }
+
+  deletePendingTableOrderAndItemsForTable(tableId);
+
+  if (!db.tableOrders) db.tableOrders = [];
+  if (!db.tableOrderItems) db.tableOrderItems = [];
+
+  const orderId = db.tableOrders.length > 0 ? Math.max(...db.tableOrders.map((o) => o.id)) + 1 : 1;
+
+  let tableName =
+    (data.table_name && String(data.table_name).trim()) ||
+    (typeof tableId === 'string' && tableId.startsWith('inside-')
+      ? `Masa ${parseInt(tableId.replace('inside-', ''), 10) || ''}`.trim()
+      : '') ||
+    'Masa';
+  if (tableName === 'Masa' && typeof tableId === 'string') tableName = tableId;
+
+  const tableType =
+    data.table_type === 'outside' || data.table_type === 'inside' ? data.table_type : 'inside';
+
+  db.tableOrders.push({
+    id: orderId,
+    table_id: tableId,
+    table_name: tableName,
+    table_type: tableType,
+    total_amount: makaraRoundMoney(data.total_amount),
+    order_date: data.order_date || null,
+    order_time: data.order_time || null,
+    status: 'pending',
+    order_note: data.order_note || null,
+    staff_id: null,
+    staff_name: null
+  });
+
+  let itemIdCursor =
+    db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map((oi) => oi.id)) + 1 : 1;
+
+  for (const ri of data.items) {
+    const pid = ri.product_id;
+    const productId =
+      typeof pid === 'string' ? pid : Number.isFinite(Number(pid)) ? Number(pid) : pid;
+    db.tableOrderItems.push({
+      id: itemIdCursor++,
+      order_id: orderId,
+      product_id: productId,
+      product_name: ri.product_name || 'Ürün',
+      quantity: Number(ri.quantity) || 0,
+      price: makaraRoundMoney(ri.price),
+      isGift: !!ri.isGift,
+      staff_id: null,
+      staff_name: ri.staff_name || null,
+      added_date: ri.added_date || null,
+      added_time: ri.added_time || null,
+      item_note: ri.item_note && String(ri.item_note).trim() ? String(ri.item_note).trim() : null,
+      is_paid: !!ri.is_paid,
+      paid_quantity: Number(ri.paid_quantity) || 0
+    });
+  }
+
+  return true;
+}
+
+function stopMakaraTablesFirestorePullListener() {
+  try {
+    if (makaraTablesRealtimeUnsubscribe) {
+      makaraTablesRealtimeUnsubscribe();
+    }
+  } catch (_) {}
+  makaraTablesRealtimeUnsubscribe = null;
+}
+
+function startMakaraTablesFirestorePullListener() {
+  stopMakaraTablesFirestorePullListener();
+  if (activeBranchKey !== 'makara') return;
+  if (!tablesFirestore || !tablesFirebaseCollection || !firebaseOnSnapshot) {
+    console.warn('Makara masa çekme: Firestore hazır değil');
+    return;
+  }
+  try {
+    const colRef = tablesFirebaseCollection(tablesFirestore, 'tables');
+    makaraTablesRealtimeUnsubscribe = firebaseOnSnapshot(colRef, (snapshot) => {
+      if (activeBranchKey !== 'makara') return;
+      const changedTables = new Set();
+      snapshot.docChanges().forEach((change) => {
+        const tid = change.doc.id;
+        let applied = false;
+        if (change.type === 'removed') {
+          applied = applyMakaraRemoteTableDocument(tid, { is_occupied: false, items: [] });
+        } else {
+          applied = applyMakaraRemoteTableDocument(tid, change.doc.data());
+        }
+        if (applied) changedTables.add(tid);
+      });
+      if (changedTables.size === 0) return;
+      saveDatabase();
+      if (
+        mainWindow &&
+        !mainWindow.isDestroyed() &&
+        mainWindow.webContents &&
+        !mainWindow.webContents.isDestroyed()
+      ) {
+        mainWindow.webContents.send('table-order-updated', { source: 'firebase-pull' });
+      }
+      if (io) {
+        for (const tid of changedTables) {
+          io.emit('table-update', { tableId: tid, hasOrder: tableHasOpenItems(tid) });
+        }
+      }
+    }, (err) => {
+      console.error('Makara masalar dinleyici hatası:', err);
+    });
+    console.log('Makara Havzan: masalar Firestore anlık dinleniyor (çoklu PC)');
+  } catch (e) {
+    console.error('Makara masalar dinleyici başlatılamadı:', e);
+  }
+}
+
 // Tek bir masayı yeni Firebase'e kaydet (makaramasalar) - sadece sipariş değişikliklerinde çağrılır
 async function syncSingleTableToFirebase(tableId) {
   if (!tablesFirestore || !tablesFirebaseCollection || !tablesFirebaseDoc || !tablesFirebaseSetDoc) {
@@ -19378,7 +19578,8 @@ async function syncSingleTableToFirebase(tableId) {
         paid_quantity: item.paid_quantity || 0,
         staff_name: item.staff_name || null,
         added_date: item.added_date || null,
-        added_time: item.added_time || null
+        added_time: item.added_time || null,
+        item_note: item.item_note && String(item.item_note).trim() ? String(item.item_note).trim() : null
       }));
     }
 

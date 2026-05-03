@@ -1,977 +1,822 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import Toast from './Toast';
 
 const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
-const TablePartialPaymentModal = ({ order, items, totalAmount, onClose, onComplete }) => {
-  const [itemsWithPayment, setItemsWithPayment] = useState([]);
-  const [processingItemId, setProcessingItemId] = useState(null);
-  const [selectedQuantities, setSelectedQuantities] = useState({}); // { itemId: quantity } - Başlangıçta tümü 0
+/**
+ * TablePartialPaymentModal — sade, iki-sütunlu kısmi ödeme arayüzü.
+ *
+ *  ┌──────────────────────────────────────────────────────────────────┐
+ *  │  Kısmi Ödeme · Masa X          Kalan ₺X / Toplam ₺X         [×] │
+ *  ├─────────────────────────────────────┬────────────────────────────┤
+ *  │  KALAN ÜRÜNLER (grid, büyük kart)   │  SEPET (seçilenler listesi)│
+ *  │                                     │                            │
+ *  │  [ ×1  Çay   ₺40 ] [ ×1 Kola ₺50 ]  │  Elmalı Soda  ×2  ₺80  [×] │
+ *  │  [ ×1  Çay   ₺40 ] …                │  Limonlu Soda ×1  ₺40  [×] │
+ *  │                                     │                            │
+ *  ├─────────────────────────────────────┼────────────────────────────┤
+ *  │  [ KALAN TÜMÜNÜ AL · ₺X ]           │  [ SEÇİLENLERİN ÖD. AL ₺X ]│
+ *  └─────────────────────────────────────┴────────────────────────────┘
+ */
+const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
+  const [selectedKeys, setSelectedKeys] = useState(() => new Set());
+  const [processing, setProcessing] = useState(false);
+  const [paymentMethodModal, setPaymentMethodModal] = useState(null);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
-  const [showSplitFractionPanel, setShowSplitFractionPanel] = useState(false);
-  // Ödeme sonrası parent refetch edene kadar ödenen kalemlerin doğru bölümde görünmesi için
-  const lastPaymentUpdatesRef = useRef({});
 
-  const showToast = (message, type = 'info') => {
+  const showToast = useCallback((message, type = 'info') => {
     setToast({ message, type, show: true });
-    setTimeout(() => {
-      setToast(prev => ({ ...prev, show: false }));
-    }, 3000);
-  };
+    setTimeout(() => setToast((p) => ({ ...p, show: false })), 2800);
+  }, []);
 
-  useEffect(() => {
-    // Items'ı ödeme durumuna göre hazırla
-    const itemsData = items.map(item => ({
-      ...item,
-      isPaid: item.is_paid || false,
-      paidQuantity: item.paid_quantity || 0,
-      paymentMethod: item.payment_method || null
-    }));
-
-    // Aynı ürünleri grupla (product_name ve price'a göre)
-    const groupedItems = {};
-    
-    itemsData.forEach(item => {
-      // İkram olanları ayrı tut, gruplama
-      if (item.isGift) {
-        const giftKey = `gift_${item.id}`;
-        groupedItems[giftKey] = {
-          ...item,
-          originalIds: [item.id], // Orijinal item ID'lerini sakla
-          groupedQuantity: item.quantity,
-          groupedPaidQuantity: item.paidQuantity || 0
-        };
-        return;
-      }
-
-      // Gruplama anahtarı: product_name + fiyat (2 basamak, float hatası önlenir)
-      const priceKey = Number(Number(item.price).toFixed(2));
-      const groupKey = `${item.product_name}_${priceKey}`;
-      
-      if (groupedItems[groupKey]) {
-        // Mevcut gruba ekle
-        groupedItems[groupKey].originalIds.push(item.id);
-        groupedItems[groupKey].groupedQuantity += item.quantity;
-        groupedItems[groupKey].groupedPaidQuantity += (item.paidQuantity || 0);
-        
-        // Ödeme yöntemlerini birleştir
-        if (item.paymentMethod && groupedItems[groupKey].paymentMethod) {
-          if (!groupedItems[groupKey].paymentMethod.includes(item.paymentMethod)) {
-            groupedItems[groupKey].paymentMethod = `${groupedItems[groupKey].paymentMethod}, ${item.paymentMethod}`;
-          }
-        } else if (item.paymentMethod) {
-          groupedItems[groupKey].paymentMethod = item.paymentMethod;
-        }
-        
-        // Eğer birisi ödenmişse, grup kısmen ödenmiş sayılır
-        if (item.isPaid || (item.paidQuantity || 0) > 0) {
-          groupedItems[groupKey].isPaid = groupedItems[groupKey].groupedPaidQuantity >= groupedItems[groupKey].groupedQuantity;
-        }
-      } else {
-        // Yeni grup oluştur
-        groupedItems[groupKey] = {
-          ...item,
-          originalIds: [item.id], // Orijinal item ID'lerini sakla
-          groupedQuantity: item.quantity,
-          groupedPaidQuantity: item.paidQuantity || 0,
-          // Grup için unique bir ID oluştur
-          id: `group_${groupKey}`
-        };
+  const units = useMemo(() => {
+    const list = [];
+    (items || []).forEach((it) => {
+      if (it.isGift) return;
+      const qty = Number(it.quantity) || 0;
+      const paid = Math.max(0, Math.min(qty, Number(it.paid_quantity) || 0));
+      for (let i = 0; i < qty; i += 1) {
+        list.push({
+          key: `${it.id}__${i}`,
+          itemId: it.id,
+          unitIndex: i,
+          productName: it.product_name,
+          price: Number(it.price) || 0,
+          paid: i < paid,
+          paymentMethod: i < paid ? (it.payment_method || null) : null,
+        });
       }
     });
-
-    // Gruplanmış öğeleri array'e çevir
-    const groupedItemsArray = Object.values(groupedItems);
-    
-    setItemsWithPayment(groupedItemsArray);
-    lastPaymentUpdatesRef.current = {}; // Yeni items geldiğinde yerel ödeme önbelleğini temizle
-
-    // Tüm ödenmemiş ürünler için başlangıçta 0 miktar seç
-    const initialQuantities = {};
-    groupedItemsArray.forEach(item => {
-      if (!item.isGift) {
-        const paidQty = item.groupedPaidQuantity || 0;
-        const remainingQty = item.groupedQuantity - paidQty;
-        if (remainingQty > 0) {
-          initialQuantities[item.id] = 0; // Başlangıçta 0
-        }
-      }
-    });
-    setSelectedQuantities(initialQuantities);
+    return list;
   }, [items]);
 
-  // Parçalı ödeme: 1/2, 1/3, ... 1/10 — güncel kalem toplamına göre (yeni ürün sonrası da doğru), kalandan fazla alınmaz
-  const handleSplitFractionPayment = async (denominator) => {
-    const remaining = remainingAmount;
-    if (remaining <= 0) {
-      showToast('Kalan tutar yok', 'info');
-      return;
-    }
-    const basisTotal = roundMoney(
-      items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0)
-    );
-    const fractionAmount = Math.floor(basisTotal / denominator);
-    const payAmount = Math.min(fractionAmount, Math.floor(remaining));
-    if (payAmount <= 0) {
-      showToast('Kalan tutar bu bölme için uygun değil', 'info');
-      return;
-    }
-    if (!window.electronAPI?.createPartialPaymentSale || !window.electronAPI?.updateTableOrderAmount) {
+  const giftUnits = useMemo(() => {
+    const list = [];
+    (items || []).forEach((it) => {
+      if (!it.isGift) return;
+      const qty = Number(it.quantity) || 0;
+      for (let i = 0; i < qty; i += 1) {
+        list.push({ key: `gift_${it.id}__${i}`, productName: it.product_name });
+      }
+    });
+    return list;
+  }, [items]);
+
+  const totalAmount = useMemo(
+    () => roundMoney(units.reduce((s, u) => s + u.price, 0)),
+    [units]
+  );
+  const paidAmount = useMemo(
+    () => roundMoney(units.filter((u) => u.paid).reduce((s, u) => s + u.price, 0)),
+    [units]
+  );
+  const remainingAmount = useMemo(
+    () => roundMoney(totalAmount - paidAmount),
+    [totalAmount, paidAmount]
+  );
+  const unpaidUnits = useMemo(() => units.filter((u) => !u.paid), [units]);
+  const selectedUnits = useMemo(
+    () => units.filter((u) => selectedKeys.has(u.key) && !u.paid),
+    [units, selectedKeys]
+  );
+  const selectedAmount = useMemo(
+    () => roundMoney(selectedUnits.reduce((s, u) => s + u.price, 0)),
+    [selectedUnits]
+  );
+
+  /** Sepet satırları: aynı ürün tek satırda grup; unitKey listesi ile ekle/çıkar */
+  const cartLines = useMemo(() => {
+    const map = new Map();
+    selectedUnits.forEach((u) => {
+      const key = `${u.itemId}__${u.price}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          productName: u.productName,
+          price: u.price,
+          quantity: 0,
+          unitKeys: [],
+        });
+      }
+      const row = map.get(key);
+      row.quantity += 1;
+      row.unitKeys.push(u.key);
+    });
+    return Array.from(map.values());
+  }, [selectedUnits]);
+
+  const toggleUnit = (unit) => {
+    if (unit.paid || processing) return;
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(unit.key)) next.delete(unit.key);
+      else next.add(unit.key);
+      return next;
+    });
+  };
+
+  const removeLineFromCart = (line) => {
+    if (processing) return;
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      line.unitKeys.forEach((k) => next.delete(k));
+      return next;
+    });
+  };
+
+  const clearSelection = () => {
+    if (processing) return;
+    setSelectedKeys(new Set());
+  };
+
+  const processPayment = async (unitsToPay, paymentMethod) => {
+    if (!window.electronAPI) {
       showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
       return;
     }
+    const expected = Array.isArray(unitsToPay) ? unitsToPay.length : 0;
+    if (expected === 0) return;
 
-    const paymentMethod = await new Promise((resolve) => {
-      const modal = document.createElement('div');
-      modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
-      modal.innerHTML = `
-        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-          <div class="bg-gradient-to-r from-violet-600 to-pink-600 theme-sultan:to-emerald-600 px-6 py-4">
-            <h3 class="text-xl font-bold text-white mb-1">Parçalı Ödeme 1/${denominator}</h3>
-            <p class="text-sm text-white/90">Tutar: ₺${payAmount} (başlangıç toplamının 1/${denominator}'i, tam lira)</p>
-          </div>
-          <div class="p-6">
-            <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                  <span class="text-base">Nakit</span>
-                </div>
-              </button>
-              <button id="cardBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-                  <span class="text-base">Kredi Kartı</span>
-                </div>
-              </button>
-            </div>
-            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">İptal</button>
-          </div>
-        </div>
-      `;
-      document.body.appendChild(modal);
-      modal.querySelector('#cashBtn').onclick = () => { document.body.removeChild(modal); resolve('Nakit'); };
-      modal.querySelector('#cardBtn').onclick = () => { document.body.removeChild(modal); resolve('Kredi Kartı'); };
-      modal.querySelector('#cancelBtn').onclick = () => { document.body.removeChild(modal); resolve(null); };
+    const validUnits = unitsToPay.filter((u) => u && u.itemId != null && u.itemId !== '');
+    if (validUnits.length === 0) {
+      showToast('İşlenecek geçerli kalem bulunamadı', 'error');
+      return;
+    }
+
+    const qtyByItem = new Map();
+    validUnits.forEach((u) => {
+      qtyByItem.set(u.itemId, (qtyByItem.get(u.itemId) || 0) + 1);
     });
+    const paymentsPayload = Array.from(qtyByItem.entries()).map(([itemId, quantity]) => ({
+      itemId,
+      quantity,
+    }));
 
-    if (!paymentMethod) return;
-
-    setProcessingItemId('split');
-    setShowSplitFractionPanel(false);
+    setProcessing(true);
 
     try {
-      // Sadece toplam tutara göre: 1/x taksit tutarını al, kalemlere dağıtma
-      const saleResult = await window.electronAPI.createPartialPaymentSale({
-        orderId: order.id,
-        totalAmount: payAmount,
-        paymentMethod,
-        tableName: order.table_name || '',
-        tableType: order.table_type || 'inside'
+      if (typeof window.electronAPI.payTableOrderItemsBulk === 'function') {
+        let r;
+        try {
+          r = await window.electronAPI.payTableOrderItemsBulk({
+            payments: paymentsPayload,
+            paymentMethod,
+          });
+        } catch (err) {
+          console.error('[KısmiÖdeme] Bulk IPC istisnası:', err);
+          showToast('Ödeme alınamadı: ' + (err?.message || 'bilinmeyen hata'), 'error');
+          return;
+        }
+
+        if (!r || !r.success) {
+          const msg = r?.error || 'bilinmeyen hata';
+          if (r?.errors && r.errors.length) console.error('[KısmiÖdeme] Bulk hataları:', r.errors);
+          showToast('Ödeme alınamadı: ' + msg, 'error');
+          return;
+        }
+
+        const paidUnits = r.results.reduce((s, x) => s + (Number(x.quantity) || 0), 0);
+        setSelectedKeys(new Set());
+
+        if (paidUnits < expected) {
+          showToast(
+            `${paidUnits}/${expected} adet ödeme alındı` +
+              (r.errors && r.errors[0] ? ` — ${r.errors[0]}` : ''),
+            'warning'
+          );
+        } else {
+          showToast(`${paidUnits} ürünün ödemesi alındı`, 'success');
+        }
+
+        if (onComplete && r.results.length > 0) {
+          await onComplete(r.results);
+        }
+        return;
+      }
+
+      // Fallback: per-item IPC (eski)
+      console.warn('[KısmiÖdeme] Bulk IPC yok, per-item fallback');
+      const results = [];
+      const errors = [];
+      let paidCount = 0;
+      for (let idx = 0; idx < paymentsPayload.length; idx += 1) {
+        const { itemId, quantity } = paymentsPayload[idx];
+        try {
+          const r = await window.electronAPI.payTableOrderItem(itemId, paymentMethod, quantity);
+          if (r && r.success) {
+            results.push({ itemId, paymentMethod, quantity });
+            paidCount += quantity;
+          } else {
+            errors.push(`#${itemId}: ${r?.error || 'bilinmeyen hata'}`);
+          }
+        } catch (err) {
+          errors.push(`#${itemId}: ${err?.message || err}`);
+        }
+      }
+      setSelectedKeys(new Set());
+      if (paidCount === 0) {
+        showToast('Ödeme alınamadı: ' + (errors[0] || 'bilinmeyen hata'), 'error');
+      } else if (paidCount < expected) {
+        showToast(`${paidCount}/${expected} adet ödeme alındı`, 'warning');
+      } else {
+        showToast(`${paidCount} ürünün ödemesi alındı`, 'success');
+      }
+      if (onComplete && results.length > 0) await onComplete(results);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const requestPayment = (mode) => {
+    if (processing) return;
+    if (mode === 'selected') {
+      if (selectedUnits.length === 0) {
+        showToast('Önce soldan ürün seçin', 'warning');
+        return;
+      }
+      setPaymentMethodModal({
+        mode,
+        title: 'Seçilenlerin Ödemesini Al',
+        amount: selectedAmount,
+        count: selectedUnits.length,
       });
-      if (!saleResult?.success) {
-        showToast('Satış kaydı oluşturulamadı', 'error');
+    } else if (mode === 'remaining') {
+      if (unpaidUnits.length === 0) {
+        showToast('Kalan ürün yok', 'info');
         return;
       }
-      const amountResult = await window.electronAPI.updateTableOrderAmount(order.id, payAmount);
-      if (!amountResult?.success) {
-        showToast('Sipariş tutarı güncellenemedi: ' + (amountResult?.error || ''), 'error');
-        return;
-      }
-      if (onComplete) await onComplete([]);
-      showToast(`Parçalı ödeme (1/${denominator}) alındı: ₺${payAmount}`, 'success');
-    } catch (err) {
-      console.error('Parçalı ödeme hatası:', err);
-      showToast('Ödeme alınamadı: ' + (err.message || ''), 'error');
-    } finally {
-      setProcessingItemId(null);
+      setPaymentMethodModal({
+        mode,
+        title: 'Kalan Tümünü Al',
+        amount: remainingAmount,
+        count: unpaidUnits.length,
+      });
     }
   };
 
-  // Kalan ödemeyi al - Tüm kalan ürünleri direkt ödeme al
-  const handlePayRemaining = async () => {
-    if (remainingAmount <= 0.01) {
-      showToast('Kalan tutar yok', 'info');
-      return;
-    }
-
-    if (!window.electronAPI || !window.electronAPI.payTableOrderItem) {
-      showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
-      return;
-    }
-
-    // Tüm kalan ürünleri bul
-    const remainingItems = itemsWithPayment.filter(item => {
-      if (item.isGift) return false;
-      const paidQty = item.groupedPaidQuantity || 0;
-      const remainingQty = item.groupedQuantity - paidQty;
-      return remainingQty > 0;
-    });
-
-    if (remainingItems.length === 0) {
-      showToast('Kalan ürün bulunamadı', 'warning');
-      return;
-    }
-
-    // Ödeme yöntemi seçimi
-    const paymentMethod = await new Promise((resolve) => {
-      const modal = document.createElement('div');
-      modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
-      
-      const remainingTotal = roundMoney(remainingItems.reduce((sum, item) => {
-        const paidQty = item.groupedPaidQuantity || 0;
-        const remainingQty = item.groupedQuantity - paidQty;
-        return sum + (item.price * remainingQty);
-      }, 0));
-      
-      modal.innerHTML = `
-        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-          <div class="bg-gradient-to-r from-orange-600 to-amber-600 px-6 py-4">
-            <h3 class="text-xl font-bold text-white mb-1">Kalan Ödemeyi Al</h3>
-            <p class="text-sm text-white/90">Toplam: ₺${remainingTotal.toFixed(2)}</p>
-          </div>
-          <div class="p-6">
-            <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                  <span class="text-base">Nakit</span>
-                </div>
-              </button>
-              <button id="cardBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                  </svg>
-                  <span class="text-base">Kredi Kartı</span>
-                </div>
-              </button>
-            </div>
-            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">
-              İptal
-            </button>
-          </div>
-        </div>
-      `;
-      
-      document.body.appendChild(modal);
-      
-      modal.querySelector('#cashBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve('Nakit');
-      };
-      
-      modal.querySelector('#cardBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve('Kredi Kartı');
-      };
-      
-      modal.querySelector('#cancelBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve(null);
-      };
-    });
-
-    if (!paymentMethod) return;
-
-    setProcessingItemId('bulk');
-
-    try {
-      const paymentResults = [];
-      const paymentUpdates = {};
-
-      // Her kalan ürün için ödeme al
-      for (const item of remainingItems) {
-        const paidQty = item.groupedPaidQuantity || 0;
-        const remainingQty = item.groupedQuantity - paidQty;
-        
-        if (remainingQty <= 0) continue;
-
-        // Sadece gerçek tableOrderItem id'leri; kalan miktarı aşmadan ödeme al
-        const originalIds = item.originalIds || [item.id];
-        const realOriginalIds = originalIds.filter(id => typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id)));
-        let remainingSelectedQty = remainingQty;
-
-        for (const originalId of realOriginalIds) {
-          if (remainingSelectedQty <= 0) break;
-          const originalItem = items.find(i => String(i.id) === String(originalId));
-          if (!originalItem) continue;
-          const originalPaidQty = Number(originalItem.paid_quantity || 0);
-          const originalRemainingQty = originalItem.quantity - originalPaidQty;
-          const qtyToPayForThisItem = Math.min(remainingSelectedQty, originalRemainingQty);
-          if (qtyToPayForThisItem <= 0) continue;
-          try {
-            const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, Number(qtyToPayForThisItem));
-            if (result.success) {
-              paymentResults.push({ itemId: originalId, paymentMethod, quantity: qtyToPayForThisItem });
-              remainingSelectedQty -= qtyToPayForThisItem;
-            } else {
-              console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme alınamadı:`, result.error);
-            }
-          } catch (error) {
-            console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme hatası:`, error);
-          }
-        }
-
-        const newPaidQuantity = paidQty + (remainingQty - remainingSelectedQty);
-        const isFullyPaid = newPaidQuantity >= item.groupedQuantity;
-        paymentUpdates[item.id] = {
-          groupedPaidQuantity: newPaidQuantity,
-          isPaid: isFullyPaid,
-          paymentMethod: item.groupedPaidQuantity > 0 ? `${item.paymentMethod || ''}, ${paymentMethod}` : paymentMethod
-        };
-      }
-
-      if (Object.keys(paymentUpdates).length > 0) {
-        lastPaymentUpdatesRef.current = { ...paymentUpdates };
-        setItemsWithPayment(prev => prev.map(i => {
-          const u = paymentUpdates[i.id];
-          if (!u) return i;
-          return { ...i, groupedPaidQuantity: u.groupedPaidQuantity, isPaid: u.isPaid, paymentMethod: u.paymentMethod };
-        }));
-      }
-
-      // onComplete callback'ini çağır
-      if (onComplete && paymentResults.length > 0) {
-        onComplete(paymentResults);
-      }
-
-      if (paymentResults.length > 0) {
-        showToast(`Kalan ${paymentResults.length} ürün için ödeme başarıyla alındı!`, 'success');
-      } else {
-        showToast('Ödeme alınamadı', 'error');
-      }
-    } catch (error) {
-      console.error('Kalan ödeme hatası:', error);
-      showToast('Ödeme alınırken bir hata oluştu', 'error');
-    } finally {
-      setProcessingItemId(null);
-    }
+  const confirmPayment = async (paymentMethod) => {
+    const pmm = paymentMethodModal;
+    setPaymentMethodModal(null);
+    if (!pmm) return;
+    const list = pmm.mode === 'remaining' ? unpaidUnits : selectedUnits;
+    await processPayment(list, paymentMethod);
   };
 
-  // Toplu ödeme al - Tüm seçilen ürünler için
-  const handleBulkPayment = async () => {
-    if (!window.electronAPI || !window.electronAPI.payTableOrderItem) {
-      showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
-      return;
-    }
-
-    // Seçili ürünleri filtrele
-    const selectedItems = itemsWithPayment.filter(item => {
-      if (item.isGift) return false;
-      const selectedQty = selectedQuantities[item.id] || 0;
-      return selectedQty > 0;
+  /**
+   * Sol panel için üniteleri ÜRÜN BAZINDA grupla.
+   * Grup anahtarı: `productName + price` (farklı itemId'lerdeki aynı ürün
+   * aynı gruba girsin — örn. 2 çay ekledikten sonra 2 çay daha eklenmişse).
+   * Grup içinde ödenmemişler önce, ödenmişler sonda.
+   * Grup sıralaması: içinde kalan ödenmemiş olan gruplar önce, tamamı ödenmiş
+   * olanlar altta.
+   */
+  const productGroups = useMemo(() => {
+    const map = new Map();
+    units.forEach((u) => {
+      const key = `${u.productName}__${u.price}`;
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          productName: u.productName,
+          price: u.price,
+          units: [],
+          unpaidCount: 0,
+          paidCount: 0,
+        });
+      }
+      const g = map.get(key);
+      g.units.push(u);
+      if (u.paid) g.paidCount += 1;
+      else g.unpaidCount += 1;
     });
-
-    if (selectedItems.length === 0) {
-      showToast('Lütfen en az bir ürün seçin', 'warning');
-      return;
-    }
-
-    // Ödeme yöntemi seçimi
-    const paymentMethod = await new Promise((resolve) => {
-      const modal = document.createElement('div');
-      modal.className = 'fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[2000]';
-      modal.innerHTML = `
-        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
-          <div class="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-4">
-            <h3 class="text-xl font-bold text-white mb-1">Ödeme Yöntemi</h3>
-            <p class="text-sm text-white/90">Toplam: ₺${selectedItemsTotal.toFixed(2)}</p>
-          </div>
-          <div class="p-6">
-            <div class="grid grid-cols-2 gap-4 mb-4">
-              <button id="cashBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                  <span class="text-base">Nakit</span>
-                </div>
-              </button>
-              <button id="cardBtn" class="p-5 rounded-xl font-bold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl hover:scale-105 transition-all transform">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                  </svg>
-                  <span class="text-base">Kredi Kartı</span>
-                </div>
-              </button>
-            </div>
-            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">
-              İptal
-            </button>
-          </div>
-        </div>
-      `;
-      
-      document.body.appendChild(modal);
-      
-      modal.querySelector('#cashBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve('Nakit');
-      };
-      
-      modal.querySelector('#cardBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve('Kredi Kartı');
-      };
-      
-      modal.querySelector('#cancelBtn').onclick = () => {
-        document.body.removeChild(modal);
-        resolve(null);
-      };
-    });
-
-    if (!paymentMethod) return;
-
-    setProcessingItemId('bulk');
-
-    try {
-      const paymentResults = [];
-      const paymentUpdates = {}; // itemId -> { groupedPaidQuantity, isPaid, paymentMethod }
-
-      // Her seçili ürün için ödeme al
-      for (const item of selectedItems) {
-        const selectedQty = selectedQuantities[item.id] || 0;
-        if (selectedQty <= 0) continue;
-
-        const paidQty = item.groupedPaidQuantity || 0;
-        const remainingQty = item.groupedQuantity - paidQty;
-        
-        if (selectedQty > remainingQty) {
-          console.error(`Ürün ${item.product_name} için seçilen miktar (${selectedQty}) kalan miktardan (${remainingQty}) fazla`);
-          continue;
-        }
-
-        // Gruplanmış ürünler için, orijinal item'lar arasında ödemeyi dağıt
-        const originalIds = item.originalIds || [item.id];
-        let remainingSelectedQty = selectedQty;
-        
-        // Sadece gerçek (sayısal) tableOrderItem id'leri üzerinden ödeme al; toplam selectedQty'yi aşma
-        const realOriginalIds = originalIds.filter(id => typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id)));
-        let totalPaidForGroup = 0;
-        const maxToPayForGroup = selectedQty;
-
-        for (const originalId of realOriginalIds) {
-          if (totalPaidForGroup >= maxToPayForGroup) break;
-
-          const originalItem = items.find(i => String(i.id) === String(originalId));
-          if (!originalItem) continue;
-
-          const originalPaidQty = Number(originalItem.paid_quantity || 0);
-          const originalRemainingQty = originalItem.quantity - originalPaidQty;
-          const remainingToPayInGroup = maxToPayForGroup - totalPaidForGroup;
-          const qtyToPayForThisItem = Math.min(remainingToPayInGroup, originalRemainingQty, Math.max(0, Math.floor(remainingSelectedQty)));
-
-          if (qtyToPayForThisItem <= 0) continue;
-
-          try {
-            const result = await window.electronAPI.payTableOrderItem(originalId, paymentMethod, Number(qtyToPayForThisItem));
-            if (result.success) {
-              paymentResults.push({ itemId: originalId, paymentMethod, quantity: qtyToPayForThisItem });
-              remainingSelectedQty -= qtyToPayForThisItem;
-              totalPaidForGroup += qtyToPayForThisItem;
-            } else {
-              console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme alınamadı:`, result.error);
-            }
-          } catch (error) {
-            console.error(`Ürün ${originalItem.product_name} (ID: ${originalId}) için ödeme hatası:`, error);
-          }
-        }
-        
-        const actuallyPaidForGroup = totalPaidForGroup;
-        const newPaidQuantity = paidQty + actuallyPaidForGroup;
-        const isFullyPaid = newPaidQuantity >= item.groupedQuantity;
-        paymentUpdates[item.id] = {
-          groupedPaidQuantity: newPaidQuantity,
-          isPaid: isFullyPaid,
-          paymentMethod: item.groupedPaidQuantity > 0 ? `${item.paymentMethod || ''}, ${paymentMethod}` : paymentMethod
-        };
-        setSelectedQuantities(prev => ({ ...prev, [item.id]: 0 }));
-      }
-
-      // Tüm ödeme güncellemelerini tek seferde uygula + ref'e yaz (render'da ödenen kalemlere geçsin)
-      if (Object.keys(paymentUpdates).length > 0) {
-        lastPaymentUpdatesRef.current = { ...paymentUpdates };
-        setItemsWithPayment(prev => prev.map(i => {
-          const u = paymentUpdates[i.id];
-          if (!u) return i;
-          return {
-            ...i,
-            groupedPaidQuantity: u.groupedPaidQuantity,
-            isPaid: u.isPaid,
-            paymentMethod: u.paymentMethod
-          };
-        }));
-      }
-
-      // onComplete callback'ini çağır
-      if (onComplete && paymentResults.length > 0) {
-        onComplete(paymentResults);
-      }
-
-      if (paymentResults.length > 0) {
-        showToast(`${paymentResults.length} ürün için ödeme başarıyla alındı!`, 'success');
-      } else {
-        showToast('Ödeme alınamadı', 'error');
-      }
-    } catch (error) {
-      console.error('Toplu ödeme hatası:', error);
-      showToast('Ödeme alınırken bir hata oluştu', 'error');
-    } finally {
-      setProcessingItemId(null);
-    }
-  };
-
-  // Miktar değiştir (+ - butonları için)
-  const updateQuantity = (itemId, quantity) => {
-    const item = itemsWithPayment.find(i => i.id === itemId);
-    if (!item) return;
-    
-    const paidQty = item.groupedPaidQuantity || 0;
-    const remainingQty = item.groupedQuantity - paidQty;
-    
-    // Miktarı sınırla (0 ile kalan miktar arasında)
-    const validQuantity = Math.max(0, Math.min(quantity, remainingQty));
-    
-    setSelectedQuantities(prev => ({
-      ...prev,
-      [itemId]: validQuantity
+    const arr = Array.from(map.values()).map((g) => ({
+      ...g,
+      units: [...g.units].sort((a, b) => Number(a.paid) - Number(b.paid)), // unpaid önce
     }));
-  };
+    // içinde ödenmemiş olanlar önce
+    arr.sort((a, b) => {
+      if (a.unpaidCount > 0 && b.unpaidCount === 0) return -1;
+      if (a.unpaidCount === 0 && b.unpaidCount > 0) return 1;
+      return a.productName.localeCompare(b.productName, 'tr');
+    });
+    return arr;
+  }, [units]);
 
-  // Seçilen ürünlerin bilgilerini hesapla
-  const selectedItemsInfo = itemsWithPayment
-    .filter(item => {
-      if (item.isGift) return false;
-      const selectedQty = selectedQuantities[item.id] || 0;
-      return selectedQty > 0;
-    })
-    .map(item => ({
-      ...item,
-      selectedQty: selectedQuantities[item.id] || 0,
-      total: roundMoney(item.price * (selectedQuantities[item.id] || 0))
-    }));
-
-  const selectedItemsTotal = roundMoney(selectedItemsInfo.reduce((sum, item) => sum + item.total, 0));
-  const selectedItemsText = selectedItemsInfo.map(item => `${item.product_name} (${item.selectedQty})`).join(', ');
-
-  // Ref'teki güncel ödeme bilgisini state ile birleştir (ödenen kalemler hemen doğru bölümde görünsün)
-  const effectiveItems = itemsWithPayment.map(item => {
-    const u = lastPaymentUpdatesRef.current[item.id];
-    if (!u) return item;
-    return { ...item, groupedPaidQuantity: u.groupedPaidQuantity, isPaid: u.isPaid, paymentMethod: u.paymentMethod != null ? u.paymentMethod : item.paymentMethod };
-  });
-
-  const awaitingItems = effectiveItems.filter(item => {
-    if (item.isGift) return false;
-    const paidQty = item.groupedPaidQuantity || 0;
-    return paidQty < item.groupedQuantity;
-  });
-  // Ödenen kalemler: Tamamen ödenenler + kısmi ödenenler (paidQty > 0)
-  const completedItems = effectiveItems.filter(item => {
-    if (item.isGift) return false;
-    const paidQty = item.groupedPaidQuantity || 0;
-    return paidQty > 0; // Kısmi ödenenler de dahil
-  });
-  const giftItems = effectiveItems.filter(item => item.isGift);
-
-  // Orijinal toplam tutar (açılışta; parçalı ödeme 1/x daima buna göre)
-  const originalTotalAmount = roundMoney(effectiveItems.reduce((sum, item) => {
-    if (item.isGift) return sum;
-    return sum + (item.price * item.groupedQuantity);
-  }, 0));
-
-  // Parçalı ödeme tutar bazlı alındığı için kalan = backend order.total_amount (tek kaynak)
-  const remainingFromBackend = Number(order?.total_amount);
-  const useBackendRemaining = typeof remainingFromBackend === 'number' && remainingFromBackend >= 0;
-  const remainingAmount = useBackendRemaining
-    ? roundMoney(remainingFromBackend)
-    : roundMoney(originalTotalAmount - effectiveItems.reduce((sum, item) => {
-        if (item.isGift) return sum;
-        const paidQty = item.groupedPaidQuantity || 0;
-        return sum + (item.price * paidQty);
-      }, 0));
-  const paidAmount = roundMoney(originalTotalAmount - remainingAmount);
-
-  // Tutar bazlı parçalı ödeme alınmışsa (kalem bazlı ödenen yok, sadece order.total_amount düşmüş)
-  const paidFromItems = roundMoney(effectiveItems.reduce((sum, item) => {
-    if (item.isGift) return sum;
-    return sum + (item.price * (item.groupedPaidQuantity || 0));
-  }, 0));
-  const hasAmountBasedPartialPayment = paidAmount > 0.01 && paidFromItems < 0.01;
-
-  return (
+  return createPortal(
     <>
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-6xl mx-4 max-h-[95vh] flex flex-col overflow-hidden">
-        {/* Header - Kurumsal ve Minimal */}
-        <div className="bg-gray-800 px-8 py-5 flex items-center justify-between border-b border-gray-700">
-          <div>
-            <h2 className="text-2xl font-bold text-white">Kısmi Ödeme</h2>
-            <p className="text-sm text-gray-300 mt-1">Masa: {order.table_name}</p>
-          </div>
-          <button
-            onClick={onClose}
-            className="text-gray-300 hover:text-white transition-colors p-2 hover:bg-gray-700 rounded-lg"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
+      <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-2 sm:p-4 animate-fade-in">
+        <div className="relative w-full h-[96vh] max-w-[1400px] flex flex-col rounded-3xl border border-slate-200 bg-white shadow-[0_40px_100px_-20px_rgba(0,0,0,0.55)] overflow-hidden">
+          {/* Header — sade */}
+          <header className="shrink-0 flex items-center justify-between gap-4 px-8 py-5 bg-white border-b border-slate-200">
+            <div className="min-w-0 flex items-center gap-4">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-900 to-zinc-700 text-white shadow-md">
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1" />
+                </svg>
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-bold uppercase tracking-[0.26em] text-slate-400">Kısmi Ödeme</p>
+                <h2 className="truncate text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
+                  {order.table_name || 'Masa'}
+                </h2>
+              </div>
+            </div>
+            <div className="hidden sm:flex items-center gap-5 pr-2">
+              <Stat label="Toplam" value={`₺${totalAmount.toFixed(2)}`} />
+              <div className="h-8 w-px bg-slate-200" />
+              <Stat label="Ödenen" value={`₺${paidAmount.toFixed(2)}`} tone="green" />
+              <div className="h-8 w-px bg-slate-200" />
+              <Stat label="Kalan" value={`₺${remainingAmount.toFixed(2)}`} tone={remainingAmount > 0.01 ? 'orange' : 'green'} />
+            </div>
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={processing}
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:opacity-40"
+              aria-label="Kapat"
+            >
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </header>
 
-        {/* Özet Bilgiler - Kurumsal */}
-        <div className="px-8 py-4 bg-gray-50 border-b border-gray-200">
-          <div className="grid grid-cols-4 gap-6">
-            <div>
-              <p className="text-xs text-gray-500 mb-1 font-medium">Toplam Tutar</p>
-              <p className="text-xl font-bold text-gray-900">₺{originalTotalAmount.toFixed(2)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-1 font-medium">Ödenen</p>
-              <p className="text-xl font-bold text-fuchsia-600 theme-sultan:text-green-600">₺{paidAmount.toFixed(2)}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-1 font-medium">Kalan</p>
-              <p className={`text-xl font-bold ${remainingAmount > 0.01 ? 'text-orange-600' : 'text-fuchsia-600 theme-sultan:text-green-600'}`}>
-                ₺{remainingAmount.toFixed(2)}
-              </p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-1 font-medium">Ödenmemiş Kalem</p>
-              <p className="text-xl font-bold text-gray-900">{hasAmountBasedPartialPayment ? '—' : `${awaitingItems.length} Adet`}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* İçerik: Parçalı ödeme alınmışsa sadece ürün listesi + bildirim; değilse ödeme bekleyen/ödenen */}
-        <div className="flex-1 overflow-y-auto px-8 py-6 space-y-6">
-          {hasAmountBasedPartialPayment ? (
-            <>
-              {/* Parçalı ödeme alındı – sadece parçalı ödeme ile devam bildirimi */}
-              <div className="rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-50 to-pink-50 theme-sultan:to-emerald-50 p-6 shadow-sm">
-                <div className="flex items-start gap-4">
-                  <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-violet-100 flex items-center justify-center">
-                    <svg className="w-6 h-6 text-violet-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  <div>
-                    <h3 className="text-lg font-bold text-gray-900 mb-1">Parçalı ödeme başlatıldı</h3>
-                    <p className="text-gray-700 leading-relaxed">
-                      Bu siparişte ödeme tutar bazlı parçalı ödeme (1/2, 1/3, …) ile alındı. Kalan tutarı tamamlamak için <strong>yalnızca yukarıdaki Parçalı Ödeme (1/2, 1/3 … 1/10)</strong> butonlarını kullanın. Ürün seçerek veya “Kalan ödemeyi al” ile ödeme alınamaz.
-                    </p>
-                  </div>
-                </div>
+          {/* İki sütun */}
+          <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
+            {/* SOL: Kalan Ürünler */}
+            <section className="flex-1 min-w-0 flex flex-col bg-slate-50 border-b lg:border-b-0 lg:border-r border-slate-200">
+              <div className="shrink-0 flex items-center justify-between gap-3 px-8 py-4 bg-white/70 border-b border-slate-200">
+                <h3 className="text-base font-bold text-slate-900">Kalan Ürünler</h3>
+                <span className="text-sm font-semibold text-slate-500">
+                  {unpaidUnits.length} adet bekliyor
+                </span>
               </div>
 
-              {/* Sadece ürün listesi: Ürün, Adet, Birim Fiyat, Tutar */}
-              <section>
-                <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Sipariş kalemleri</h3>
-                <div className="rounded-xl border border-gray-200 overflow-hidden bg-white">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="bg-gray-50 text-gray-600 border-b border-gray-200">
-                        <th className="py-3 px-4 font-semibold">Ürün</th>
-                        <th className="py-3 px-4 font-semibold text-center w-24">Adet</th>
-                        <th className="py-3 px-4 font-semibold text-right w-28">Birim Fiyat</th>
-                        <th className="py-3 px-4 font-semibold text-right w-28">Tutar</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {effectiveItems.filter(i => !i.isGift).map((item) => {
-                        const itemTotal = roundMoney(item.price * item.groupedQuantity);
-                        return (
-                          <tr key={item.id} className="border-b border-gray-100">
-                            <td className="py-3 px-4 font-medium text-gray-800">{item.product_name}</td>
-                            <td className="py-3 px-4 text-center text-gray-600">{item.groupedQuantity}</td>
-                            <td className="py-3 px-4 text-right text-gray-600">₺{Number(item.price).toFixed(2)}</td>
-                            <td className="py-3 px-4 text-right font-medium">₺{itemTotal.toFixed(2)}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              {giftItems.length > 0 && (
-                <section>
-                  <h3 className="text-sm font-bold text-amber-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-amber-500" />
-                    İkramlar
-                  </h3>
-                  <div className="rounded-xl border border-amber-200 overflow-hidden bg-amber-50/30">
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="bg-amber-50 text-gray-600 border-b border-amber-100">
-                          <th className="py-3 px-4 font-semibold">Ürün</th>
-                          <th className="py-3 px-4 font-semibold text-center w-20">Adet</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {giftItems.map((item) => (
-                          <tr key={item.id} className="border-b border-amber-100/50">
-                            <td className="py-3 px-4 font-medium text-amber-800">{item.product_name}</td>
-                            <td className="py-3 px-4 text-center text-amber-700">{item.groupedQuantity}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              )}
-            </>
-          ) : (
-            <>
-              {/* Ödeme bekleyen kalemler */}
-              <section>
-                <h3 className="text-sm font-bold text-orange-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-orange-500" />
-                  Ödeme bekleyen ({awaitingItems.length} kalem)
-                </h3>
-                <div className="rounded-xl border border-orange-200 overflow-hidden bg-white">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="bg-orange-50 text-gray-600 border-b border-orange-100">
-                        <th className="py-3 px-4 font-semibold">Ürün</th>
-                        <th className="py-3 px-4 font-semibold text-center w-24">Kalan adet</th>
-                        <th className="py-3 px-4 font-semibold text-right w-24">Birim</th>
-                        <th className="py-3 px-4 font-semibold text-right w-24">Tutar</th>
-                        <th className="py-3 px-4 font-semibold text-right w-24">Ödenen</th>
-                        <th className="py-3 px-4 font-semibold text-right w-24">Kalan</th>
-                        <th className="py-3 px-4 font-semibold text-center w-36">Ödenecek</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {awaitingItems.map((item) => {
-                        const paidQty = item.groupedPaidQuantity || 0;
-                        const remainingQty = item.groupedQuantity - paidQty;
-                        const itemTotal = roundMoney(item.price * item.groupedQuantity);
-                        const paidTotal = roundMoney(item.price * paidQty);
-                        const remainingTotal = roundMoney(item.price * remainingQty);
-                        const selectedQty = selectedQuantities[item.id] || 0;
-                        return (
-                          <tr key={item.id} className="border-b border-gray-100 hover:bg-orange-50/50">
-                            <td className="py-3 px-4 font-medium text-gray-800">{item.product_name}</td>
-                            <td className="py-3 px-4 text-center text-gray-600 font-medium">{remainingQty}</td>
-                            <td className="py-3 px-4 text-right text-gray-600">₺{Number(item.price).toFixed(2)}</td>
-                            <td className="py-3 px-4 text-right font-medium">₺{itemTotal.toFixed(2)}</td>
-                            <td className="py-3 px-4 text-right text-blue-600">₺{paidTotal.toFixed(2)}</td>
-                            <td className="py-3 px-4 text-right font-semibold text-orange-600">₺{remainingTotal.toFixed(2)}</td>
-                            <td className="py-3 px-4">
-                              <div className="flex items-center justify-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => updateQuantity(item.id, selectedQty - 1)}
-                                  disabled={selectedQty <= 0}
-                                  className="w-8 h-8 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-semibold"
-                                >−</button>
-                                <input
-                                  type="number"
-                                  min={0}
-                                  max={remainingQty}
-                                  value={selectedQty}
-                                  onChange={(e) => updateQuantity(item.id, Math.max(0, Math.min(remainingQty, parseInt(e.target.value) || 0)))}
-                                  className="w-14 py-1 text-center border border-gray-300 rounded text-gray-800 font-semibold"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => updateQuantity(item.id, selectedQty + 1)}
-                                  disabled={selectedQty >= remainingQty}
-                                  className="w-8 h-8 rounded border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-50 text-gray-700 font-semibold"
-                                >+</button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {awaitingItems.length === 0 && (
-                    <p className="py-6 text-center text-gray-500">Ödeme bekleyen kalem yok.</p>
-                  )}
-                </div>
-              </section>
-
-              {/* Ödenen kalemler */}
-              <section>
-                <h3 className="text-sm font-bold text-fuchsia-700 theme-sultan:text-green-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-                  <span className="w-2 h-2 rounded-full bg-fuchsia-500 theme-sultan:bg-fuchsia-50 theme-sultan:bg-green-500" />
-                  Ödenen kalemler ({completedItems.length})
-                </h3>
-                <div className="rounded-xl border border-fuchsia-200 theme-sultan:border-green-200 overflow-hidden bg-fuchsia-50 theme-sultan:bg-green-50/30">
-                  <table className="w-full text-left text-sm">
-                    <thead>
-                      <tr className="bg-fuchsia-50 theme-sultan:bg-green-50 text-gray-600 border-b border-fuchsia-100 theme-sultan:border-green-100">
-                        <th className="py-3 px-4 font-semibold">Ürün</th>
-                        <th className="py-3 px-4 font-semibold text-center w-20">Adet</th>
-                        <th className="py-3 px-4 font-semibold text-right w-28">Tutar</th>
-                        <th className="py-3 px-4 font-semibold">Ödeme</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {completedItems.map((item) => {
-                        const paidQty = item.groupedPaidQuantity || 0;
-                        const totalQty = item.groupedQuantity;
-                        const isFullyPaid = paidQty >= totalQty;
-                        const paidTotal = roundMoney(item.price * paidQty);
-                        const itemTotal = roundMoney(item.price * totalQty);
-                        return (
-                          <tr key={item.id} className="border-b border-fuchsia-100 theme-sultan:border-green-100/50">
-                            <td className="py-3 px-4 font-medium text-fuchsia-800 theme-sultan:text-green-800">{item.product_name}</td>
-                            <td className="py-3 px-4 text-center text-fuchsia-700 theme-sultan:text-green-700">
-                              {isFullyPaid ? (
-                                totalQty
-                              ) : (
-                                <span className="flex items-center justify-center gap-1">
-                                  <span className="font-bold">{paidQty}</span>
-                                  <span className="text-gray-400">/</span>
-                                  <span className="text-gray-500">{totalQty}</span>
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-right font-medium text-fuchsia-700 theme-sultan:text-green-700">
-                              {isFullyPaid ? (
-                                `₺${itemTotal.toFixed(2)}`
-                              ) : (
-                                <span className="flex flex-col items-end">
-                                  <span className="font-bold">₺{paidTotal.toFixed(2)}</span>
-                                  <span className="text-xs text-gray-500">/ ₺{itemTotal.toFixed(2)}</span>
-                                </span>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-fuchsia-600 theme-sultan:text-green-600 text-sm">{item.paymentMethod || '—'}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                  {completedItems.length === 0 && (
-                    <p className="py-6 text-center text-gray-500">Henüz ödenen kalem yok.</p>
-                  )}
-                </div>
-              </section>
-
-              {giftItems.length > 0 && (
-                <section>
-                  <h3 className="text-sm font-bold text-amber-700 uppercase tracking-wide mb-3 flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-amber-500" />
-                    İkramlar
-                  </h3>
-                  <div className="rounded-xl border border-amber-200 overflow-hidden bg-amber-50/30">
-                    <table className="w-full text-left text-sm">
-                      <thead>
-                        <tr className="bg-amber-50 text-gray-600 border-b border-amber-100">
-                          <th className="py-3 px-4 font-semibold">Ürün</th>
-                          <th className="py-3 px-4 font-semibold text-center w-20">Adet</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {giftItems.map((item) => (
-                          <tr key={item.id} className="border-b border-amber-100/50">
-                            <td className="py-3 px-4 font-medium text-amber-800">{item.product_name}</td>
-                            <td className="py-3 px-4 text-center text-amber-700">{item.groupedQuantity}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
-              )}
-            </>
-          )}
-        </div>
-
-        {/* Sabit Footer: Parçalı ödeme modunda sadece bilgi; normal modda Seçilen/Kalan ödemeyi al */}
-        <div className="bg-gray-800 border-t border-gray-700 px-8 py-4">
-          {hasAmountBasedPartialPayment ? (
-            <div className="flex items-center justify-between gap-6">
-              <p className="text-sm text-gray-300">
-                Kalan ödeme <strong className="text-white">Parçalı Ödeme (1/2, 1/3 … 1/10)</strong> ile tamamlanmalıdır.
-              </p>
-            </div>
-          ) : (
-            <div className="flex items-center justify-between gap-6">
-              <div className="flex-1 min-w-0">
-                {selectedItemsInfo.length > 0 ? (
-                  <div>
-                    <p className="text-sm text-gray-300 mb-1">Seçilen Ürünler:</p>
-                    <p className="text-base font-semibold text-white truncate">{selectedItemsText || '-'}</p>
+              <div className="flex-1 overflow-y-auto px-6 sm:px-8 py-6">
+                {units.length === 0 ? (
+                  <div className="flex h-full min-h-[240px] items-center justify-center text-slate-400 text-lg">
+                    Bu masada ödemesi alınacak ürün yok.
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-400">Ürün seçmek için miktar belirleyin</p>
+                  <div className="space-y-5">
+                    {productGroups.map((group) => (
+                      <ProductGroupCard
+                        key={group.key}
+                        group={group}
+                        selectedKeys={selectedKeys}
+                        disabled={processing}
+                        onToggleUnit={toggleUnit}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {giftUnits.length > 0 && (
+                  <div className="mt-8">
+                    <h4 className="mb-3 text-xs font-bold uppercase tracking-wider text-amber-700">
+                      İkramlar ({giftUnits.length})
+                    </h4>
+                    <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+                      {giftUnits.map((g) => (
+                        <div
+                          key={g.key}
+                          className="rounded-2xl border-2 border-amber-200 bg-amber-50/70 px-4 py-4 text-center"
+                        >
+                          <p className="text-[11px] font-bold uppercase tracking-wider text-amber-600">İkram</p>
+                          <p className="mt-1.5 text-sm font-bold text-amber-900 line-clamp-2">{g.productName}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </div>
-              <div className="flex items-center space-x-6">
-                <div className="text-right">
-                  <p className="text-sm text-gray-300 mb-1">Seçilen tutar:</p>
-                  <p className="text-2xl font-bold text-white">₺{selectedItemsTotal.toFixed(2)}</p>
-                </div>
-                <div className="flex items-center space-x-3">
-                  {remainingAmount > 0.01 && (
-                    <button
-                      onClick={handlePayRemaining}
-                      disabled={processingItemId === 'bulk'}
-                      className={`px-6 py-3 rounded-lg font-bold text-white text-base transition-all shadow-lg ${
-                        processingItemId === 'bulk'
-                          ? 'bg-gray-600 cursor-not-allowed'
-                          : 'bg-orange-600 hover:bg-orange-700 hover:shadow-xl'
-                      }`}
-                    >
-                      {processingItemId === 'bulk' ? (
-                        <span className="flex items-center space-x-2">
-                          <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          <span>İşleniyor...</span>
-                        </span>
-                      ) : (
-                        `Kalan Ödemeyi Al (₺${remainingAmount.toFixed(2)})`
-                      )}
-                    </button>
-                  )}
-                  <button
-                    onClick={handleBulkPayment}
-                    disabled={selectedItemsInfo.length === 0 || processingItemId === 'bulk'}
-                    className={`px-8 py-3 rounded-lg font-bold text-white text-base transition-all shadow-lg ${
-                      selectedItemsInfo.length === 0 || processingItemId === 'bulk'
-                        ? 'bg-gray-600 cursor-not-allowed'
-                        : 'bg-blue-600 hover:bg-blue-700 hover:shadow-xl'
-                    }`}
-                  >
-                    {processingItemId === 'bulk' ? (
-                      <span className="flex items-center space-x-2">
-                        <svg className="animate-spin h-5 w-5" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        <span>İşleniyor...</span>
+
+              {/* SOL altta: Kalan Tümünü Al butonu */}
+              <div className="shrink-0 px-6 sm:px-8 py-5 bg-white border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => requestPayment('remaining')}
+                  disabled={processing || unpaidUnits.length === 0}
+                  className={`w-full inline-flex items-center justify-center gap-3 rounded-2xl px-6 py-5 text-lg sm:text-xl font-extrabold text-white shadow-lg transition ${
+                    processing || unpaidUnits.length === 0
+                      ? 'bg-slate-300 cursor-not-allowed shadow-none'
+                      : 'bg-gradient-to-r from-orange-600 to-amber-600 hover:brightness-110 active:scale-[0.99]'
+                  }`}
+                >
+                  <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  Kalan Tümünü Al · ₺{remainingAmount.toFixed(2)}
+                </button>
+              </div>
+            </section>
+
+            {/* SAĞ: Sepet */}
+            <aside className="shrink-0 w-full lg:w-[460px] xl:w-[500px] flex flex-col bg-white">
+              <div className="shrink-0 flex items-center justify-between gap-3 px-6 py-4 bg-white border-b border-slate-200">
+                <div className="flex items-center gap-3">
+                  <span className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-white">
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.3 4.6A1 1 0 005.6 19H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z"
+                      />
+                    </svg>
+                    {selectedUnits.length > 0 && (
+                      <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-orange-500 px-1 text-[10px] font-bold text-white ring-2 ring-white">
+                        {selectedUnits.length}
                       </span>
-                    ) : (
-                      `Seçilen Ödemeyi Al (₺${selectedItemsTotal.toFixed(2)})`
                     )}
-                  </button>
+                  </span>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 leading-tight">Sepet</h3>
+                    <p className="text-xs text-slate-500">Seçilen ürünler</p>
+                  </div>
                 </div>
+                {selectedUnits.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={clearSelection}
+                    disabled={processing}
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-40"
+                  >
+                    Temizle
+                  </button>
+                )}
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-5 py-4">
+                {cartLines.length === 0 ? (
+                  <EmptyCart />
+                ) : (
+                  <ul className="space-y-3">
+                    {cartLines.map((line) => (
+                      <CartLine
+                        key={line.key}
+                        line={line}
+                        disabled={processing}
+                        onRemove={() => removeLineFromCart(line)}
+                      />
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="shrink-0 px-5 py-5 bg-slate-50 border-t border-slate-200 space-y-3">
+                <div className="flex items-end justify-between">
+                  <div>
+                    <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Sepet Toplamı</p>
+                    <p className="text-3xl font-extrabold text-slate-900 leading-none mt-1">
+                      ₺{selectedAmount.toFixed(2)}
+                    </p>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-500">
+                    {selectedUnits.length} adet
+                  </p>
+                </div>
+
+                {/* SAĞ altta: Seçilenlerin Ödemesini Al */}
+                <button
+                  type="button"
+                  onClick={() => requestPayment('selected')}
+                  disabled={processing || selectedUnits.length === 0}
+                  className={`w-full inline-flex items-center justify-center gap-3 rounded-2xl px-6 py-5 text-lg sm:text-xl font-extrabold text-white shadow-lg transition ${
+                    processing || selectedUnits.length === 0
+                      ? 'bg-slate-300 cursor-not-allowed shadow-none'
+                      : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:brightness-110 active:scale-[0.99]'
+                  }`}
+                >
+                  {processing ? (
+                    <Spinner />
+                  ) : (
+                    <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+                    </svg>
+                  )}
+                  Seçilenlerin Ödemesini Al
+                </button>
+              </div>
+            </aside>
+          </div>
+
+          {processing && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-slate-950/40 backdrop-blur-[2px]">
+              <div className="flex items-center gap-3 rounded-2xl bg-white px-6 py-4 shadow-xl">
+                <span className="h-5 w-5 animate-spin rounded-full border-2 border-slate-200 border-t-slate-800" />
+                <span className="text-sm font-semibold text-slate-800">Ödeme alınıyor…</span>
               </div>
             </div>
           )}
         </div>
       </div>
-    </div>
-    {toast.show && (
-      <Toast
-        message={toast.message}
-        type={toast.type}
-        onClose={() => setToast({ message: '', type: 'info', show: false })}
-      />
-    )}
-    </>
+
+      {paymentMethodModal && (
+        <PaymentMethodModal
+          title={paymentMethodModal.title}
+          amount={paymentMethodModal.amount}
+          count={paymentMethodModal.count}
+          onCancel={() => setPaymentMethodModal(null)}
+          onSelect={confirmPayment}
+        />
+      )}
+
+      {toast.show && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast({ message: '', type: 'info', show: false })}
+        />
+      )}
+    </>,
+    document.body
   );
 };
+
+/* ----------------------------- Alt bileşenler ----------------------------- */
+
+const Stat = ({ label, value, tone = 'neutral' }) => {
+  const toneClass =
+    tone === 'green'
+      ? 'text-emerald-600'
+      : tone === 'orange'
+      ? 'text-orange-600'
+      : 'text-slate-900';
+  return (
+    <div className="text-right">
+      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
+      <p className={`text-base sm:text-lg font-bold ${toneClass}`}>{value}</p>
+    </div>
+  );
+};
+
+const EmptyCart = () => (
+  <div className="flex h-full min-h-[280px] flex-col items-center justify-center text-center px-6 py-10">
+    <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-slate-100">
+      <svg className="h-10 w-10 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={1.5}
+          d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.3 4.6A1 1 0 005.6 19H17"
+        />
+      </svg>
+    </div>
+    <p className="mt-4 text-base font-bold text-slate-700">Sepet boş</p>
+    <p className="mt-2 text-sm text-slate-500 max-w-[260px]">
+      Soldaki ürünlere tıklayarak ödemesini alacaklarınızı buraya ekleyin.
+    </p>
+  </div>
+);
+
+const CartLine = ({ line, disabled, onRemove }) => {
+  const lineTotal = line.price * line.quantity;
+  return (
+    <li className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-sm transition hover:border-blue-300">
+      <div className="flex items-center gap-3">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-50 text-lg font-extrabold text-blue-700">
+          ×{line.quantity}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-base font-bold text-slate-900">{line.productName}</p>
+          <p className="mt-0.5 text-[13px] text-slate-500">
+            Birim ₺{line.price.toFixed(2)} · Toplam{' '}
+            <span className="font-bold text-slate-800">₺{lineTotal.toFixed(2)}</span>
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRemove}
+          disabled={disabled}
+          title="Sepetten çıkar"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-500 transition hover:border-red-300 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+        >
+          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </li>
+  );
+};
+
+/**
+ * Aynı ürünün tüm adetlerini tek bir çerçeveli kart altında topla.
+ * Başlıkta ürün adı, toplam adet (kalan / ödenen), birim fiyat ve grup toplamı.
+ * İçinde küçük bir alt-grid: her adet ayrı ünite kartı.
+ * Tamamı ödenmişse başlık "tamam" tonunda (emerald).
+ */
+const ProductGroupCard = ({ group, selectedKeys, disabled, onToggleUnit }) => {
+  const allPaid = group.unpaidCount === 0;
+  const groupTotal = group.price * group.units.length;
+
+  return (
+    <div
+      className={`rounded-2xl border-2 p-4 sm:p-5 shadow-sm transition ${
+        allPaid
+          ? 'border-emerald-300 bg-emerald-50/40'
+          : 'border-slate-200 bg-white'
+      }`}
+    >
+      {/* Grup başlığı */}
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="min-w-0 flex items-center gap-3">
+          <span
+            className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-base font-extrabold shadow-sm ${
+              allPaid
+                ? 'bg-emerald-100 text-emerald-700'
+                : 'bg-slate-900 text-white'
+            }`}
+          >
+            ×{group.units.length}
+          </span>
+          <div className="min-w-0">
+            <h4
+              className={`truncate text-base sm:text-lg font-extrabold ${
+                allPaid ? 'text-emerald-900' : 'text-slate-900'
+              }`}
+            >
+              {group.productName}
+            </h4>
+            <p className="mt-0.5 text-xs sm:text-sm font-semibold text-slate-500">
+              Birim ₺{group.price.toFixed(2)}
+              {group.paidCount > 0 && (
+                <>
+                  <span className="mx-1.5 text-slate-300">•</span>
+                  <span className="text-emerald-600">
+                    {group.paidCount} ödendi
+                  </span>
+                </>
+              )}
+              {group.unpaidCount > 0 && (
+                <>
+                  <span className="mx-1.5 text-slate-300">•</span>
+                  <span className="text-orange-600">
+                    {group.unpaidCount} bekliyor
+                  </span>
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+            Grup Toplamı
+          </p>
+          <p
+            className={`text-base sm:text-lg font-extrabold ${
+              allPaid ? 'text-emerald-700' : 'text-slate-900'
+            }`}
+          >
+            ₺{groupTotal.toFixed(2)}
+          </p>
+        </div>
+      </div>
+
+      {/* Alt grid: her adet ayrı kutu */}
+      <div className="grid gap-3 grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+        {group.units.map((u) => (
+          <UnitCard
+            key={u.key}
+            unit={u}
+            selected={selectedKeys.has(u.key) && !u.paid}
+            disabled={disabled}
+            onClick={() => onToggleUnit(u)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * Kompakt ünite kartı — içinde bulunduğu ProductGroupCard başlığı ürün
+ * adını + birim fiyatı zaten gösteriyor; burada yalnızca tek adet "ödeme
+ * hakkı"nın (1 birim) görsel durumu: seçili / ödenmemiş / ödenmiş.
+ */
+const UnitCard = ({ unit, selected, disabled, onClick }) => {
+  if (unit.paid) {
+    return (
+      <div
+        className="relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-3 py-4 h-[96px] shadow-sm cursor-not-allowed"
+        aria-disabled="true"
+        title={unit.paymentMethod || 'Ödendi'}
+      >
+        <svg className="h-7 w-7 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+        </svg>
+        <span className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-widest text-white shadow">
+          Ödendi
+        </span>
+        {unit.paymentMethod && (
+          <span className="text-[10px] font-semibold text-emerald-700 truncate max-w-full">
+            {unit.paymentMethod}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  const base =
+    'relative flex flex-col items-center justify-center gap-1 rounded-xl border-2 px-3 py-4 h-[96px] text-center transition select-none';
+  const stateClass = selected
+    ? 'border-blue-600 bg-gradient-to-br from-blue-50 via-white to-indigo-50 shadow-[0_10px_24px_-8px_rgba(37,99,235,0.45)] ring-2 ring-blue-400/60'
+    : 'border-slate-200 bg-white shadow-sm hover:border-blue-400 hover:shadow-md hover:-translate-y-0.5';
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`${base} ${stateClass} disabled:opacity-60 disabled:cursor-not-allowed`}
+      aria-pressed={selected}
+    >
+      {selected && (
+        <div className="absolute right-1.5 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-white shadow-md ring-2 ring-white">
+          <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+      )}
+      <span
+        className={`text-3xl sm:text-4xl font-extrabold leading-none ${
+          selected ? 'text-blue-700' : 'text-slate-400'
+        }`}
+      >
+        ×1
+      </span>
+      <span
+        className={`text-[11px] font-bold uppercase tracking-wider ${
+          selected ? 'text-blue-700' : 'text-slate-400'
+        }`}
+      >
+        {selected ? 'Seçildi' : 'Seç'}
+      </span>
+    </button>
+  );
+};
+
+const PaymentMethodModal = ({ title, amount, count, onCancel, onSelect }) => {
+  return createPortal(
+    <div className="fixed inset-0 z-[1400] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="w-full max-w-md overflow-hidden rounded-2xl bg-white shadow-2xl">
+        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-5 text-white">
+          <h3 className="text-xl font-bold">{title}</h3>
+          <p className="mt-1 text-sm text-white/90">
+            {count ? `${count} ürün · ` : ''}Toplam: ₺{Number(amount || 0).toFixed(2)}
+          </p>
+        </div>
+        <div className="p-6">
+          <div className="grid grid-cols-2 gap-4">
+            <button
+              type="button"
+              onClick={() => onSelect('Nakit')}
+              className="flex flex-col items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-emerald-500 to-green-600 py-6 text-base font-bold text-white shadow-lg transition hover:brightness-110 active:scale-95"
+            >
+              <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"
+                />
+              </svg>
+              <span>Nakit</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onSelect('Kredi Kartı')}
+              className="flex flex-col items-center justify-center gap-2 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 py-6 text-base font-bold text-white shadow-lg transition hover:brightness-110 active:scale-95"
+            >
+              <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"
+                />
+              </svg>
+              <span>Kredi Kartı</span>
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="mt-5 w-full rounded-xl border border-slate-200 bg-white py-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            İptal
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+};
+
+const Spinner = () => (
+  <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+);
 
 export default TablePartialPaymentModal;

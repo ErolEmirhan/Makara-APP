@@ -90,6 +90,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateTableOrderAmount: (orderId, paidAmount) => ipcRenderer.invoke('update-table-order-amount', orderId, paidAmount),
   createPartialPaymentSale: (saleData) => ipcRenderer.invoke('create-partial-payment-sale', saleData),
   payTableOrderItem: (itemId, paymentMethod, paidQuantity) => ipcRenderer.invoke('pay-table-order-item', itemId, paymentMethod, paidQuantity),
+  payTableOrderItemsBulk: (payload) => ipcRenderer.invoke('pay-table-order-items-bulk', payload),
   // Exit API
   quitApp: () => ipcRenderer.invoke('quit-app'),
   // Mobile API

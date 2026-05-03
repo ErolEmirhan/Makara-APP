@@ -35,8 +35,14 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [networkScanning, setNetworkScanning] = useState(false);
   const [mobilePreferredHost, setMobilePreferredHost] = useState(null);
   const [computerHostname, setComputerHostname] = useState('');
+  const [mobileDiagOpen, setMobileDiagOpen] = useState(false);
+  const [mobileDiagLoading, setMobileDiagLoading] = useState(false);
+  const [mobileDiagSteps, setMobileDiagSteps] = useState([]);
+  const [mobileDiagRevealIdx, setMobileDiagRevealIdx] = useState(-1);
+  const [mobileDiagSuccess, setMobileDiagSuccess] = useState(null);
   const menuRef = useRef(null);
   const hamburgerMenuRef = useRef(null);
+  const mobileDiagTimerRef = useRef(null);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -224,6 +230,64 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       showToast('Ayarlanırken hata oluştu', 'error');
     }
   };
+
+  const runMobileConnectionDiagnostics = async () => {
+    if (!window.electronAPI?.runMobileStaffDiagnostics) {
+      showToast('Bu sürümde uygulama içi bağlantı taraması yok', 'error');
+      return;
+    }
+    if (mobileDiagTimerRef.current) {
+      window.clearTimeout(mobileDiagTimerRef.current);
+      mobileDiagTimerRef.current = null;
+    }
+    setMobileDiagOpen(true);
+    setMobileDiagLoading(true);
+    setMobileDiagSteps([]);
+    setMobileDiagRevealIdx(-1);
+    setMobileDiagSuccess(null);
+    try {
+      const r = await window.electronAPI.runMobileStaffDiagnostics();
+      const steps = Array.isArray(r?.steps) ? r.steps : [];
+      setMobileDiagSteps(steps);
+      setMobileDiagSuccess(!!r?.success);
+      showToast(r?.success ? 'Tarama: temel kontroller uygun görünüyor' : 'Tarama tamam — uyarı olan adımlara bakın', r?.success ? 'success' : 'warning');
+    } catch (e) {
+      console.error('Bağlantı taraması:', e);
+      setMobileDiagSteps([
+        { key: 'err', title: 'Çalıştırma hatası', detail: e?.message || String(e), level: 'error' },
+      ]);
+      setMobileDiagSuccess(false);
+      showToast('Tarama başlatılamadı', 'error');
+    } finally {
+      setMobileDiagLoading(false);
+    }
+  };
+
+  /** Adım listesini sırayla ekranda belirmek için (görünür satır efekti) */
+  useEffect(() => {
+    if (!mobileDiagSteps.length) {
+      setMobileDiagRevealIdx(-1);
+      return undefined;
+    }
+    let cancelled = false;
+    let idx = -1;
+    const revealNext = () => {
+      if (cancelled) return;
+      idx += 1;
+      setMobileDiagRevealIdx(idx);
+      if (idx < mobileDiagSteps.length - 1) {
+        mobileDiagTimerRef.current = window.setTimeout(revealNext, 420);
+      }
+    };
+    mobileDiagTimerRef.current = window.setTimeout(revealNext, 240);
+    return () => {
+      cancelled = true;
+      if (mobileDiagTimerRef.current) {
+        window.clearTimeout(mobileDiagTimerRef.current);
+        mobileDiagTimerRef.current = null;
+      }
+    };
+  }, [mobileDiagSteps]);
 
   const refreshManagerOpsConfig = async () => {
     try {
@@ -433,7 +497,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           >
             {systemTitle}
           </h1>
-          <p className="text-xs text-gray-500 dark:text-slate-400 font-medium">v41.0.0</p>
+          <p className="text-xs text-gray-500 dark:text-slate-400 font-medium">v43.0.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300 dark:border-slate-600 flex items-center gap-3">
           {typeof setThemeMode === 'function' && (
@@ -881,6 +945,15 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                     setShowMobileModal(false);
                     setQrCode(null);
                     setServerURL('');
+                    setMobileDiagOpen(false);
+                    setMobileDiagLoading(false);
+                    setMobileDiagSteps([]);
+                    setMobileDiagRevealIdx(-1);
+                    setMobileDiagSuccess(null);
+                    if (mobileDiagTimerRef.current) {
+                      window.clearTimeout(mobileDiagTimerRef.current);
+                      mobileDiagTimerRef.current = null;
+                    }
                   }}
                   className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/15 bg-white/5 text-slate-200 transition hover:bg-white/15 hover:text-white"
                   aria-label="Kapat"
@@ -1058,6 +1131,98 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                         <div className="flex flex-col items-center gap-3 py-8">
                           <div className="h-11 w-11 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-800" />
                           <p className="text-sm font-semibold text-zinc-600">QR hazırlanıyor…</p>
+                        </div>
+                      )}
+                      {window.electronAPI?.runMobileStaffDiagnostics && (
+                        <div className="w-full max-w-sm rounded-2xl border border-zinc-200/90 bg-white/95 p-3 shadow-sm">
+                          <button
+                            type="button"
+                            onClick={() => void runMobileConnectionDiagnostics()}
+                            disabled={mobileDiagLoading}
+                            className="flex w-full items-center justify-center gap-2 rounded-xl bg-teal-700 py-2.5 text-[11px] font-bold uppercase tracking-wide text-white shadow-md transition hover:bg-teal-800 disabled:opacity-60"
+                          >
+                            {mobileDiagLoading ? (
+                              <>
+                                <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/40 border-t-white" aria-hidden />
+                                Taranıyor…
+                              </>
+                            ) : (
+                              <>
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth={2}
+                                    d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
+                                  />
+                                </svg>
+                                Bağlantıyı adım adım tara
+                              </>
+                            )}
+                          </button>
+                          {mobileDiagOpen && mobileDiagLoading && (
+                            <ul className="mt-3 space-y-2" aria-busy="true">
+                              {[0, 1, 2].map((s) => (
+                                <li key={s} className="animate-pulse rounded-lg border border-zinc-100 bg-zinc-100 px-3 py-2">
+                                  <div className="mb-2 h-2.5 w-[42%] rounded bg-zinc-300" />
+                                  <div className="h-2 w-full rounded bg-zinc-200" />
+                                  <div className="mt-1.5 h-2 w-[72%] rounded bg-zinc-200" />
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                          {mobileDiagOpen && !mobileDiagLoading && mobileDiagSuccess !== null && (
+                            <div
+                              className={`mt-3 rounded-xl px-2.5 py-2 text-center text-[11px] font-bold ${
+                                mobileDiagSuccess
+                                  ? 'bg-emerald-100 text-emerald-900 ring-1 ring-emerald-200/80'
+                                  : 'bg-amber-100 text-amber-950 ring-1 ring-amber-200/80'
+                              }`}
+                            >
+                              {mobileDiagSuccess
+                                ? 'Sunucuya erişim kontrolleri geçmiş görünüyor.'
+                                : 'En az bir adımda sorun işareti var — ayrıntıları aşağıda kontrol edin.'}
+                            </div>
+                          )}
+                          {mobileDiagOpen && !mobileDiagLoading && mobileDiagSteps.length > 0 && (
+                            <ul className="mt-2 max-h-52 space-y-2 overflow-y-auto pr-1 text-left">
+                              {mobileDiagSteps.map((step, i) => {
+                                if (i > mobileDiagRevealIdx) return null;
+                                const level = step.level === 'warn' ? 'warn' : step.level === 'error' ? 'error' : 'ok';
+                                const ring =
+                                  level === 'error'
+                                    ? 'border-rose-200 bg-rose-50/95 ring-1 ring-rose-200/70'
+                                    : level === 'warn'
+                                      ? 'border-amber-200 bg-amber-50/95 ring-1 ring-amber-200/70'
+                                      : 'border-emerald-200 bg-emerald-50/95 ring-1 ring-emerald-200/70';
+                                const badge =
+                                  level === 'error'
+                                    ? 'bg-rose-600 text-white'
+                                    : level === 'warn'
+                                      ? 'bg-amber-600 text-white'
+                                      : 'bg-emerald-600 text-white';
+                                return (
+                                  <li key={step.key || `diag-step-${i}`} className={`rounded-xl border px-3 py-2.5 shadow-sm ${ring}`}>
+                                    <div className="flex items-start gap-2">
+                                      <span
+                                        className={`mt-0.5 shrink-0 rounded-md px-1.5 py-0.5 text-[9px] font-extrabold uppercase ${badge}`}
+                                      >
+                                        {level === 'error' ? 'Hata' : level === 'warn' ? 'Uyarı' : 'Tamam'}
+                                      </span>
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-[11px] font-bold text-zinc-900">{step.title}</p>
+                                        {step.detail && (
+                                          <p className="mt-1 whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-zinc-700">
+                                            {step.detail}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
                         </div>
                       )}
                     </div>

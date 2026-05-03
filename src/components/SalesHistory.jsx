@@ -39,176 +39,80 @@ const SalesHistory = () => {
     }
   };
 
-  // Kısmi ödemeleri grupla (masa sonlandığı ana kadar olan ödemeler)
+  /**
+   * Satışları MASA OTURUMUNA (session) göre grupla.
+   *
+   * Gerçek çözüm: her `tableOrder` tam olarak bir oturum demektir
+   * (masa boştan doluya → doludan boşa). Backend tüm sale kayıtlarına
+   * `table_order_id` etiketi ekliyor. Burada yalnızca bu ID'ye göre
+   * grupluyoruz:
+   *   - Aynı `table_order_id` → tek adisyon
+   *   - Farklı oturum (masa kapandıktan sonra tekrar dolmuş) → farklı adisyon
+   *   - İptal edilen ürünler hiçbir sale'e yazılmaz → adisyona yansımaz
+   *
+   * `table_order_id` olmayan eski veriler standalone bırakılır (yanlış
+   * birleştirmeye izin vermemek için heuristik session tahmini kaldırıldı).
+   */
   const groupPartialPayments = (sales) => {
-    const grouped = {};
+    const sessionGroups = {};
     const standalone = [];
 
-    // Önce tüm satışları tarih/saat'e göre sırala (en eski önce)
     const sortedSales = [...sales].sort((a, b) => {
-      const dateA = `${a.sale_date || ''} ${a.sale_time || ''}`;
-      const dateB = `${b.sale_date || ''} ${b.sale_time || ''}`;
-      return dateA.localeCompare(dateB);
+      const dtA = parseDateTime(a.sale_date, a.sale_time)?.getTime() ?? 0;
+      const dtB = parseDateTime(b.sale_date, b.sale_time)?.getTime() ?? 0;
+      return dtA - dtB;
     });
 
-    // Aynı masa için satışları grupla (masa sonlandığı ana kadar)
-    const tableGroups = {};
-    
-    sortedSales.forEach(sale => {
-      // Sadece masa satışlarını işle (table_name varsa)
-      if (sale.table_name && sale.sale_date && sale.sale_time && sale.payment_method) {
-        const tableKey = `${sale.table_name || ''}_${sale.table_type || ''}`;
-        
-        if (!tableGroups[tableKey]) {
-          tableGroups[tableKey] = [];
-        }
-        
-        tableGroups[tableKey].push(sale);
+    sortedSales.forEach((sale) => {
+      const tableOrderId = sale.table_order_id;
+      let key = null;
+      if (tableOrderId != null && tableOrderId !== '') {
+        key = `to_${tableOrderId}`;
+      } else if (sale.table_name && sale.sale_date && sale.sale_time) {
+        // Eski kayıtlar için: aynı masa + birebir aynı tarih+saat → tek adisyon
+        key = `ts_${sale.table_name}|${sale.table_type || ''}|${sale.sale_date}|${sale.sale_time}`;
       } else {
-        // Masa satışı değilse, olduğu gibi ekle
         standalone.push(sale);
+        return;
       }
+      if (!sessionGroups[key]) {
+        sessionGroups[key] = {
+          table_order_id: tableOrderId,
+          table_name: sale.table_name || null,
+          table_type: sale.table_type || null,
+          first_id: sale.id,
+          first_sale_date: sale.sale_date,
+          first_sale_time: sale.sale_time,
+          last_sale_date: sale.sale_date,
+          last_sale_time: sale.sale_time,
+          payment_methods: new Set(),
+          total_amount: 0,
+          items_array: [],
+          items_strings: [],
+          staff_names: new Set(),
+          original_sales: []
+        };
+      }
+      const g = sessionGroups[key];
+      g.last_sale_date = sale.sale_date;
+      g.last_sale_time = sale.sale_time;
+      g.total_amount += parseFloat(sale.total_amount || 0);
+      if (sale.payment_method) g.payment_methods.add(sale.payment_method);
+      if (sale.staff_name) g.staff_names.add(sale.staff_name);
+      if (Array.isArray(sale.items_array) && sale.items_array.length > 0) {
+        g.items_array.push(...sale.items_array);
+      } else if (sale.items) {
+        g.items_strings.push(sale.items);
+      }
+      g.original_sales.push(sale);
     });
 
-    // Her masa için oturumları belirle (masa sonlandığı ana kadar)
-    Object.keys(tableGroups).forEach(tableKey => {
-      const tableSales = tableGroups[tableKey];
-      const sessions = [];
-      let currentSession = [];
-
-      for (let i = 0; i < tableSales.length; i++) {
-        const sale = tableSales[i];
-        const saleDateTime = parseDateTime(sale.sale_date, sale.sale_time);
-        
-        // Masa kapanış satışını tespit et
-        // Masa kapanış satışı (complete-table-order) genellikle çok sayıda ürün içerir (tüm sipariş)
-        const itemCount = sale.items_array && Array.isArray(sale.items_array) 
-          ? sale.items_array.length 
-          : (sale.items ? sale.items.split(',').length : 0);
-        
-        // Masa kapanış satışı kriterleri:
-        // 1. 2 veya daha fazla ürün içeriyorsa (tüm sipariş genellikle 2+ ürün)
-        // Bu, masa sonlandığında yapılan complete-table-order satışıdır
-        // Kısmi ödemeler genellikle 1 ürün içerir
-        const isTableClosingSale = itemCount >= 2;
-        
-        if (currentSession.length === 0) {
-          // İlk satış, yeni oturum başlat
-          currentSession.push(sale);
-        } else {
-          // Önceki satışın tarih/saatini al
-          const prevSale = currentSession[currentSession.length - 1];
-          const prevDateTime = parseDateTime(prevSale.sale_date, prevSale.sale_time);
-          
-          // Önceki satış masa kapanış satışı mıydı?
-          const prevItemCount = prevSale.items_array && Array.isArray(prevSale.items_array) 
-            ? prevSale.items_array.length 
-            : (prevSale.items ? prevSale.items.split(',').length : 0);
-          const prevIsTableClosingSale = prevItemCount >= 2;
-          
-          // Eğer önceki satış masa kapanış satışıysa (2+ ürün), yeni oturum başlat
-          // (Masa sonlandı, yeni müşteri oturdu)
-          if (prevIsTableClosingSale) {
-            // Mevcut oturumu kaydet
-            sessions.push([...currentSession]);
-            // Yeni oturum başlat
-            currentSession = [sale];
-          } else if (saleDateTime && prevDateTime) {
-            // İki satış arasındaki farkı hesapla (dakika cinsinden)
-            const diffMinutes = (saleDateTime - prevDateTime) / (1000 * 60);
-            
-            // Eğer 30 dakikadan fazla geçtiyse, yeni oturum başlat
-            // (Masa sonlandı, yeni müşteri oturdu)
-            if (diffMinutes > 30) {
-              // Mevcut oturumu kaydet
-              sessions.push([...currentSession]);
-              // Yeni oturum başlat
-              currentSession = [sale];
-            } else {
-              // Aynı oturum, ekle
-              currentSession.push(sale);
-            }
-          } else {
-            // Tarih/saat parse edilemediyse, aynı oturuma ekle
-            currentSession.push(sale);
-          }
-        }
-      }
-      
-      // Son oturumu da ekle
-      if (currentSession.length > 0) {
-        sessions.push(currentSession);
-      }
-
-      // Her oturumu grupla (sadece birden fazla satış varsa)
-      sessions.forEach((session, sessionIndex) => {
-        // Eğer oturumda sadece 1 satış varsa, gruplama yapma, standalone'a ekle
-        if (session.length === 1) {
-          standalone.push(session[0]);
-          return;
-        }
-        
-        // Oturum anahtarı: masa + oturum indeksi
-        const sessionKey = `${tableKey}_session_${sessionIndex}`;
-        
-        if (session.length > 0) {
-          const firstSale = session[0];
-          const lastSale = session[session.length - 1];
-          
-          grouped[sessionKey] = {
-            id: firstSale.id, // İlk satışın id'si
-            table_name: firstSale.table_name,
-            table_type: firstSale.table_type,
-            sale_date: firstSale.sale_date, // İlk ödeme tarihi
-            sale_time: firstSale.sale_time, // İlk ödeme saati
-            last_sale_date: lastSale.sale_date, // Son ödeme tarihi
-            last_sale_time: lastSale.sale_time, // Son ödeme saati
-            payment_methods: new Set(), // Tüm ödeme yöntemleri
-            total_amount: 0,
-            items_array: [],
-            staff_names: new Set(),
-            original_sales: [] // Orijinal satışları sakla
-          };
-          
-          // Tüm satışları birleştir
-          session.forEach(sale => {
-            // Toplam tutarı ekle
-            grouped[sessionKey].total_amount += parseFloat(sale.total_amount || 0);
-            
-            // Ödeme yöntemini ekle
-            grouped[sessionKey].payment_methods.add(sale.payment_method);
-            
-            // Items array'i birleştir
-            if (sale.items_array && Array.isArray(sale.items_array)) {
-              grouped[sessionKey].items_array.push(...sale.items_array);
-            } else if (sale.items) {
-              // Eğer items_array yoksa items string'inden parse etmeye çalış
-              if (!grouped[sessionKey].items_strings) {
-                grouped[sessionKey].items_strings = [];
-              }
-              grouped[sessionKey].items_strings.push(sale.items);
-            }
-            
-            // Personel isimlerini ekle
-            if (sale.staff_name) {
-              grouped[sessionKey].staff_names.add(sale.staff_name);
-            }
-            
-            // Orijinal satışı sakla
-            grouped[sessionKey].original_sales.push(sale);
-          });
-        }
-      });
-    });
-
-    // Gruplanmış satışları formatla
-    const groupedSales = Object.values(grouped).map(group => {
-      // Eğer items_array varsa onu kullan, yoksa items_strings'den birleştir
+    const groupedSales = Object.values(sessionGroups).map((g) => {
       let itemsText = '';
-      if (group.items_array && group.items_array.length > 0) {
-        // Aynı ürünleri birleştir (toplam miktar)
+      let mergedItems = [];
+      if (g.items_array.length > 0) {
         const itemMap = {};
-        group.items_array.forEach(item => {
+        g.items_array.forEach((item) => {
           const itemKey = `${item.product_id || item.product_name}_${item.price}`;
           if (!itemMap[itemKey]) {
             itemMap[itemKey] = {
@@ -219,50 +123,41 @@ const SalesHistory = () => {
               isGift: item.isGift || false
             };
           }
-          itemMap[itemKey].quantity += (item.quantity || 0);
-          // Eğer bir item ikram ise, tümü ikram olarak işaretle
-          if (item.isGift) {
-            itemMap[itemKey].isGift = true;
-          }
+          itemMap[itemKey].quantity += (Number(item.quantity) || 0);
+          if (item.isGift) itemMap[itemKey].isGift = true;
         });
-        
-        // Birleştirilmiş ürünleri string'e çevir
-        itemsText = Object.values(itemMap).map(item => {
-          const giftText = item.isGift ? ' (İKRAM)' : '';
-          return `${item.product_name} x${item.quantity}${giftText}`;
-        }).join(', ');
-        
-        // items_array'i de birleştirilmiş haliyle güncelle
-        group.items_array = Object.values(itemMap);
-      } else if (group.items_strings && group.items_strings.length > 0) {
-        itemsText = group.items_strings.join(', ');
+        mergedItems = Object.values(itemMap).filter((x) => (Number(x.quantity) || 0) > 0);
+        itemsText = mergedItems
+          .map((item) => `${item.product_name} x${item.quantity}${item.isGift ? ' (İKRAM)' : ''}`)
+          .join(', ');
+      } else if (g.items_strings.length > 0) {
+        itemsText = g.items_strings.join(', ');
       }
 
-      // Ödeme yöntemlerini birleştir
-      const paymentMethods = Array.from(group.payment_methods);
-      const paymentMethodText = paymentMethods.length > 1 
-        ? `${paymentMethods.join(' + ')} (Toplam)` 
+      const paymentMethods = Array.from(g.payment_methods);
+      const paymentMethodText = paymentMethods.length > 1
+        ? `${paymentMethods.join(' + ')} (Toplam)`
         : paymentMethods[0] || 'Bilinmiyor';
 
       return {
-        id: group.id,
-        table_name: group.table_name,
-        table_type: group.table_type,
-        sale_date: group.sale_date, // İlk ödeme tarihi
-        sale_time: group.sale_time, // İlk ödeme saati
-        last_sale_date: group.last_sale_date, // Son ödeme tarihi
-        last_sale_time: group.last_sale_time, // Son ödeme saati
+        id: g.first_id,
+        table_order_id: g.table_order_id,
+        table_name: g.table_name,
+        table_type: g.table_type,
+        sale_date: g.first_sale_date,
+        sale_time: g.first_sale_time,
+        last_sale_date: g.last_sale_date,
+        last_sale_time: g.last_sale_time,
         payment_method: paymentMethodText,
-        total_amount: group.total_amount,
+        total_amount: Math.round(g.total_amount * 100) / 100,
         items: itemsText,
-        items_array: group.items_array || [],
-        staff_name: Array.from(group.staff_names).join(', ') || null,
-        isGrouped: true, // Gruplanmış olduğunu işaretle
-        original_sales: group.original_sales // Orijinal satışları sakla
+        items_array: mergedItems,
+        staff_name: Array.from(g.staff_names).join(', ') || null,
+        isGrouped: g.original_sales.length > 1,
+        original_sales: g.original_sales
       };
     });
 
-    // Masanın sonlandırılma tarihine göre sırala (en yeni önce) – parseDateTime ile doğru tarih karşılaştırması
     const allSales = [...groupedSales, ...standalone].sort((a, b) => {
       const dateStrA = a.isGrouped && a.last_sale_date && a.last_sale_time
         ? [a.last_sale_date, a.last_sale_time]
@@ -272,7 +167,7 @@ const SalesHistory = () => {
         : [b.sale_date, b.sale_time];
       const timeA = parseDateTime(dateStrA[0], dateStrA[1])?.getTime() ?? 0;
       const timeB = parseDateTime(dateStrB[0], dateStrB[1])?.getTime() ?? 0;
-      return timeB - timeA; // Sonlandırılma tarihi en yeni olan önce
+      return timeB - timeA;
     });
 
     return allSales;

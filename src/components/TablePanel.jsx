@@ -127,104 +127,85 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     }
   }, []);
 
+  /**
+   * Satışları MASA OTURUMUNA göre grupla.
+   *
+   * Gerçek çözüm: her `tableOrder` tam olarak **bir oturum**'u temsil eder
+   * (masa boştan doluya → doludan boşa). `pay-table-order-item`,
+   * `pay-table-order-items-bulk`, `create-partial-payment-sale` ve
+   * `complete-table-order` sale kayıtlarını `table_order_id` ile etiketler.
+   * Burada sadece `table_order_id` bazında grupluyoruz:
+   *  - Aynı `table_order_id` → tek adisyon
+   *  - Farklı oturum (masa kapandıktan sonra tekrar dolmuş) → farklı adisyon
+   *  - İptal edilen ürünler hiçbir sale'e yazılmaz → adisyona yansımaz
+   *
+   * Eski sale kayıtlarında (henüz `table_order_id` yoksa) güvenli geri dönüş:
+   * her bir satışı standalone göster (karışık session heuristik'i kaldırıldı;
+   * yanlış birleştirme, ciro açığı/fazlası yapmayacak).
+   */
   const groupPartialPayments = useCallback((sales) => {
-    const grouped = {};
+    const sessionGroups = {};
     const standalone = [];
+
     const sortedSales = [...sales].sort((a, b) => {
-      const dateA = `${a.sale_date || ''} ${a.sale_time || ''}`;
-      const dateB = `${b.sale_date || ''} ${b.sale_time || ''}`;
-      return dateA.localeCompare(dateB);
+      const dtA = parseDateTime(a.sale_date, a.sale_time)?.getTime() ?? 0;
+      const dtB = parseDateTime(b.sale_date, b.sale_time)?.getTime() ?? 0;
+      return dtA - dtB; // eskiden yeniye
     });
-    const tableGroups = {};
-    sortedSales.forEach(sale => {
-      if (sale.table_name && sale.sale_date && sale.sale_time && sale.payment_method) {
-        const tableKey = `${sale.table_name || ''}_${sale.table_type || ''}`;
-        if (!tableGroups[tableKey]) tableGroups[tableKey] = [];
-        tableGroups[tableKey].push(sale);
+
+    sortedSales.forEach((sale) => {
+      const tableOrderId = sale.table_order_id;
+      let key = null;
+      if (tableOrderId != null && tableOrderId !== '') {
+        // Birincil: gerçek oturum ID'si
+        key = `to_${tableOrderId}`;
+      } else if (sale.table_name && sale.sale_date && sale.sale_time) {
+        // İkincil (eski/legacy veriler için): aynı masa + birebir aynı
+        // tarih/saat → aynı kapanış/toplu ödeme anı → tek adisyon
+        key = `ts_${sale.table_name}|${sale.table_type || ''}|${sale.sale_date}|${sale.sale_time}`;
       } else {
         standalone.push(sale);
+        return;
       }
-    });
-    Object.keys(tableGroups).forEach(tableKey => {
-      const tableSales = tableGroups[tableKey];
-      const sessions = [];
-      let currentSession = [];
-      for (let i = 0; i < tableSales.length; i++) {
-        const sale = tableSales[i];
-        const saleDateTime = parseDateTime(sale.sale_date, sale.sale_time);
-        const itemCount = sale.items_array && Array.isArray(sale.items_array)
-          ? sale.items_array.length
-          : (sale.items ? sale.items.split(',').length : 0);
-        const isTableClosingSale = itemCount >= 2;
-        if (currentSession.length === 0) {
-          currentSession.push(sale);
-        } else {
-          const prevSale = currentSession[currentSession.length - 1];
-          const prevDateTime = parseDateTime(prevSale.sale_date, prevSale.sale_time);
-          const prevItemCount = prevSale.items_array && Array.isArray(prevSale.items_array)
-            ? prevSale.items_array.length
-            : (prevSale.items ? prevSale.items.split(',').length : 0);
-          const prevIsTableClosingSale = prevItemCount >= 2;
-          if (prevIsTableClosingSale) {
-            sessions.push([...currentSession]);
-            currentSession = [sale];
-          } else if (saleDateTime && prevDateTime) {
-            const diffMinutes = (saleDateTime - prevDateTime) / (1000 * 60);
-            if (diffMinutes > 30) {
-              sessions.push([...currentSession]);
-              currentSession = [sale];
-            } else {
-              currentSession.push(sale);
-            }
-          } else {
-            currentSession.push(sale);
-          }
-        }
+      if (!sessionGroups[key]) {
+        sessionGroups[key] = {
+          table_order_id: tableOrderId,
+          table_name: sale.table_name || null,
+          table_type: sale.table_type || null,
+          first_sale_date: sale.sale_date,
+          first_sale_time: sale.sale_time,
+          last_sale_date: sale.sale_date,
+          last_sale_time: sale.sale_time,
+          first_id: sale.id,
+          payment_methods: new Set(),
+          total_amount: 0,
+          items_array: [],
+          items_strings: [],
+          staff_names: new Set(),
+          original_sales: []
+        };
       }
-      if (currentSession.length > 0) sessions.push(currentSession);
-      sessions.forEach((session, sessionIndex) => {
-        if (session.length === 1) {
-          standalone.push(session[0]);
-          return;
-        }
-        const sessionKey = `${tableKey}_session_${sessionIndex}`;
-        if (session.length > 0) {
-          const firstSale = session[0];
-          const lastSale = session[session.length - 1];
-          grouped[sessionKey] = {
-            id: firstSale.id,
-            table_name: firstSale.table_name,
-            table_type: firstSale.table_type,
-            sale_date: firstSale.sale_date,
-            sale_time: firstSale.sale_time,
-            last_sale_date: lastSale.sale_date,
-            last_sale_time: lastSale.sale_time,
-            payment_methods: new Set(),
-            total_amount: 0,
-            items_array: [],
-            staff_names: new Set(),
-            original_sales: []
-          };
-          session.forEach(sale => {
-            grouped[sessionKey].total_amount += parseFloat(sale.total_amount || 0);
-            grouped[sessionKey].payment_methods.add(sale.payment_method);
-            if (sale.items_array && Array.isArray(sale.items_array)) {
-              grouped[sessionKey].items_array.push(...sale.items_array);
-            } else if (sale.items) {
-              if (!grouped[sessionKey].items_strings) grouped[sessionKey].items_strings = [];
-              grouped[sessionKey].items_strings.push(sale.items);
-            }
-            if (sale.staff_name) grouped[sessionKey].staff_names.add(sale.staff_name);
-            grouped[sessionKey].original_sales.push(sale);
-          });
-        }
-      });
+      const g = sessionGroups[key];
+      g.last_sale_date = sale.sale_date;
+      g.last_sale_time = sale.sale_time;
+      g.total_amount += parseFloat(sale.total_amount || 0);
+      if (sale.payment_method) g.payment_methods.add(sale.payment_method);
+      if (sale.staff_name) g.staff_names.add(sale.staff_name);
+      if (Array.isArray(sale.items_array) && sale.items_array.length > 0) {
+        g.items_array.push(...sale.items_array);
+      } else if (sale.items) {
+        g.items_strings.push(sale.items);
+      }
+      g.original_sales.push(sale);
     });
-    const groupedSales = Object.values(grouped).map(group => {
+
+    const groupedSales = Object.values(sessionGroups).map((g) => {
+      // Aynı oturum içinde aynı ürünü birleştir (product_id + price bazında)
       let itemsText = '';
-      if (group.items_array && group.items_array.length > 0) {
+      let mergedItems = [];
+      if (g.items_array.length > 0) {
         const itemMap = {};
-        group.items_array.forEach(item => {
+        g.items_array.forEach((item) => {
           const itemKey = `${item.product_id || item.product_name}_${item.price}`;
           if (!itemMap[itemKey]) {
             itemMap[itemKey] = {
@@ -235,39 +216,42 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               isGift: item.isGift || false
             };
           }
-          itemMap[itemKey].quantity += (item.quantity || 0);
+          itemMap[itemKey].quantity += (Number(item.quantity) || 0);
           if (item.isGift) itemMap[itemKey].isGift = true;
         });
-        itemsText = Object.values(itemMap).map(item => {
-          const giftText = item.isGift ? ' (İKRAM)' : '';
-          return `${item.product_name} x${item.quantity}${giftText}`;
-        }).join(', ');
-        group.items_array = Object.values(itemMap);
-      } else if (group.items_strings && group.items_strings.length > 0) {
-        itemsText = group.items_strings.join(', ');
+        mergedItems = Object.values(itemMap).filter((x) => (Number(x.quantity) || 0) > 0);
+        itemsText = mergedItems
+          .map((item) => `${item.product_name} x${item.quantity}${item.isGift ? ' (İKRAM)' : ''}`)
+          .join(', ');
+      } else if (g.items_strings.length > 0) {
+        itemsText = g.items_strings.join(', ');
       }
-      const paymentMethods = Array.from(group.payment_methods);
+
+      const paymentMethods = Array.from(g.payment_methods);
       const paymentMethodText = paymentMethods.length > 1
         ? `${paymentMethods.join(' + ')} (Toplam)`
         : paymentMethods[0] || 'Bilinmiyor';
+
       return {
-        id: group.id,
-        table_name: group.table_name,
-        table_type: group.table_type,
-        sale_date: group.sale_date,
-        sale_time: group.sale_time,
-        last_sale_date: group.last_sale_date,
-        last_sale_time: group.last_sale_time,
+        id: g.first_id,
+        table_order_id: g.table_order_id,
+        table_name: g.table_name,
+        table_type: g.table_type,
+        sale_date: g.first_sale_date,
+        sale_time: g.first_sale_time,
+        last_sale_date: g.last_sale_date,
+        last_sale_time: g.last_sale_time,
         payment_method: paymentMethodText,
-        total_amount: group.total_amount,
+        total_amount: Math.round(g.total_amount * 100) / 100,
         items: itemsText,
-        items_array: group.items_array || [],
-        staff_name: Array.from(group.staff_names).join(', ') || null,
-        isGrouped: true,
-        original_sales: group.original_sales
+        items_array: mergedItems,
+        staff_name: Array.from(g.staff_names).join(', ') || null,
+        isGrouped: g.original_sales.length > 1,
+        original_sales: g.original_sales
       };
     });
-    // Masanın sonlandırılma tarihine göre sırala (en yeni önce) – parseDateTime ile doğru tarih karşılaştırması
+
+    // Sonlandırılma (son ödeme) tarihine göre sırala; yeni olan önce
     const allSales = [...groupedSales, ...standalone].sort((a, b) => {
       const dateStrA = a.isGrouped && a.last_sale_date && a.last_sale_time
         ? [a.last_sale_date, a.last_sale_time]
@@ -277,8 +261,9 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         : [b.sale_date, b.sale_time];
       const timeA = parseDateTime(dateStrA[0], dateStrA[1])?.getTime() ?? 0;
       const timeB = parseDateTime(dateStrB[0], dateStrB[1])?.getTime() ?? 0;
-      return timeB - timeA; // Sonlandırılma tarihi en yeni olan önce
+      return timeB - timeA;
     });
+
     return allSales;
   }, [parseDateTime]);
 
@@ -1659,30 +1644,43 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   };
 
   // Ürün bazlı ödeme tamamlandı (siparişleri yenile)
+  // Yeni kısmi ödeme sistemi: tüm adetler ödendiyse backend order.status='completed' yapar,
+  // pending filtresi sayesinde masa listesinde otomatik olarak boşa düşer. Modal ve ana
+  // sipariş detayı da otomatik kapanır, başarı toast'u gösterilir.
   const handleCompletePartialPayment = async (payments) => {
     if (!selectedOrder || !window.electronAPI) {
       return;
     }
 
     try {
-      // Siparişleri yenile
       await loadTableOrders();
-      
-      // Sipariş detaylarını yeniden yükle
-      const updatedItems = await window.electronAPI.getTableOrderItems(selectedOrder.id);
-      setOrderItems(updatedItems || []);
-      
-      // Sipariş bilgisini de güncelle (kalan tutar için önemli)
+
+      const updatedItems = (await window.electronAPI.getTableOrderItems(selectedOrder.id)) || [];
+      setOrderItems(updatedItems);
+
+      // order.total_amount < 0.01 olduğu anda order.status='completed' olur
+      // ve getTableOrders pending filtresi onu listeden çıkarır.
       const updatedOrders = await window.electronAPI.getTableOrders();
       const updatedOrder = updatedOrders.find(o => o.id === selectedOrder.id);
       if (updatedOrder) {
         setSelectedOrder(updatedOrder);
       }
-      
-      // Eğer tüm ürünlerin ödemesi alındıysa modal'ı kapat
-      const unpaidItems = updatedItems.filter(item => !item.is_paid && !item.isGift);
-      if (unpaidItems.length === 0) {
+
+      // Ödenmemiş (tamamlanmamış) non-gift kalem var mı?
+      const hasUnpaid = updatedItems.some(item => {
+        if (item.isGift) return false;
+        const qty = Number(item.quantity) || 0;
+        const paid = Number(item.paid_quantity) || 0;
+        return paid < qty;
+      });
+
+      if (!hasUnpaid) {
+        // Masa tamamen ödendi → modal + arka plan detay modalını kapat, başarı toast'u göster
         setShowPartialPaymentModal(false);
+        setShowModal(false);
+        setSelectedOrder(null);
+        setShowSuccessToast(true);
+        setTimeout(() => setShowSuccessToast(false), 2000);
       }
     } catch (error) {
       console.error('Sipariş yenileme hatası:', error);

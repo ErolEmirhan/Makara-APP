@@ -3709,7 +3709,20 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
   });
   order.completed_sale_id = saleId;
 
-  orderItems.forEach(item => {
+  // Bu masada daha önce kısmi ödemeler yapıldıysa (paid_quantity > 0), kapanış
+  // satışında SADECE KALAN (ödenmemiş) miktarları kaydet. Aksi halde aynı ürünler
+  // hem kısmi ödemede hem kapanış satışında görünür → geçmiş adisyon çift sayar.
+  // Ciro zaten finalAmount = order.total_amount - indirim olduğundan toplam doğru;
+  // burada yalnızca items satırları kalan miktarla hizalanıyor.
+  const remainingOrderItems = orderItems
+    .map(item => {
+      const paidQty = Number(item.paid_quantity) || 0;
+      const remainingQty = Math.max(0, Number(item.quantity) - paidQty);
+      return { item, remainingQty };
+    })
+    .filter(x => x.remainingQty > 0);
+
+  remainingOrderItems.forEach(({ item, remainingQty }) => {
     const itemId = db.saleItems.length > 0
       ? Math.max(...db.saleItems.map(si => si.id)) + 1
       : 1;
@@ -3719,7 +3732,7 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
       sale_id: saleId,
       product_id: item.product_id,
       product_name: item.product_name,
-      quantity: item.quantity,
+      quantity: remainingQty,
       price: item.price,
       isGift: item.isGift || false,
       staff_id: item.staff_id || null,
@@ -3733,12 +3746,12 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
     try {
       const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
 
-      const itemsText = orderItems.map(item => {
+      const itemsText = remainingOrderItems.map(({ item, remainingQty }) => {
         const giftText = item.isGift ? ' (İKRAM)' : '';
-        return `${item.product_name} x${item.quantity}${giftText}`;
+        return `${item.product_name} x${remainingQty}${giftText}`;
       }).join(', ');
 
-      const staffNames = [...new Set(orderItems.filter(oi => oi.staff_name).map(oi => oi.staff_name))];
+      const staffNames = [...new Set(remainingOrderItems.filter(x => x.item.staff_name).map(x => x.item.staff_name))];
       const staffName = staffNames.length > 0 ? staffNames.join(', ') : null;
 
       const di = order.firstOrderDiscount;
@@ -3748,6 +3761,7 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
       const discountAmountFb = hasDiscount && (di.discountAmount != null) ? di.discountAmount : 0;
       const firebaseSale = {
         sale_id: saleId,
+        table_order_id: order.id,
         total_amount: finalAmount,
         payment_method: paymentMethod,
         sale_date: saleDate,
@@ -3756,10 +3770,10 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
         table_type: order.table_type,
         staff_name: staffName,
         items: itemsText,
-        items_array: orderItems.map(item => ({
+        items_array: remainingOrderItems.map(({ item, remainingQty }) => ({
           product_id: item.product_id,
           product_name: item.product_name,
-          quantity: item.quantity,
+          quantity: remainingQty,
           price: item.price,
           isGift: item.isGift || false,
           staff_id: item.staff_id || null,
@@ -3934,9 +3948,10 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
     ? Object.keys(staffCounts).reduce((a, b) => staffCounts[a] > staffCounts[b] ? a : b)
     : null;
 
-  // Satış ekle
+  // Satış ekle — table_order_id ile oturum etiketleniyor
   db.sales.push({
     id: saleId,
+    table_order_id: saleData.orderId,
     total_amount: saleData.totalAmount,
     payment_method: saleData.paymentMethod,
     sale_date: saleDate,
@@ -3984,6 +3999,7 @@ ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
 
       await firebaseAddDoc(salesRef, {
         sale_id: saleId,
+        table_order_id: saleData.orderId,
         total_amount: saleData.totalAmount,
         payment_method: saleData.paymentMethod,
         sale_date: saleDate,
@@ -4098,9 +4114,11 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
     ? Math.max(...db.sales.map(s => s.id)) + 1 
     : 1;
 
-  // Satış ekle
+  // Satış ekle — table_order_id ile oturum (session) etiketleniyor; Geçmiş Adisyon
+  // gruplaması bu ID üzerinden kesin doğrulukla yapılır
   db.sales.push({
     id: saleId,
+    table_order_id: order.id,
     total_amount: itemAmount,
     payment_method: paymentMethod,
     sale_date: saleDate,
@@ -4138,6 +4156,7 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
 
       await firebaseAddDoc(salesRef, {
         sale_id: saleId,
+        table_order_id: order.id,
         total_amount: itemAmount,
         payment_method: paymentMethod,
         sale_date: saleDate,
@@ -4185,6 +4204,245 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
   });
 
   return { success: true, remainingAmount: order.total_amount, saleId };
+});
+
+/**
+ * Toplu ürün bazlı ödeme al (kısmi ödeme modal için).
+ *
+ * `pay-table-order-item` IPC'si her çağrıda `syncSingleTableToFirebase`
+ * çalıştırıyordu; peşpeşe çağrılarda Firestore snapshot echo'ları yarış
+ * koşulu yaratıp yerel `paid_quantity` değerlerini ESKİ duruma geri
+ * yazabiliyordu. Bu handler N ödemeyi tek transaction olarak işler:
+ *   - Yerel state TEK seferde güncellenir (saveDatabase tek kez)
+ *   - `syncSingleTableToFirebase` TEK kez çağrılır → tek echo, fingerprint
+ *     eşleşir, overwrite yok.
+ *   - `table-order-updated` olayı TEK kez yayınlanır → renderer tek
+ *     refresh yapar.
+ *   - Firebase satış kayıtları paralel yazılır, hata olsa bile yerel
+ *     state etkilenmez.
+ *
+ * Payload:
+ *   { payments: [{itemId, quantity}, ...], paymentMethod: 'Nakit'|'Kredi Kartı' }
+ */
+ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
+  try {
+    const payments = Array.isArray(payload?.payments) ? payload.payments : [];
+    const paymentMethod = payload?.paymentMethod;
+
+    if (payments.length === 0) {
+      return { success: false, error: 'Ödeme listesi boş' };
+    }
+    if (!paymentMethod) {
+      return { success: false, error: 'Ödeme yöntemi eksik' };
+    }
+
+    const results = [];
+    const errors = [];
+    let order = null;
+
+    // 1) Ön doğrulama ve state güncelleme
+    for (let i = 0; i < payments.length; i += 1) {
+      const p = payments[i] || {};
+      const itemId = p.itemId;
+      const qty = Math.floor(Number(p.quantity) || 0);
+      if (itemId == null || qty <= 0) {
+        errors.push(`#${i + 1} geçersiz kalem (itemId=${itemId}, qty=${qty})`);
+        continue;
+      }
+
+      const item = db.tableOrderItems.find(oi => oi.id === itemId);
+      if (!item) {
+        errors.push(`#${i + 1} kalem bulunamadı (itemId=${itemId})`);
+        continue;
+      }
+
+      const itemOrder = db.tableOrders.find(o => o.id === item.order_id);
+      if (!itemOrder) {
+        errors.push(`#${i + 1} sipariş bulunamadı (itemId=${itemId})`);
+        continue;
+      }
+      if (itemOrder.status !== 'pending') {
+        return { success: false, error: 'Sipariş zaten tamamlanmış veya iptal edilmiş' };
+      }
+
+      if (!order) {
+        order = itemOrder;
+      } else if (order.id !== itemOrder.id) {
+        errors.push(`#${i + 1} başka siparişe ait kalem (itemId=${itemId})`);
+        continue;
+      }
+
+      const currentPaid = Number(item.paid_quantity) || 0;
+      const remainingQty = item.quantity - currentPaid;
+      const payQty = Math.min(qty, Math.max(0, remainingQty));
+      if (payQty <= 0) {
+        errors.push(`#${i + 1} kalan miktar yok (itemId=${itemId})`);
+        continue;
+      }
+
+      const itemAmount = item.isGift ? 0 : Math.round(item.price * payQty * 100) / 100;
+      const newPaidQuantity = currentPaid + payQty;
+
+      item.paid_quantity = newPaidQuantity;
+      if (newPaidQuantity >= item.quantity) {
+        item.is_paid = true;
+      }
+      if (currentPaid === 0) {
+        item.payment_method = paymentMethod;
+        item.paid_date = new Date().toLocaleDateString('tr-TR');
+        item.paid_time = getFormattedTime(new Date());
+      } else {
+        item.payment_method = `${item.payment_method}, ${paymentMethod}`;
+      }
+
+      order.total_amount = Math.max(0, order.total_amount - itemAmount);
+
+      results.push({
+        itemId,
+        paymentMethod,
+        quantity: payQty,
+        itemAmount,
+        item,
+      });
+    }
+
+    if (!order || results.length === 0) {
+      return {
+        success: false,
+        error: errors[0] || 'Hiçbir kalem ödenemedi',
+        errors,
+      };
+    }
+
+    // 2) Tümü ödendiyse sipariş kapatılır
+    const unpaidItems = db.tableOrderItems.filter(oi => {
+      if (oi.order_id !== order.id || oi.isGift) return false;
+      const paidQty = oi.paid_quantity || 0;
+      return paidQty < oi.quantity;
+    });
+    if (unpaidItems.length === 0) {
+      order.status = 'completed';
+    }
+
+    // 3) Her ödenen kalem için satış kaydı (eski davranışla uyum — her kalem ayrı satış)
+    const firebaseSaleWrites = [];
+    const baseSaleDate = order.order_date || new Date().toLocaleDateString('tr-TR');
+    const baseSaleTime = order.order_time || getFormattedTime(new Date());
+
+    for (const r of results) {
+      const { item, paymentMethod: pm, quantity: payQty, itemAmount } = r;
+
+      const saleId = db.sales.length > 0 ? Math.max(...db.sales.map(s => s.id)) + 1 : 1;
+      db.sales.push({
+        id: saleId,
+        table_order_id: order.id,
+        total_amount: itemAmount,
+        payment_method: pm,
+        sale_date: baseSaleDate,
+        sale_time: baseSaleTime,
+        table_name: order.table_name,
+        table_type: order.table_type,
+        staff_name: item.staff_name || null,
+      });
+
+      const saleItemId = db.saleItems.length > 0 ? Math.max(...db.saleItems.map(si => si.id)) + 1 : 1;
+      db.saleItems.push({
+        id: saleItemId,
+        sale_id: saleId,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: payQty,
+        price: item.price,
+        isGift: item.isGift || false,
+        staff_id: item.staff_id || null,
+        staff_name: item.staff_name || null,
+      });
+
+      r.saleId = saleId;
+
+      if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
+        const itemsText = `${item.product_name} x${payQty}${item.isGift ? ' (İKRAM)' : ''}`;
+        firebaseSaleWrites.push(
+          (async () => {
+            try {
+              const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
+              await firebaseAddDoc(salesRef, {
+                sale_id: saleId,
+                table_order_id: order.id,
+                total_amount: itemAmount,
+                payment_method: pm,
+                sale_date: baseSaleDate,
+                sale_time: baseSaleTime,
+                table_name: order.table_name,
+                table_type: order.table_type,
+                staff_name: item.staff_name || null,
+                items: itemsText,
+                items_array: [{
+                  product_id: item.product_id,
+                  product_name: item.product_name,
+                  quantity: payQty,
+                  price: item.price,
+                  isGift: item.isGift || false,
+                  staff_id: item.staff_id || null,
+                  staff_name: item.staff_name || null,
+                }],
+                created_at: firebaseServerTimestamp(),
+              });
+            } catch (fbErr) {
+              console.error('Bulk ödeme Firebase satış hatası (saleId=' + saleId + '):', fbErr);
+            }
+          })()
+        );
+      }
+    }
+
+    // 4) TEK saveDatabase + TEK sync + TEK event
+    saveDatabase();
+
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('table-order-updated', {
+        orderId: order.id,
+        tableId: order.table_id,
+      });
+    }
+    if (io) {
+      io.emit('table-update', {
+        tableId: order.table_id,
+        hasOrder: tableHasOpenItems(order.table_id),
+      });
+    }
+
+    // Firebase tablolar: TEK push (echo geldiğinde local === remote olacak,
+    // applyMakaraRemoteTableDocument fingerprint eşleşince no-op kalır)
+    syncSingleTableToFirebase(order.table_id).catch(err => {
+      console.error('Bulk ödeme masa Firebase kaydetme hatası:', err);
+    });
+
+    // Firebase satış yazmalarını bekle (başarısız olsa bile yerel state sağlam)
+    if (firebaseSaleWrites.length > 0) {
+      await Promise.all(firebaseSaleWrites);
+    }
+
+    const totalPaid = results.reduce((s, r) => s + r.itemAmount, 0);
+
+    return {
+      success: true,
+      results: results.map(r => ({
+        itemId: r.itemId,
+        paymentMethod: r.paymentMethod,
+        quantity: r.quantity,
+        itemAmount: r.itemAmount,
+        saleId: r.saleId,
+      })),
+      errors,
+      remainingAmount: order.total_amount,
+      orderCompleted: order.status === 'completed',
+      totalPaid,
+    };
+  } catch (err) {
+    console.error('pay-table-order-items-bulk hata:', err);
+    return { success: false, error: err?.message || String(err) };
+  }
 });
 
 // Settings IPC Handlers

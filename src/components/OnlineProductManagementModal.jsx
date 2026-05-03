@@ -1,7 +1,64 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApp } from 'firebase/app';
 import { getFirestore, collection, doc, updateDoc, setDoc, getDocs, getDoc } from 'firebase/firestore';
+
+/**
+ * Online Ürün Yönetimi — ŞUBE BAZLI Firebase config.
+ * Admin dashboard (`public/index.html`) zaten şubeye özel `onlineFirebase`
+ * projelerine bakıyor; bu modal da aynı yere yazmalı. Aksi halde şube
+ * seçimi ne olursa olsun veriler tek projeye gider ve şubeler birbirinin
+ * online fiyatlarını/tükenenlerini ezer.
+ */
+const BRANCH_ONLINE_FIREBASE = {
+  // Makara Havzan → mevcut online projesi
+  makara: {
+    apiKey: 'AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8',
+    authDomain: 'makaraonline-5464e.firebaseapp.com',
+    projectId: 'makaraonline-5464e',
+    storageBucket: 'makaraonline-5464e.firebasestorage.app',
+    messagingSenderId: '1041589485836',
+    appId: '1:1041589485836:web:06119973a19da0a14f0929',
+    measurementId: 'G-MKPPB635ZZ',
+  },
+  // Makara Suriçi → kendi projesi (admin dashboard'un okuduğu yer)
+  makarasur: {
+    apiKey: 'AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo',
+    authDomain: 'makarasurici.firebaseapp.com',
+    projectId: 'makarasurici',
+    storageBucket: 'makarasurici.firebasestorage.app',
+    messagingSenderId: '237735301273',
+    appId: '1:237735301273:web:bf62c8f145434df0292808',
+    measurementId: 'G-WXWWQT92L6',
+  },
+  // Sultan Somatı → kendi projesi
+  sultansomati: {
+    apiKey: 'AIzaSyB_sSvCgbWC4HYKufueqfoDmbBS4SHlUnA',
+    authDomain: 'sultansomati-5a3e9.firebaseapp.com',
+    projectId: 'sultansomati-5a3e9',
+    storageBucket: 'sultansomati-5a3e9.firebasestorage.app',
+    messagingSenderId: '166037373406',
+    appId: '1:166037373406:web:ed1c3724085446ae0d1d4f',
+    measurementId: 'G-SV23DHVNDG',
+  },
+};
+
+/**
+ * Firebase app'ini şubeye özel bir name ile (tekrar initializeApp etmeden)
+ * getir. Name'i şube key'iyle unique yapıyoruz → şube değişince önceki
+ * app'le çakışmaz, önceki app da silinmeden kalır (gerekirse tekrar geçişte).
+ */
+function getBranchOnlineFirestore(branchKey) {
+  const cfg = BRANCH_ONLINE_FIREBASE[branchKey] || BRANCH_ONLINE_FIREBASE.makara;
+  const appName = `onlineProductManagement_${branchKey || 'makara'}`;
+  let app;
+  try {
+    app = getApp(appName);
+  } catch (_) {
+    app = initializeApp(cfg, appName);
+  }
+  return getFirestore(app);
+}
 
 const OnlineProductManagementModal = ({ onClose }) => {
   const [categories, setCategories] = useState([]);
@@ -27,26 +84,33 @@ const OnlineProductManagementModal = ({ onClose }) => {
     }, 3000);
   };
 
-  // Firebase bağlantısını başlat
+  // Firebase bağlantısını aktif şubeye göre başlat
   useEffect(() => {
-    try {
-      const firebaseConfig = {
-        apiKey: "AIzaSyAucyGoXwmQ5nrQLfk5zL5-73ir7u9vbI8",
-        authDomain: "makaraonline-5464e.firebaseapp.com",
-        projectId: "makaraonline-5464e",
-        storageBucket: "makaraonline-5464e.firebasestorage.app",
-        messagingSenderId: "1041589485836",
-        appId: "1:1041589485836:web:06119973a19da0a14f0929",
-        measurementId: "G-MKPPB635ZZ"
-      };
-
-      const app = initializeApp(firebaseConfig, 'onlineProductManagement');
-      const db = getFirestore(app);
-      setFirestore(db);
-    } catch (error) {
-      console.error('Firebase başlatılamadı:', error);
-      showToast('Firebase bağlantısı kurulamadı', 'error');
-    }
+    let cancelled = false;
+    (async () => {
+      try {
+        let branchKey = 'makara';
+        if (window.electronAPI?.getActiveBranch) {
+          try {
+            const b = await window.electronAPI.getActiveBranch();
+            if (b?.key) branchKey = b.key;
+          } catch (err) {
+            console.warn('Aktif şube okunamadı, varsayılan Makara kullanılacak:', err);
+          }
+        }
+        if (cancelled) return;
+        const db = getBranchOnlineFirestore(branchKey);
+        if (cancelled) return;
+        setFirestore(db);
+        console.log(`[OnlineYönetim] Firebase bağlı (şube=${branchKey}, proje=${BRANCH_ONLINE_FIREBASE[branchKey]?.projectId || 'makaraonline-5464e'})`);
+      } catch (error) {
+        console.error('Firebase başlatılamadı:', error);
+        showToast('Firebase bağlantısı kurulamadı', 'error');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Kategorileri ve ürünleri yükle

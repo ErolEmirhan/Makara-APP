@@ -3,7 +3,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 const INITIAL_VISIBLE = 48;
 const LOAD_MORE_STEP = 56;
 
-const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
+const ProductGrid = ({
+  products,
+  onAddToCart,
+  isSearchMode = false,
+  categoryName = '',
+}) => {
   const scrollRef = useRef(null);
   const sentinelRef = useRef(null);
   const [visibleCount, setVisibleCount] = useState(INITIAL_VISIBLE);
@@ -36,22 +41,52 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
     return () => io.disconnect();
   }, [loadMore, visibleCount, products.length]);
 
+  const sectionTitle = isSearchMode
+    ? 'Arama sonuçları'
+    : categoryName || 'Ürünler';
+
   if (!products.length) {
     return (
       <div
-        className="pos-catalog flex-1 flex flex-col items-center justify-center min-h-[12rem] rounded-[var(--pos-radius-lg)] border border-dashed border-slate-200 dark:border-slate-600 bg-slate-50/50 dark:bg-slate-900/40 text-center px-6 py-10 theme-sultan:border-emerald-200/80 dark:theme-sultan:border-emerald-800/60"
-        role="status"
+        className="pos-catalog flex-1 flex flex-col min-h-0"
+        role="region"
+        aria-label="Ürün listesi"
       >
-        <p className="text-slate-500 dark:text-slate-300 font-medium" style={{ fontSize: 'var(--pos-fs-product)' }}>
-          {isSearchMode
-            ? 'Tüm kategorilerde eşleşen ürün yok.'
-            : 'Bu kategoride gösterilecek ürün yok.'}
-        </p>
-        <p className="text-slate-400 dark:text-slate-500 mt-2" style={{ fontSize: 'var(--pos-fs-meta)' }}>
-          {isSearchMode
-            ? 'Farklı bir arama deneyin veya aramayı temizleyip kategori seçin.'
-            : 'Başka bir kategori seçin.'}
-        </p>
+        <div className="shrink-0 mb-3 px-0.5">
+          <h3
+            className="font-semibold text-[var(--pos-text)]"
+            style={{ fontSize: 'var(--pos-fs-input)' }}
+          >
+            {sectionTitle}
+          </h3>
+        </div>
+        <div
+          className="flex-1 flex flex-col items-center justify-center min-h-[10rem] rounded-[var(--pos-radius-lg)] bg-[var(--pos-surface-muted)] border border-[var(--pos-border)] text-center px-6 py-10"
+          role="status"
+        >
+          <div
+            className="w-12 h-12 rounded-full bg-[var(--pos-surface)] border border-[var(--pos-border)] flex items-center justify-center mb-3 text-[var(--pos-text-tertiary)]"
+            aria-hidden
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+            </svg>
+          </div>
+          <p
+            className="text-[var(--pos-text)] font-semibold"
+            style={{ fontSize: 'var(--pos-fs-product)' }}
+          >
+            {isSearchMode ? 'Eşleşen ürün bulunamadı' : 'Bu kategoride ürün yok'}
+          </p>
+          <p
+            className="text-[var(--pos-text-secondary)] mt-1.5 max-w-xs"
+            style={{ fontSize: 'var(--pos-fs-meta)', lineHeight: 1.45 }}
+          >
+            {isSearchMode
+              ? 'Farklı bir arama deneyin veya kategori seçin.'
+              : 'Başka bir kategori seçerek devam edin.'}
+          </p>
+        </div>
       </div>
     );
   }
@@ -60,148 +95,143 @@ const ProductGrid = ({ products, onAddToCart, isSearchMode = false }) => {
 
   return (
     <div
-      ref={scrollRef}
-      className="pos-catalog flex-1 overflow-y-auto pos-catalog-scroll scrollbar-custom min-h-0"
+      className="pos-catalog flex-1 flex flex-col min-h-0"
+      role="region"
+      aria-label="Ürün listesi"
     >
+      <div className="shrink-0 flex items-baseline justify-between gap-3 mb-3 px-0.5">
+        <h3
+          className="font-semibold text-[var(--pos-text)] truncate min-w-0"
+          style={{ fontSize: 'var(--pos-fs-input)' }}
+        >
+          {sectionTitle}
+        </h3>
+        <span
+          className="shrink-0 tabular-nums text-[var(--pos-text-secondary)] font-medium"
+          style={{ fontSize: 'var(--pos-fs-meta)' }}
+        >
+          {products.length} ürün
+        </span>
+      </div>
+
       <div
-        className="grid gap-2.5 pb-4 [grid-template-columns:repeat(auto-fill,minmax(10.5rem,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(11.25rem,1fr))] md:[grid-template-columns:repeat(auto-fill,minmax(12rem,1fr))]"
-        role="list"
-        aria-label="Ürün listesi"
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto pos-catalog-scroll scrollbar-custom min-h-0 -mx-0.5 px-0.5"
       >
-        {visibleProducts.map((product) => {
-          const trackStock = product.trackStock === true;
-          const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
-          const isOutOfStock = trackStock && stock !== null && stock === 0;
+        <div
+          className="pos-product-grid grid gap-2.5 sm:gap-3 pb-4"
+          role="list"
+        >
+          {visibleProducts.map((product) => {
+            const trackStock = product.trackStock === true;
+            const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
+            const isOutOfStock = trackStock && stock !== null && stock === 0;
+            const price = Number(product.price);
 
-          return (
-            <article
-              key={product.id}
-              role="listitem"
-              className={`
-                group relative flex flex-col rounded-[var(--pos-radius-md)] border bg-white dark:bg-slate-800/95 overflow-hidden
-                transition-[box-shadow,transform,border-color] duration-200 ease-out touch-manipulation
-                ${
-                  isOutOfStock
-                    ? 'border-slate-200 dark:border-slate-600 opacity-60 cursor-not-allowed grayscale-[0.2]'
-                    : 'border-slate-200/90 dark:border-slate-600/90 cursor-pointer hover:border-slate-300 dark:hover:border-slate-500 hover:shadow-[0_6px_20px_-8px_rgba(15,23,42,0.14)] dark:hover:shadow-[0_8px_24px_-8px_rgba(0,0,0,0.45)] active:scale-[0.99] theme-sultan:hover:border-emerald-200/90 dark:theme-sultan:hover:border-emerald-600/70'
-                }
-              `}
-              style={{
-                boxShadow: isOutOfStock
-                  ? 'inset 0 1px 0 rgba(255,255,255,0.6)'
-                  : '0 1px 2px rgba(15, 23, 42, 0.05)',
-              }}
-            >
-              <button
-                type="button"
-                disabled={isOutOfStock}
-                onClick={() => !isOutOfStock && onAddToCart(product)}
-                className="flex flex-row flex-1 text-left w-full min-h-[var(--pos-touch-min)] disabled:cursor-not-allowed items-stretch min-w-0"
-              >
-                <div
-                  className={`w-1 shrink-0 self-stretch ${
+            return (
+              <article
+                key={product.id}
+                role="listitem"
+                className={`
+                  group relative flex flex-col
+                  rounded-[var(--pos-radius-md)] bg-[var(--pos-surface-elevated)]
+                  border border-[var(--pos-border)]
+                  overflow-hidden touch-manipulation
+                  transition-[box-shadow,transform,border-color] duration-200 ease-out
+                  ${
                     isOutOfStock
-                      ? 'bg-slate-300'
-                      : 'bg-gradient-to-b from-pink-500 to-indigo-600 theme-sultan:from-emerald-600 theme-sultan:to-teal-700'
-                  }`}
-                  aria-hidden
-                />
+                      ? 'opacity-55 cursor-not-allowed'
+                      : 'cursor-pointer hover:border-[var(--pos-border-strong)] hover:shadow-[var(--pos-shadow-md)] active:scale-[0.985]'
+                  }
+                `}
+                style={{ boxShadow: 'var(--pos-shadow-sm)' }}
+              >
+                <button
+                  type="button"
+                  disabled={isOutOfStock}
+                  onClick={() => !isOutOfStock && onAddToCart(product)}
+                  className="flex flex-col flex-1 text-left w-full min-h-[var(--pos-touch-min)] disabled:cursor-not-allowed p-3.5 sm:p-4 min-w-0"
+                >
+                  <h4
+                    className={`font-semibold text-[var(--pos-text)] break-words hyphens-auto w-full leading-snug ${
+                      isOutOfStock ? 'text-[var(--pos-text-secondary)]' : ''
+                    }`}
+                    style={{ fontSize: 'var(--pos-fs-product)' }}
+                  >
+                    {product.name}
+                  </h4>
 
-                <div className="flex flex-col flex-1 min-w-0 py-3 pl-3 pr-3">
-                  <div className="flex items-start justify-between gap-2 min-w-0">
-                    <h3
-                      className={`font-semibold text-slate-900 dark:text-slate-100 break-words hyphens-auto flex-1 min-w-0 ${
-                        isOutOfStock ? 'text-slate-500 dark:text-slate-400' : ''
-                      }`}
-                      style={{ fontSize: 'var(--pos-fs-product)', lineHeight: 1.35 }}
-                    >
-                      {product.name}
-                    </h3>
-                    {!isOutOfStock && (
-                      <span
-                        className="shrink-0 tabular-nums font-bold text-slate-900 dark:text-slate-100 bg-slate-50 dark:bg-slate-700/90 border border-slate-200/90 dark:border-slate-600 rounded-[var(--pos-radius-sm)] px-2 py-0.5 theme-sultan:bg-emerald-50/80 theme-sultan:border-emerald-200/60 dark:theme-sultan:bg-emerald-950/50 dark:theme-sultan:border-emerald-700/60"
-                        style={{ fontSize: 'var(--pos-fs-price)', lineHeight: 1.2 }}
-                      >
-                        ₺{Number(product.price).toFixed(2)}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap gap-1 mt-1.5">
-                    {product.per_person ? (
-                      <span
-                        className="inline-flex rounded-[var(--pos-radius-sm)] bg-amber-100 text-amber-900 font-semibold px-1.5 py-0.5"
-                        style={{ fontSize: 'var(--pos-fs-overline)' }}
-                      >
-                        Kişi başı
-                      </span>
-                    ) : null}
-                    {product.gluten_free ? (
-                      <span
-                        className="inline-flex rounded-[var(--pos-radius-sm)] bg-emerald-100 text-emerald-900 font-bold uppercase tracking-wide px-1.5 py-0.5"
-                        style={{ fontSize: 'var(--pos-fs-overline)' }}
-                      >
-                        Glutensiz
-                      </span>
-                    ) : null}
-                  </div>
+                  {(product.per_person || product.gluten_free) && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {product.per_person ? (
+                        <span
+                          className="inline-flex rounded-[var(--pos-radius-sm)] bg-amber-500/10 text-amber-800 dark:text-amber-200 font-semibold px-2 py-0.5"
+                          style={{ fontSize: 'var(--pos-fs-overline)' }}
+                        >
+                          Kişi başı
+                        </span>
+                      ) : null}
+                      {product.gluten_free ? (
+                        <span
+                          className="inline-flex rounded-[var(--pos-radius-sm)] bg-emerald-500/10 text-emerald-800 dark:text-emerald-200 font-semibold px-2 py-0.5"
+                          style={{ fontSize: 'var(--pos-fs-overline)' }}
+                        >
+                          Glutensiz
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
 
                   {product.description ? (
                     <p
-                      className="text-slate-500 dark:text-slate-400 mt-1.5 line-clamp-2 text-left"
-                      style={{ fontSize: 'var(--pos-fs-meta)', lineHeight: 1.4 }}
+                      className="text-[var(--pos-text-secondary)] mt-2 line-clamp-2"
+                      style={{ fontSize: 'var(--pos-fs-meta)', lineHeight: 1.45 }}
                       title={product.description}
                     >
                       {product.description}
                     </p>
                   ) : null}
 
-                  <div className="mt-auto pt-2.5 flex items-center justify-between gap-2 border-t border-slate-100 dark:border-slate-700">
-                    {isOutOfStock ? (
+                  <div className="mt-auto pt-3 flex items-end justify-between gap-2">
+                    <span
+                      className={`font-bold tabular-nums tracking-tight ${
+                        isOutOfStock ? 'text-[var(--pos-text-tertiary)]' : 'pos-price-gradient'
+                      }`}
+                      style={{ fontSize: 'var(--pos-fs-price-lg)', lineHeight: 1.2 }}
+                    >
+                      ₺{price.toFixed(2)}
+                    </span>
+                    {trackStock && stock !== null && !isOutOfStock && (
                       <span
-                        className="font-semibold text-slate-500 tabular-nums"
-                        style={{ fontSize: 'var(--pos-fs-meta)' }}
-                      >
-                        ₺{Number(product.price).toFixed(2)}
-                      </span>
-                    ) : (
-                      <span
-                        className="text-slate-400 dark:text-slate-500 font-medium"
+                        className="text-[var(--pos-text-tertiary)] tabular-nums font-medium"
                         style={{ fontSize: 'var(--pos-fs-overline)' }}
                       >
-                        Sepete eklemek için dokunun
-                      </span>
-                    )}
-                    {!isOutOfStock && (
-                      <span
-                        className="shrink-0 rounded-[var(--pos-radius-sm)] px-2 py-0.5 font-semibold text-pink-700 bg-pink-50 border border-pink-100 opacity-80 group-hover:opacity-100 transition-opacity theme-sultan:text-emerald-800 theme-sultan:bg-emerald-50 theme-sultan:border-emerald-100 dark:text-pink-200 dark:bg-pink-950/60 dark:border-pink-800/60 dark:theme-sultan:text-emerald-200 dark:theme-sultan:bg-emerald-950/50 dark:theme-sultan:border-emerald-800/50 max-sm:opacity-100"
-                        style={{ fontSize: 'var(--pos-fs-overline)' }}
-                      >
-                        Ekle
+                        Stok {stock}
                       </span>
                     )}
                   </div>
-                </div>
-              </button>
+                </button>
 
-              {isOutOfStock && (
-                <div
-                  className="absolute top-2 right-2 rounded-[var(--pos-radius-sm)] bg-red-600 text-white font-bold px-2 py-1 shadow-md z-10"
-                  style={{ fontSize: 'var(--pos-fs-meta)' }}
-                >
-                  Tükendi
-                </div>
-              )}
-            </article>
-          );
-        })}
-        {showSentinel ? (
-          <div
-            ref={sentinelRef}
-            className="col-span-full h-1 w-full shrink-0"
-            aria-hidden
-          />
-        ) : null}
+                {isOutOfStock && (
+                  <div
+                    className="absolute inset-0 flex items-center justify-center bg-[var(--pos-surface)]/60 backdrop-blur-[1px] z-10 pointer-events-none"
+                    aria-hidden
+                  >
+                    <span
+                      className="rounded-[var(--pos-radius-pill)] bg-[var(--pos-text)] text-[var(--pos-surface)] font-semibold px-3 py-1"
+                      style={{ fontSize: 'var(--pos-fs-meta)' }}
+                    >
+                      Tükendi
+                    </span>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+          {showSentinel ? (
+            <div ref={sentinelRef} className="col-span-full h-1 w-full shrink-0" aria-hidden />
+          ) : null}
+        </div>
       </div>
     </div>
   );

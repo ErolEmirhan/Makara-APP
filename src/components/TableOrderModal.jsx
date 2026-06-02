@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, memo } from 'react';
+import { createPortal } from 'react-dom';
 import Toast from './Toast';
 import {
   MAKARA_HAVZAN_MAIN_TABLE_COUNT,
@@ -8,7 +9,7 @@ import { buildSultanTablesFlat } from '../constants/sultanTables';
 
 const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
-const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'makara', onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems, onGiftApplied }) => {
+const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = false, branchKey = 'makara', onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems, onGiftApplied }) => {
   const [sessionDuration, setSessionDuration] = useState('');
   const [selectedItemDetail, setSelectedItemDetail] = useState(null);
   const [cancellingItemId, setCancellingItemId] = useState(null);
@@ -535,14 +536,15 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
     ...Array.from({ length: 5 }, (_, i) => ({ id: `package-outside-${i + 1}`, name: `Paket ${i + 1}` }))
   ], []);
   const allTablesForTransfer = useMemo(() => {
+    if (!showTransferItemsModal || transferStep !== 2) return [];
     if (isSultanBranch) {
       return buildSultanTablesFlat()
         .map((t) => ({ id: t.id, name: t.name }))
         .filter((t) => t.id !== order?.table_id);
     }
     const all = [...insideTables, ...outsideTables, ...packageTables];
-    return all.filter(t => t.id !== order?.table_id);
-  }, [isSultanBranch, insideTables, outsideTables, packageTables, order?.table_id]);
+    return all.filter((t) => t.id !== order?.table_id);
+  }, [showTransferItemsModal, transferStep, isSultanBranch, insideTables, outsideTables, packageTables, order?.table_id]);
 
   const getTransferKey = (item) => `${item.product_id}_${!!item.isGift}`;
   const getTransferableQty = (item) => Math.max(0, (item.quantity || 0) - (item.paid_quantity || 0));
@@ -598,8 +600,8 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
     }
   };
 
-  return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
+  return createPortal(
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 animate-fade-in">
       <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-7xl w-full mx-6 shadow-[0_20px_60px_-12px_rgba(0,0,0,0.25)] max-h-[95vh] overflow-y-auto">
         {/* Header Section - Corporate Design */}
         <div className="mb-8 pb-6 border-b border-gray-200">
@@ -729,7 +731,15 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
               )}
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[450px] overflow-y-auto pr-2">
-              {groupedItems.map((item) => {
+              {itemsLoading ? (
+                <div className="col-span-full flex flex-col items-center justify-center py-16 text-gray-500">
+                  <svg className="w-10 h-10 animate-spin text-pink-600 theme-sultan:text-emerald-600 mb-3" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                  </svg>
+                  <p className="text-sm font-medium">Ürünler yükleniyor…</p>
+                </div>
+              ) : groupedItems.map((item) => {
                 const isGift = item.isGift || false;
                 const isPaid = item.is_paid || false;
                 const paidQuantity = item.paid_quantity || 0;
@@ -1822,9 +1832,10 @@ const TableOrderModal = ({ order, items, customerMode = false, branchKey = 'maka
           onClose={() => setToast({ message: '', type: 'info', show: false })}
         />
       )}
-    </div>
+    </div>,
+    document.body
   );
 };
 
-export default TableOrderModal;
+export default memo(TableOrderModal);
 

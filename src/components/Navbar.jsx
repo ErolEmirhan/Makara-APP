@@ -6,6 +6,9 @@ import DateTimeDisplay from './DateTimeDisplay';
 import Toast from './Toast';
 import ThemeToggle from './ThemeToggle';
 
+const tablesNavLabel = (isSuriciBranch, isSultanBranch) =>
+  isSuriciBranch ? 'Müşteriler' : isSultanBranch ? 'Salon' : 'Masalar';
+
 const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType, onRoleSplash, onProductsUpdated, onExit, onLogout, onOpenSettings, systemTitle = 'Makara Satış Sistemi', isSuriciBranch = false, isSultanBranch = false, themeMode = 'light', setThemeMode }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showHamburgerMenu, setShowHamburgerMenu] = useState(false);
@@ -455,25 +458,25 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
 
   return (
-    <nav className="h-20 bg-white/90 dark:bg-slate-900/92 backdrop-blur-xl border-b border-pink-200 dark:border-slate-700/90 theme-sultan:border-emerald-800/40 px-8 flex items-center justify-between shadow-lg relative z-50">
-      {/* Sol üst: Hamburger menü butonu */}
-      <div className="flex items-center space-x-4">
-        <div ref={hamburgerMenuRef} className="flex items-center">
+    <nav className="pos-navbar h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3 bg-white/75 dark:bg-[#1c1c1e]/88 backdrop-blur-2xl backdrop-saturate-150 border-b border-black/[0.06] dark:border-white/[0.08] shadow-[0_1px_0_rgba(0,0,0,0.03)] relative z-50">
+      {/* Sol: marka + meta */}
+      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+        <div ref={hamburgerMenuRef} className="shrink-0">
           <button
             type="button"
             onClick={toggleHamburgerMenu}
-            className="w-11 h-11 rounded-xl flex flex-col items-center justify-center gap-1.5 bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 text-gray-700 dark:text-slate-200 hover:text-gray-900 dark:hover:text-white transition-all duration-200 shadow-sm hover:shadow"
+            className="pos-nav-icon-btn"
             aria-label="Menüyü aç"
             title="Menü"
           >
-            <span className="w-5 h-0.5 bg-current rounded-full" />
-            <span className="w-5 h-0.5 bg-current rounded-full" />
-            <span className="w-5 h-0.5 bg-current rounded-full" />
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
           </button>
         </div>
 
         {!isSultanBranch && (
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center shadow-lg overflow-hidden bg-white dark:bg-slate-800 p-1 ring-1 ring-slate-200/80 dark:ring-slate-600">
+          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center overflow-hidden bg-white dark:bg-[#2c2c2e] p-1 shrink-0 ring-1 ring-black/[0.06] dark:ring-white/10 shadow-sm">
             <img
               src="./logo.png"
               alt="Makara Logo"
@@ -487,17 +490,18 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             />
           </div>
         )}
-        <div>
+
+        <div className="min-w-0 hidden sm:block">
           <h1
             className={
               isSultanBranch
-                ? 'text-lg sm:text-xl font-extrabold tracking-tight bg-gradient-to-r from-emerald-600 via-green-600 to-teal-600 bg-clip-text text-transparent'
-                : 'text-lg font-bold text-pink-500 dark:text-pink-400 theme-sultan:text-emerald-500 dark:theme-sultan:text-emerald-400'
+                ? 'text-base lg:text-lg font-bold tracking-tight truncate bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent'
+                : 'text-base lg:text-lg font-bold tracking-tight truncate text-[#1d1d1f] dark:text-[#f5f5f7]'
             }
           >
             {systemTitle}
           </h1>
-          <p className="text-xs text-gray-500 dark:text-slate-400 font-medium">v43.0.0</p>
+          <p className="text-[11px] text-[#86868b] dark:text-[#a1a1a6] font-medium tabular-nums">v45.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300 dark:border-slate-600 flex items-center gap-3">
           {typeof setThemeMode === 'function' && (
@@ -507,189 +511,215 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
       </div>
 
-      <div className="flex items-center space-x-4">
-        <button
-          onClick={handleOpenMobileModal}
-          className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-zinc-900 dark:bg-violet-700 text-white hover:bg-black dark:hover:bg-violet-600 hover:shadow-lg"
-        >
-          <div className="flex items-center space-x-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+      {/* Orta: ana gezinme — segment kontrol */}
+      <div className="hidden md:flex items-center justify-center shrink-0">
+        <div className="pos-nav-segment" role="tablist" aria-label="Ana görünüm">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={currentView === 'tables'}
+            onClick={() => setCurrentView('tables')}
+            className={`pos-nav-segment-btn ${currentView === 'tables' ? 'pos-nav-segment-btn--active' : ''}`}
+          >
+            <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
             </svg>
-            <span>Mobil Personel</span>
-          </div>
-        </button>
-        <button
-          onClick={() => setCurrentView('tables')}
-          className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
-            currentView === 'tables'
-              ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg transform scale-105'
-              : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 hover:text-gray-800 dark:hover:text-white'
-          }`}
-        >
-          <div className="flex items-center space-x-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-            </svg>
-            <span>{isSuriciBranch ? 'Müşteriler' : isSultanBranch ? 'Salon' : 'Masalar'}</span>
-          </div>
-        </button>
-        <button
-          onClick={() => setCurrentView('pos')}
-          className={`px-6 py-3 rounded-xl font-medium transition-all duration-300 ${
-            currentView === 'pos'
-              ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg transform scale-105'
-              : 'bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 hover:text-gray-800 dark:hover:text-white'
-          }`}
-        >
-          <div className="flex items-center space-x-2">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+            <span>{tablesNavLabel(isSuriciBranch, isSultanBranch)}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={currentView === 'pos'}
+            onClick={() => setCurrentView('pos')}
+            className={`pos-nav-segment-btn ${currentView === 'pos' ? 'pos-nav-segment-btn--active' : ''}`}
+          >
+            <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
             </svg>
             <span>Satış Yap</span>
             {totalItems > 0 && (
-              <span className="ml-2 px-2 py-0.5 bg-red-500 text-white text-xs rounded-full">
-                {totalItems}
+              <span className="min-w-[1.25rem] h-5 px-1.5 flex items-center justify-center rounded-full bg-rose-500 text-white text-[10px] font-bold tabular-nums">
+                {totalItems > 99 ? '99+' : totalItems}
               </span>
             )}
-          </div>
+          </button>
+        </div>
+      </div>
+
+      {/* Sağ: aksiyonlar + kullanıcı */}
+      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+        {/* Mobil: segment yerine kısa butonlar */}
+        <button
+          type="button"
+          onClick={() => setCurrentView('tables')}
+          className={`md:hidden pos-nav-icon-btn ${currentView === 'tables' ? 'ring-2 ring-black/10 dark:ring-white/20 bg-white dark:bg-[#3a3a3c]' : ''}`}
+          aria-label={tablesNavLabel(isSuriciBranch, isSultanBranch)}
+          title={tablesNavLabel(isSuriciBranch, isSultanBranch)}
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          onClick={() => setCurrentView('pos')}
+          className={`md:hidden pos-nav-icon-btn relative ${currentView === 'pos' ? 'ring-2 ring-black/10 dark:ring-white/20 bg-white dark:bg-[#3a3a3c]' : ''}`}
+          aria-label="Satış Yap"
+          title="Satış Yap"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+          </svg>
+          {totalItems > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[1.1rem] h-[1.1rem] px-1 flex items-center justify-center rounded-full bg-rose-500 text-white text-[9px] font-bold">
+              {totalItems > 9 ? '9+' : totalItems}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleOpenMobileModal}
+          className="pos-nav-ghost-btn hidden sm:inline-flex"
+        >
+          <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
+          <span className="hidden lg:inline">Mobil Personel</span>
+        </button>
+        <button
+          type="button"
+          onClick={handleOpenMobileModal}
+          className="pos-nav-icon-btn sm:hidden"
+          aria-label="Mobil Personel"
+          title="Mobil Personel"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+          </svg>
         </button>
 
         {userType === 'Admin' && (
-          <>
-            <button
-              onClick={() => setShowSettingsSplash(true)}
-              className="px-6 py-3 rounded-xl font-medium transition-all duration-300 bg-gray-100 dark:bg-slate-800 text-gray-600 dark:text-slate-300 hover:bg-gray-200 dark:hover:bg-slate-700 hover:text-gray-800 dark:hover:text-white"
-            >
-              <div className="flex items-center space-x-2">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                </svg>
-                <span>Ayarlar</span>
-              </div>
-            </button>
-          </>
+          <button
+            type="button"
+            onClick={() => setShowSettingsSplash(true)}
+            className="pos-nav-icon-btn"
+            aria-label="Ayarlar"
+            title="Ayarlar"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            </svg>
+          </button>
         )}
 
-        <div className="relative ml-4 pl-4 border-l border-gray-300 dark:border-slate-600" ref={menuRef}>
+        <div className="relative ml-1 pl-2 sm:pl-3 border-l border-black/[0.08] dark:border-white/10" ref={menuRef}>
           <button
+            type="button"
             onClick={() => setShowUserMenu(!showUserMenu)}
-            className="flex items-center space-x-3 hover:opacity-80 transition-opacity"
+            className="flex items-center gap-2 sm:gap-2.5 rounded-xl py-1.5 pl-1.5 pr-2 sm:pr-3 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
           >
-            <div className="text-right">
-              <p className="text-xs text-gray-500 dark:text-slate-400">Kullanıcı Tipi</p>
-              <p className="text-sm font-medium text-gray-800 dark:text-slate-100 flex items-center space-x-1">
+            <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm ${
+              userType === 'Admin'
+                ? 'bg-gradient-to-br from-slate-700 to-slate-900 dark:from-slate-500 dark:to-slate-700'
+                : isSultanBranch
+                  ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
+                  : 'bg-gradient-to-br from-rose-500 to-pink-600'
+            }`}>
+              <svg className="w-[18px] h-[18px] text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+              </svg>
+            </div>
+            <div className="text-left hidden sm:block min-w-0">
+              <p className="text-[11px] text-[#86868b] dark:text-[#a1a1a6] leading-none mb-0.5">Rol</p>
+              <p className="text-sm font-semibold text-[#1d1d1f] dark:text-[#f5f5f7] flex items-center gap-1 leading-none">
                 <span>{userType}</span>
-                <svg className={`w-4 h-4 transition-transform ${showUserMenu ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                <svg className={`w-3.5 h-3.5 text-[#86868b] transition-transform ${showUserMenu ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                 </svg>
               </p>
             </div>
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
-              userType === 'Admin' 
-                ? 'bg-gradient-to-br from-blue-500 to-cyan-500' 
-                : 'bg-gradient-to-br from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500'
-            }`}>
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
-              </svg>
-            </div>
           </button>
 
-          {/* Dropdown Menu - Modern & Professional */}
           {showUserMenu && (
-            <div className="absolute right-0 top-full mt-3 w-64 bg-white dark:bg-slate-800 rounded-xl shadow-lg border border-gray-200 dark:border-slate-600 overflow-hidden animate-fade-in z-[100]">
-              {/* Header */}
-              <div className="px-4 py-3 border-b border-gray-100 dark:border-slate-700 bg-gradient-to-r from-blue-50/50 to-indigo-50/50 dark:from-slate-700/80 dark:to-slate-800/80">
-                <p className="text-xs font-semibold text-gray-600 dark:text-slate-300 uppercase tracking-wider">Kullanıcı Tipi</p>
+            <div className="absolute right-0 top-full mt-2 w-72 bg-white/95 dark:bg-[#2c2c2e]/95 backdrop-blur-xl rounded-2xl shadow-[0_8px_40px_-12px_rgba(0,0,0,0.25)] border border-black/[0.08] dark:border-white/10 overflow-hidden animate-fade-in z-[100]">
+              <div className="px-4 py-3 border-b border-black/[0.06] dark:border-white/10">
+                <p className="text-[11px] font-semibold text-[#86868b] dark:text-[#a1a1a6] uppercase tracking-wider">Kullanıcı tipi</p>
               </div>
 
-              {/* Options */}
               <div className="p-2">
                 <button
                   onClick={() => handleUserTypeChange('Admin')}
-                  className={`w-full flex items-center space-x-3 p-3.5 rounded-lg transition-all duration-200 ${
+                  className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 ${
                     userType === 'Admin'
-                      ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md'
-                      : 'hover:bg-blue-50/50 dark:hover:bg-slate-700/80 text-gray-700 dark:text-slate-200'
+                      ? 'bg-[#1d1d1f] dark:bg-white text-white dark:text-[#1d1d1f]'
+                      : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06] text-[#1d1d1f] dark:text-[#f5f5f7]'
                   }`}
                 >
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    userType === 'Admin'
-                      ? 'bg-white/20'
-                      : 'bg-blue-100 dark:bg-blue-900/50'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                    userType === 'Admin' ? 'bg-white/15 dark:bg-black/10' : 'bg-black/[0.05] dark:bg-white/10'
                   }`}>
-                    <svg className={`w-5 h-5 ${userType === 'Admin' ? 'text-white' : 'text-blue-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                    <svg className={`w-5 h-5 ${userType === 'Admin' ? 'text-white dark:text-[#1d1d1f]' : 'text-[#6e6e73]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
                     </svg>
                   </div>
                   <div className="text-left flex-1 min-w-0">
-                    <p className={`font-semibold text-sm ${userType === 'Admin' ? 'text-white' : 'text-gray-900 dark:text-slate-100'}`}>Admin</p>
-                    <p className={`text-xs ${userType === 'Admin' ? 'text-white/80' : 'text-gray-500 dark:text-slate-400'}`}>Tüm yetkilere sahip</p>
+                    <p className="font-semibold text-sm">Admin</p>
+                    <p className={`text-xs ${userType === 'Admin' ? 'opacity-70' : 'text-[#86868b]'}`}>Tüm yetkilere sahip</p>
                   </div>
                   {userType === 'Admin' && (
-                    <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    <svg className="w-4 h-4 shrink-0 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   )}
                 </button>
 
                 <button
                   onClick={() => handleUserTypeChange('Personel')}
-                  className={`w-full flex items-center space-x-3 p-3.5 rounded-lg transition-all duration-200 mt-1 ${
+                  className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 mt-1 ${
                     userType === 'Personel'
-                      ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-indigo-600 theme-sultan:to-teal-600 text-white shadow-md'
-                      : 'hover:bg-pink-50 theme-sultan:hover:bg-pink-50 dark:hover:bg-slate-700/80 theme-sultan:bg-emerald-50/50 dark:theme-sultan:bg-emerald-950/30 text-gray-700 dark:text-slate-200'
+                      ? isSultanBranch
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gradient-to-r from-rose-500 to-pink-600 text-white'
+                      : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06] text-[#1d1d1f] dark:text-[#f5f5f7]'
                   }`}
                 >
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                    userType === 'Personel'
-                      ? 'bg-white/20'
-                      : 'bg-pink-100 theme-sultan:bg-emerald-100 dark:bg-pink-900/40 dark:theme-sultan:bg-emerald-900/40'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                    userType === 'Personel' ? 'bg-white/20' : 'bg-black/[0.05] dark:bg-white/10'
                   }`}>
-                    <svg className={`w-5 h-5 ${userType === 'Personel' ? 'text-white' : 'text-pink-600 theme-sultan:text-emerald-600'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    <svg className={`w-5 h-5 ${userType === 'Personel' ? 'text-white' : 'text-[#6e6e73]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
                     </svg>
                   </div>
                   <div className="text-left flex-1 min-w-0">
-                    <p className={`font-semibold text-sm ${userType === 'Personel' ? 'text-white' : 'text-gray-900 dark:text-slate-100'}`}>Personel</p>
-                    <p className={`text-xs ${userType === 'Personel' ? 'text-white/80' : 'text-gray-500 dark:text-slate-400'}`}>Satış yapabilir</p>
+                    <p className="font-semibold text-sm">Personel</p>
+                    <p className={`text-xs ${userType === 'Personel' ? 'opacity-80' : 'text-[#86868b]'}`}>Satış yapabilir</p>
                   </div>
                   {userType === 'Personel' && (
-                    <svg className="w-4 h-4 text-white flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    <svg className="w-4 h-4 shrink-0 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                     </svg>
                   )}
                 </button>
               </div>
 
-              {/* Status Info */}
-              <div className={`px-4 py-2.5 border-t border-gray-100 dark:border-slate-700 ${
-                userType === 'Admin' 
-                  ? 'bg-blue-50/50 dark:bg-slate-900/60' 
-                  : 'bg-pink-50 theme-sultan:bg-emerald-50/50 dark:bg-slate-900/50 dark:theme-sultan:bg-emerald-950/40'
-              }`}>
-                <p className={`text-xs text-center font-medium ${
-                  userType === 'Admin' 
-                    ? 'text-blue-700' 
-                    : 'text-pink-700 theme-sultan:text-emerald-700'
-                }`}>
+              <div className="px-4 py-2 border-t border-black/[0.06] dark:border-white/10 bg-black/[0.02] dark:bg-white/[0.03]">
+                <p className="text-xs text-center font-medium text-[#86868b]">
                   {userType === 'Admin' ? 'Tüm özelliklere erişim' : 'Satış işlemleri'}
                 </p>
               </div>
 
-              {/* Çıkış Butonu */}
-              <div className="border-t border-gray-100 dark:border-slate-700 p-2">
+              <div className="border-t border-black/[0.06] dark:border-white/10 p-2">
                 <button
                   onClick={() => setShowExitConfirm(true)}
-                  className="w-full flex items-center justify-center space-x-2 p-3 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/40 transition-all duration-200 text-gray-600 dark:text-slate-300 hover:text-red-600 dark:hover:text-red-400"
+                  className="w-full flex items-center justify-center gap-2 p-3 rounded-xl hover:bg-rose-50 dark:hover:bg-rose-950/30 transition-colors text-[#6e6e73] hover:text-rose-600 dark:hover:text-rose-400"
                   title="Çıkış Yap"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                   </svg>
-                  <span className="text-sm font-medium">Çıkış Yap</span>
+                  <span className="text-sm font-semibold">Çıkış Yap</span>
                 </button>
               </div>
             </div>
@@ -701,110 +731,121 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       {showHamburgerMenu && createPortal(
         <>
           <div
-            className="fixed inset-0 bg-black/40 transition-opacity"
+            className="fixed inset-0 bg-black/30 backdrop-blur-[2px] transition-opacity"
             style={{ zIndex: 9998 }}
             aria-hidden
             onClick={() => setShowHamburgerMenu(false)}
           />
           <div
             id="hamburger-panel"
-            className="fixed left-0 top-0 bottom-0 w-72 max-w-[85vw] bg-white dark:bg-slate-900 shadow-2xl flex flex-col border-r border-gray-200 dark:border-slate-700"
-            style={{ zIndex: 9999, animation: 'slideInLeft 0.2s ease-out' }}
+            className="pos-navbar fixed left-0 top-0 bottom-0 w-[280px] max-w-[85vw] bg-white/95 dark:bg-[#1c1c1e]/95 backdrop-blur-2xl shadow-[4px_0_40px_-12px_rgba(0,0,0,0.2)] flex flex-col border-r border-black/[0.06] dark:border-white/10"
+            style={{ zIndex: 9999, animation: 'slideInLeft 0.25s ease-out' }}
           >
-            <div className="p-4 border-b border-gray-100 dark:border-slate-700 flex items-center justify-between">
-              <span className="font-bold text-gray-800 dark:text-slate-100">Menü</span>
+            <div className="p-4 border-b border-black/[0.06] dark:border-white/10 flex items-center justify-between">
+              <div>
+                <p className="text-[11px] font-semibold text-[#86868b] uppercase tracking-wider">Navigasyon</p>
+                <span className="font-bold text-[#1d1d1f] dark:text-[#f5f5f7]">Menü</span>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowHamburgerMenu(false)}
-                className="w-9 h-9 rounded-lg hover:bg-gray-100 dark:hover:bg-slate-800 flex items-center justify-center text-gray-600 dark:text-slate-300"
+                className="pos-nav-icon-btn w-9 h-9"
                 aria-label="Menüyü kapat"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto py-2">
+            <div className="flex-1 overflow-y-auto py-3">
               <button
+                type="button"
                 onClick={() => closeHamburgerAnd(() => setCurrentView('pos'))}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors ${currentView === 'pos' ? 'bg-pink-50 theme-sultan:bg-emerald-50 dark:bg-pink-950/40 dark:theme-sultan:bg-emerald-950/40 text-pink-800 theme-sultan:text-emerald-800 dark:text-pink-200 dark:theme-sultan:text-emerald-200' : 'text-gray-700 dark:text-slate-200'}`}
+                className={`pos-nav-drawer-item ${currentView === 'pos' ? 'pos-nav-drawer-item--active' : ''}`}
               >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
+                <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
                 </svg>
-                <span className="font-medium">Satış Yap</span>
+                <span>Satış Yap</span>
               </button>
               <button
+                type="button"
                 onClick={() => closeHamburgerAnd(() => setCurrentView('tables'))}
-                className={`w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors ${currentView === 'tables' ? 'bg-pink-50 theme-sultan:bg-emerald-50 dark:bg-pink-950/40 dark:theme-sultan:bg-emerald-950/40 text-pink-800 theme-sultan:text-emerald-800 dark:text-pink-200 dark:theme-sultan:text-emerald-200' : 'text-gray-700 dark:text-slate-200'}`}
+                className={`pos-nav-drawer-item ${currentView === 'tables' ? 'pos-nav-drawer-item--active' : ''}`}
               >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
                 </svg>
-                <span className="font-medium">{isSuriciBranch ? 'Müşteriler' : isSultanBranch ? 'Salon' : 'Masalar'}</span>
+                <span>{tablesNavLabel(isSuriciBranch, isSultanBranch)}</span>
               </button>
               <button
+                type="button"
                 onClick={() => closeHamburgerAnd(handleOpenMobileModal)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                className="pos-nav-drawer-item"
               >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
                 </svg>
-                <span className="font-medium">Mobil Personel</span>
+                <span>Mobil Personel</span>
               </button>
               {userType === 'Admin' && (
                 <button
+                  type="button"
                   onClick={() => closeHamburgerAnd(() => setShowSettingsSplash(true))}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                  className="pos-nav-drawer-item"
                 >
-                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                  <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                   </svg>
-                  <span className="font-medium">Ayarlar</span>
+                  <span>Ayarlar</span>
                 </button>
               )}
-              <div className="my-2 border-t border-gray-100 dark:border-slate-700" />
+              <div className="my-2 mx-4 border-t border-black/[0.06] dark:border-white/10" />
               <button
+                type="button"
                 onClick={toggleFullscreen}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                className="pos-nav-drawer-item"
               >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+                <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                 </svg>
-                <span className="font-medium">Tam Ekran</span>
+                <span>Tam Ekran</span>
               </button>
               {typeof window !== 'undefined' && window.electronAPI?.checkForUpdates && (
                 <button
+                  type="button"
                   onClick={handleCheckUpdates}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                  className="pos-nav-drawer-item"
                 >
-                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  <span className="font-medium">Güncellemeleri Kontrol Et</span>
+                  <span>Güncellemeleri Kontrol Et</span>
                 </button>
               )}
               {userType === 'Admin' && (
                 <button
+                  type="button"
                   onClick={handleQuickLock}
-                  className="w-full flex items-center gap-3 px-4 py-3 text-left text-gray-700 dark:text-slate-200 hover:bg-gray-50 dark:hover:bg-slate-800 transition-colors"
+                  className="pos-nav-drawer-item"
                 >
-                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  <svg className="w-5 h-5 shrink-0 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
                   </svg>
-                  <span className="font-medium">Hızlı Kilit</span>
+                  <span>Hızlı Kilit</span>
                 </button>
               )}
-              <div className="my-2 border-t border-gray-100 dark:border-slate-700" />
+              <div className="my-2 mx-4 border-t border-black/[0.06] dark:border-white/10" />
               <button
+                type="button"
                 onClick={() => closeHamburgerAnd(() => setShowExitConfirm(true))}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+                className="pos-nav-drawer-item text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30"
               >
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                 </svg>
-                <span className="font-medium">Çıkış Yap</span>
+                <span>Çıkış Yap</span>
               </button>
             </div>
           </div>

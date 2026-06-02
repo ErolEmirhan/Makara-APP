@@ -15,7 +15,6 @@ import SaleSuccessToast from './components/SaleSuccessToast';
 import PrintToast from './components/PrintToast';
 import LauncherScreen from './components/LauncherScreen';
 import SupportNoticeModal, { SUPPORT_NOTICE_STORAGE_KEY } from './components/SupportNoticeModal';
-import SplashScreen from './components/SplashScreen';
 import CatalogSyncProgressBar from './components/CatalogSyncProgressBar';
 import ExitSplash from './components/ExitSplash';
 import UpdateModal from './components/UpdateModal';
@@ -23,9 +22,13 @@ import ExpenseModal from './components/ExpenseModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
 import SettingsModal from './components/SettingsModal';
+import IdleScreen from './components/IdleScreen';
+import { useIdleTimer } from './hooks/useIdleTimer';
+
+const IDLE_TIMEOUT_MS = 30000;
 
 const BRANCH_ONBOARDING_KEY = 'makara_pos_branch_onboarded';
-/** Açılış splash’inde şube; senkron okuma + getActiveBranch ile güncellenir */
+/** Son seçilen şube — localStorage anahtarı */
 const LAST_BRANCH_SPLASH_KEY = 'makara_pos_splash_branch_key';
 
 /** Sultan Somatı: “Yan Ürünler” yalnızca Makara’da; Firebase’de kayıtlı olsa bile Sultan’da gösterilmez. */
@@ -39,19 +42,9 @@ function filterYanUrunlerCategoriesForSultan(cats) {
   });
 }
 
-function readSplashBranchKeyFromStorage() {
-  try {
-    return (localStorage.getItem(LAST_BRANCH_SPLASH_KEY) || '').trim().toLowerCase();
-  } catch {
-    return '';
-  }
-}
-
 function App() {
   /** İnternet kapısı geçilmeden ana içerik render edilmez */
   const [launcherPassed, setLauncherPassed] = useState(false);
-  const [showSplash, setShowSplash] = useState(true);
-  const [splashBranchKey, setSplashBranchKey] = useState(readSplashBranchKeyFromStorage);
   const [selectedBranchKey, setSelectedBranchKey] = useState('');
   const [activeBranch, setActiveBranch] = useState(null);
   const [isActivatingBranch, setIsActivatingBranch] = useState(false);
@@ -162,6 +155,10 @@ function App() {
     return () => document.body.classList.remove('body-theme-sultan');
   }, [isSultanBranch]);
 
+  const idleTimerEnabled =
+    launcherPassed && isBranchReady && !showExitSplash;
+  const isIdle = useIdleTimer(IDLE_TIMEOUT_MS, idleTimerEnabled);
+
   /** Launcher bittiğinde tam ekran + kiosk’u yeniden aç (şeffaf masaüstü sadece launcher için) */
   useEffect(() => {
     if (!launcherPassed || typeof window === 'undefined') return;
@@ -170,9 +167,9 @@ function App() {
     api.finishLauncherUi().catch(() => {});
   }, [launcherPassed]);
 
-  /** İş ortakları duyurusu: splash + şube kapısı hazır olunca (bir daha gösterme işaretlenmedikçe her oturumda) */
+  /** İş ortakları duyurusu: şube kapısı hazır olunca */
   useEffect(() => {
-    if (!launcherPassed || showSplash || !branchGateResolved) return;
+    if (!launcherPassed || !branchGateResolved) return;
     if (supportNoticeOpenedRef.current) return;
     try {
       if (localStorage.getItem(SUPPORT_NOTICE_STORAGE_KEY) === '1') return;
@@ -180,29 +177,9 @@ function App() {
     supportNoticeOpenedRef.current = true;
     const id = window.setTimeout(() => setSupportNoticeOpen(true), 520);
     return () => clearTimeout(id);
-  }, [launcherPassed, showSplash, branchGateResolved]);
+  }, [launcherPassed, branchGateResolved]);
 
-  // Açılış splash’i için güncel şube (Electron; ilk karede localStorage yedeği)
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        if (!window.electronAPI?.getActiveBranch) return;
-        const b = await window.electronAPI.getActiveBranch();
-        const k = (b?.key || '').trim().toLowerCase();
-        if (cancelled || !VALID_BRANCH_KEYS.has(k)) return;
-        setSplashBranchKey(k);
-        try {
-          localStorage.setItem(LAST_BRANCH_SPLASH_KEY, k);
-        } catch (_) {}
-      } catch (_) {}
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [VALID_BRANCH_KEYS]);
-
-  // Kayıtlı şube: splash görünürken bile hemen bağlan — katalog splash bitmeden memory’de hazır olsun
+  // Kayıtlı şube: launcher sonrası hemen bağlan
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -233,7 +210,6 @@ function App() {
         if (result?.success) {
           setActiveBranch(result.branch || branch);
           setSelectedBranchKey(key);
-          setSplashBranchKey(key);
           try {
             localStorage.setItem(LAST_BRANCH_SPLASH_KEY, key);
           } catch (_) {}
@@ -1181,7 +1157,6 @@ function App() {
         localStorage.setItem(BRANCH_ONBOARDING_KEY, '1');
         localStorage.setItem(LAST_BRANCH_SPLASH_KEY, normalized);
       } catch (_) {}
-      setSplashBranchKey(normalized);
     } catch (error) {
       setBranchError(error?.message || 'Sube aktivasyonunda hata olustu.');
     } finally {
@@ -1213,7 +1188,6 @@ function App() {
       } catch (_) {}
       setActiveBranch(result.branch || { key: normalized });
       setSelectedBranchKey(normalized);
-      setSplashBranchKey(normalized);
       setCurrentView(normalized === 'makarasur' || normalized === 'sultansomati' ? 'tables' : 'pos');
       if (normalized === 'makara') setUserType('Admin');
       setSelectedTable(null);
@@ -1230,7 +1204,7 @@ function App() {
     return <LauncherScreen onPassed={() => setLauncherPassed(true)} />;
   }
 
-  if (!showSplash && !isBranchReady && !branchGateResolved) {
+  if (!isBranchReady && !branchGateResolved) {
     return (
       <>
         <CatalogSyncProgressBar progress={catalogSyncProgress} />
@@ -1246,7 +1220,7 @@ function App() {
     );
   }
 
-  if (!showSplash && !isBranchReady && branchGateResolved) {
+  if (!isBranchReady && branchGateResolved) {
     return (
       <>
         <CatalogSyncProgressBar progress={catalogSyncProgress} />
@@ -1358,13 +1332,13 @@ function App() {
 
   return (
     <>
-      <CatalogSyncProgressBar progress={catalogSyncProgress} />
-      {showSplash && (
-        <SplashScreen
-          branchKey={splashBranchKey}
-          onComplete={() => setShowSplash(false)}
+      {isIdle && (
+        <IdleScreen
+          isSultanBranch={isSultanBranch}
+          isSuriciBranch={isSuriciBranch}
         />
       )}
+      <CatalogSyncProgressBar progress={catalogSyncProgress} />
 
       {showExitSplash && (
         <ExitSplash onComplete={handleExitComplete} />
@@ -1406,7 +1380,7 @@ function App() {
           />
         </div>
       ) : currentView === 'tables' ? (
-        <div className="p-6">
+        <div className="p-4 sm:p-6 min-h-[calc(100vh-80px)] overflow-y-auto scrollbar-custom">
           <TablePanel 
             onSelectTable={handleTableSelect}
             branchKey={activeBranch?.key || selectedBranchKey}
@@ -1424,23 +1398,20 @@ function App() {
           />
         </div>
       ) : currentView === 'pos' ? (
-        <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)]">
-          {/* Sol Panel — katalog (sabit tipografi, kurumsal düzen) */}
-          <div className="pos-catalog w-full lg:flex-1 flex flex-col px-3 py-3 sm:px-4 sm:py-4 lg:px-5 overflow-hidden">
+        <div className="flex flex-col lg:flex-row h-[calc(100vh-80px)] bg-[#f5f5f7] dark:bg-[#000000]">
+          {/* Sol Panel — katalog */}
+          <div className="pos-catalog w-full lg:flex-1 flex flex-col min-w-0 px-3 py-3 sm:px-5 sm:py-4 lg:px-6 overflow-hidden">
             {selectedTable && (
-              <div className="mb-3 rounded-[var(--pos-radius-lg)] border border-slate-200 bg-slate-900 text-white shadow-[0_4px_14px_rgba(15,23,42,0.18)] flex items-center justify-between gap-3 px-4 py-3 theme-sultan:border-emerald-900/40 theme-sultan:bg-emerald-950">
+              <div className="mb-3 rounded-[var(--pos-radius-lg)] bg-[var(--pos-surface-elevated)] border border-[var(--pos-border)] shadow-[var(--pos-shadow-sm)] flex items-center justify-between gap-3 px-4 py-3">
                 <p
-                  className="font-semibold min-w-0 leading-snug"
+                  className="font-medium min-w-0 leading-snug text-[var(--pos-text)]"
                   style={{ fontSize: 'var(--pos-fs-input)' }}
                 >
-                  <span className="text-white/70 font-medium">
+                  <span className="text-[var(--pos-text-secondary)]">
                     {isSuriciBranch ? 'Müşteri' : 'Masa'}
                   </span>
-                  <span className="mx-1.5 text-white/40">·</span>
-                  <span className="break-words">{selectedTable.name}</span>
-                  <span className="block sm:inline sm:ml-1 text-white/80 font-normal mt-0.5 sm:mt-0">
-                    için sipariş
-                  </span>
+                  <span className="mx-1.5 text-[var(--pos-text-tertiary)]">·</span>
+                  <span className="font-semibold break-words">{selectedTable.name}</span>
                 </p>
                 <button
                   type="button"
@@ -1448,17 +1419,17 @@ function App() {
                     setSelectedTable(null);
                     clearCart();
                   }}
-                  className="shrink-0 min-h-[var(--pos-touch-min)] min-w-[var(--pos-touch-min)] flex items-center justify-center rounded-[var(--pos-radius-sm)] bg-white/10 hover:bg-white/20 transition-colors touch-manipulation"
+                  className="shrink-0 min-h-[var(--pos-touch-min)] min-w-[var(--pos-touch-min)] flex items-center justify-center rounded-full bg-[var(--pos-surface-muted)] text-[var(--pos-text-secondary)] hover:bg-[var(--pos-border-strong)] hover:text-[var(--pos-text)] transition-colors touch-manipulation"
                   title="Masa seçimini iptal et"
                   aria-label="Masa seçimini iptal et"
                 >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </div>
             )}
-            <div className="shrink-0">
+            <div className="shrink-0 w-full min-w-0 max-w-full">
               <CategoryPanel
                 categories={categories}
                 selectedCategory={selectedCategory}
@@ -1470,15 +1441,15 @@ function App() {
                 }}
               />
               {selectedCategory && selectedCategory.id === YAN_URUNLER_CATEGORY_ID && userType === 'Admin' && !isSultanBranch && (
-                <div className="mt-3 mb-1">
+                <div className="mt-2 mb-1">
                   <button
                     type="button"
                     onClick={() => setShowYanUrunlerModal(true)}
-                    className="w-full min-h-[var(--pos-touch-min)] px-4 rounded-[var(--pos-radius-md)] border-2 border-amber-300 bg-amber-50 text-amber-950 font-semibold hover:bg-amber-100 hover:border-amber-400 transition-colors flex items-center justify-center gap-2 shadow-sm"
-                    style={{ fontSize: 'var(--pos-fs-input)' }}
+                    className="w-full min-h-[var(--pos-touch-min)] px-4 rounded-[var(--pos-radius-md)] border border-amber-300/80 bg-amber-50/80 text-amber-950 font-semibold hover:bg-amber-100/90 transition-colors flex items-center justify-center gap-2"
+                    style={{ fontSize: 'var(--pos-fs-meta)' }}
                   >
-                    <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                    <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                     </svg>
                     <span>Yan ürünler yönetimi</span>
                   </button>
@@ -1493,14 +1464,14 @@ function App() {
                   type="search"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="Tüm kategorilerde ara…"
+                  placeholder="Ürün ara"
                   autoComplete="off"
-                  className="w-full min-h-[var(--pos-touch-min)] pl-11 pr-10 bg-white border border-slate-200 rounded-[var(--pos-radius-md)] shadow-[0_1px_2px_rgba(15,23,42,0.04)] text-slate-900 font-medium placeholder:text-slate-400 transition-all focus:outline-none focus:ring-2 focus:ring-pink-500/30 focus:border-pink-400 theme-sultan:focus:ring-emerald-500/30 theme-sultan:focus:border-emerald-500"
+                  className="w-full min-h-[var(--pos-touch-min)] pl-11 pr-10 bg-[var(--pos-surface-muted)] border border-transparent rounded-[var(--pos-radius-pill)] text-[var(--pos-text)] font-medium placeholder:text-[var(--pos-text-tertiary)] transition-all focus:outline-none focus:bg-[var(--pos-surface-elevated)] focus:border-[var(--pos-border-strong)] focus:shadow-[var(--pos-shadow-sm)] theme-sultan:focus:ring-2 theme-sultan:focus:ring-emerald-500/25 focus:ring-2 focus:ring-pink-500/20"
                   style={{ fontSize: 'var(--pos-fs-input)' }}
                 />
-                <div className="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                  <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden>
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--pos-text-tertiary)]">
+                  <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
                   </svg>
                 </div>
                 {searchQuery ? (
@@ -1510,11 +1481,11 @@ function App() {
                       setSearchQuery('');
                       searchInputRef.current?.focus();
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 min-h-9 min-w-9 flex items-center justify-center rounded-[var(--pos-radius-sm)] text-slate-500 hover:bg-slate-100 hover:text-slate-800 transition-colors"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 min-h-9 min-w-9 flex items-center justify-center rounded-full text-[var(--pos-text-secondary)] hover:bg-[var(--pos-border)] hover:text-[var(--pos-text)] transition-colors"
                     aria-label="Aramayı temizle"
                   >
-                    <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                     </svg>
                   </button>
                 ) : null}
@@ -1523,24 +1494,24 @@ function App() {
                 <button
                   type="button"
                   onClick={() => setShowExpenseModal(true)}
-                  className="min-h-[var(--pos-touch-min)] px-4 rounded-[var(--pos-radius-md)] bg-slate-900 text-white font-semibold hover:bg-slate-800 transition-colors flex items-center justify-center gap-2 whitespace-nowrap shadow-sm theme-sultan:bg-emerald-800 theme-sultan:hover:bg-emerald-900"
-                  style={{ fontSize: 'var(--pos-fs-input)' }}
+                  className="min-h-[var(--pos-touch-min)] px-5 rounded-[var(--pos-radius-pill)] bg-[var(--pos-text)] text-[var(--pos-surface)] font-semibold hover:opacity-90 transition-opacity flex items-center justify-center gap-2 whitespace-nowrap theme-sultan:bg-emerald-700"
+                  style={{ fontSize: 'var(--pos-fs-meta)' }}
                 >
-                  <svg className="w-[18px] h-[18px] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                  <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
-                  <span>Masraf ekle</span>
+                  <span>Masraf</span>
                 </button>
               )}
             </div>
             {searchQuery ? (
               <p
-                className="mb-2 text-slate-600 font-medium shrink-0"
+                className="mb-2 text-[var(--pos-text-secondary)] font-medium shrink-0 px-0.5"
                 style={{ fontSize: 'var(--pos-fs-meta)' }}
               >
                 {filteredProducts.length > 0
-                  ? `Tüm kategorilerde ${filteredProducts.length} ürün bulundu`
-                  : 'Tüm kategorilerde eşleşen ürün yok'}
+                  ? `${filteredProducts.length} sonuç`
+                  : 'Sonuç bulunamadı'}
               </p>
             ) : null}
 
@@ -1548,11 +1519,12 @@ function App() {
               products={filteredProducts}
               onAddToCart={addToCart}
               isSearchMode={Boolean(searchQuery.trim())}
+              categoryName={selectedCategory?.name || ''}
             />
           </div>
 
-          {/* Sağ Panel - Sepet */}
-          <div className="w-full lg:w-[420px] bg-gradient-to-b from-pink-50 theme-sultan:from-emerald-50/80 to-fuchsia-50 theme-sultan:to-green-50/80 backdrop-blur-xl border-t lg:border-t-0 lg:border-l border-pink-200 theme-sultan:border-emerald-200 p-6 mt-4 lg:mt-0">
+          {/* Sağ Panel — Sepet */}
+          <div className="w-full lg:w-[400px] xl:w-[420px] shrink-0 flex flex-col min-h-0 lg:h-[calc(100vh-80px)] bg-[#fafafa] dark:bg-[#1c1c1e] border-t lg:border-t-0 lg:border-l border-black/[0.08] dark:border-white/10 p-4 sm:p-5">
             <Cart
               cart={cart}
               onUpdateQuantity={updateCartItemQuantity}

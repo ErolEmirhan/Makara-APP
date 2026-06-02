@@ -2572,7 +2572,18 @@ ipcMain.handle('get-table-orders', (event, tableId) => {
 });
 
 ipcMain.handle('get-table-order-items', (event, orderId) => {
-  return db.tableOrderItems.filter(oi => oi.order_id === orderId);
+  if (orderId == null) return [];
+  const id = Number(orderId);
+  const items = db.tableOrderItems;
+  if (!items?.length) return [];
+  const result = [];
+  for (let i = 0; i < items.length; i++) {
+    const oi = items[i];
+    if (oi.order_id === orderId || oi.order_id === id) {
+      result.push(oi);
+    }
+  }
+  return result;
 });
 
 function nextTableOrderItemId() {

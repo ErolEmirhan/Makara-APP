@@ -1,13 +1,17 @@
 const fs = require('fs');
 const path = require('path');
 
-// Version numarasını artır (patch version: 2.4.9 -> 2.4.10)
+// x.y veya x.y.z → geçerli semver (electron-builder için x.y.z şart)
+function normalizeSemver(version) {
+  const parts = String(version || '0.0.0').trim().split('.').map((p) => parseInt(p, 10) || 0);
+  while (parts.length < 3) parts.push(0);
+  return parts.slice(0, 3).join('.');
+}
+
+// Version numarasını artır (patch: 450.0.0 -> 450.0.1)
 function incrementVersion(version) {
-  const parts = version.split('.');
-  const major = parseInt(parts[0]);
-  const minor = parseInt(parts[1]);
-  const patch = parseInt(parts[2]) + 1;
-  return `${major}.${minor}.${patch}`;
+  const [major, minor, patch] = normalizeSemver(version).split('.').map((p) => parseInt(p, 10));
+  return `${major}.${minor}.${patch + 1}`;
 }
 
 // Dosyaları güncelle
@@ -63,7 +67,7 @@ function getCurrentVersion() {
   const pkgPath = path.join(__dirname, '../package.json');
   try {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    const v = String(pkg.version || '').trim();
+    const v = normalizeSemver(pkg.version);
     if (/^\d+\.\d+\.\d+$/.test(v)) return v;
   } catch (_) {}
   const indexHtmlPath = path.join(__dirname, '../public/index.html');

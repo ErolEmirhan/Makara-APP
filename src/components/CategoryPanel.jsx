@@ -17,57 +17,47 @@ const CategoryPanel = ({ categories, selectedCategory, onSelectCategory, isSulta
   }, [categories, isSultanBranch]);
 
   useEffect(() => {
-    const grid = railRef.current;
-    if (!grid || selectedId === undefined || selectedId === null) return;
+    const rail = railRef.current;
+    if (!rail || selectedId === undefined || selectedId === null) return;
     const raw = String(selectedId);
     const esc =
       typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
         ? CSS.escape(raw)
         : raw.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-    const btn = grid.querySelector(`[data-category-id="${esc}"]`);
+    const btn = rail.querySelector(`[data-category-id="${esc}"]`);
     if (btn && typeof btn.scrollIntoView === 'function') {
-      btn.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      btn.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
     }
   }, [selectedId, visibleCategories.length]);
 
   return (
     <section
-      className={`pos-catalog mb-4 rounded-[var(--pos-radius-lg)] border border-slate-200/90 dark:border-slate-600/85 bg-white/95 dark:bg-slate-900/92 shadow-[0_1px_3px_rgba(15,23,42,0.06)] dark:shadow-[0_1px_3px_rgba(0,0,0,0.35)] theme-sultan:border-emerald-200/80 theme-sultan:shadow-[0_1px_3px_rgba(6,78,59,0.08)] overflow-hidden`}
+      className="pos-catalog shrink-0 mb-3 w-full min-w-0 max-w-full"
       aria-label="Ürün kategorileri"
     >
-      <div
-        className={`flex items-stretch gap-0 border-b border-slate-100 theme-sultan:border-emerald-100 dark:border-slate-700 dark:theme-sultan:border-emerald-900/40 ${
-          isSultanBranch ? 'bg-slate-50/80 dark:bg-slate-800/90' : 'bg-gradient-to-r from-slate-50/90 via-white to-slate-50/90 dark:from-slate-900/95 dark:via-slate-900/98 dark:to-slate-900/95'
-        }`}
-      >
-        <div
-          className={`w-1 shrink-0 self-stretch min-h-[52px] ${
-            isSultanBranch ? 'bg-emerald-600' : 'bg-gradient-to-b from-pink-600 to-indigo-600 theme-sultan:from-emerald-600 theme-sultan:to-teal-600'
-          }`}
-          aria-hidden
-        />
-        <div className="flex-1 py-3 px-4 min-w-0">
+      <div className="flex items-baseline justify-between gap-3 mb-2.5 px-0.5 min-w-0">
+        <h2
+          className="font-semibold tracking-tight text-[var(--pos-text)] shrink-0"
+          style={{ fontSize: 'var(--pos-fs-input)' }}
+        >
+          Kategoriler
+        </h2>
+        {selectedCategory?.name ? (
           <p
-            className="font-semibold tracking-wide text-slate-500 dark:text-slate-400 uppercase"
-            style={{ fontSize: 'var(--pos-fs-overline)', letterSpacing: '0.08em' }}
+            className="truncate text-[var(--pos-text-secondary)] font-medium min-w-0 text-right"
+            style={{ fontSize: 'var(--pos-fs-meta)' }}
           >
-            Katalog
+            {selectedCategory.name}
           </p>
-          <h2
-            className="font-bold text-slate-900 dark:text-slate-100 tracking-tight mt-0.5 font-display"
-            style={{ fontSize: 'var(--pos-fs-product)' }}
-          >
-            Kategoriler
-          </h2>
-        </div>
+        ) : null}
       </div>
 
-      <div className="p-3 sm:p-4">
+      <div className="pos-category-scroll-wrap">
         <div
           ref={railRef}
-          className="pos-category-grid grid gap-2 touch-manipulation [grid-template-columns:repeat(auto-fill,minmax(6.25rem,1fr))] sm:[grid-template-columns:repeat(auto-fill,minmax(7rem,1fr))] lg:[grid-template-columns:repeat(auto-fill,minmax(7.5rem,1fr))]"
+          className="pos-category-rail flex gap-2 overflow-x-auto overflow-y-hidden pb-2 snap-x snap-mandatory touch-pan-x"
           role="tablist"
-          aria-label="Kategori listesi"
+          aria-label="Kategori listesi — yatay kaydırın"
         >
           {visibleCategories.map((category) => {
             const isSelected = selectedCategory?.id === category.id;
@@ -80,31 +70,33 @@ const CategoryPanel = ({ categories, selectedCategory, onSelectCategory, isSulta
                 data-category-id={String(category.id)}
                 onClick={() => onSelectCategory(category)}
                 className={`
-                  w-full min-w-0 text-center rounded-[var(--pos-radius-md)] border font-semibold
+                  snap-start shrink-0 flex-none min-h-[var(--pos-touch-min)] px-4 sm:px-5
+                  rounded-[var(--pos-radius-pill)] font-semibold
                   transition-all duration-200 ease-out
-                  min-h-[var(--pos-touch-min)] px-2 py-2.5 sm:px-3 flex flex-col items-center justify-center
                   focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
-                  ${
-                    isSultanBranch
-                      ? 'focus-visible:ring-emerald-500'
-                      : 'focus-visible:ring-pink-500'
-                  }
+                  ${isSultanBranch ? 'focus-visible:ring-emerald-500' : 'focus-visible:ring-pink-500'}
                   ${
                     isSelected
                       ? isSultanBranch
-                        ? 'border-emerald-600 bg-emerald-50 text-emerald-950 shadow-sm ring-1 ring-emerald-600/25 dark:border-emerald-500 dark:bg-emerald-950/55 dark:text-emerald-100 dark:ring-emerald-500/30'
-                        : 'border-pink-600 bg-pink-50 text-pink-950 shadow-sm ring-1 ring-pink-600/20 dark:border-pink-500 dark:bg-pink-950/50 dark:text-pink-100 dark:ring-pink-500/25'
-                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-800/95 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:bg-slate-700 dark:hover:text-white'
+                        ? 'bg-emerald-600 text-white shadow-[var(--pos-shadow-sm)]'
+                        : 'bg-[#1d1d1f] dark:bg-white text-white dark:text-[#1d1d1f] shadow-[var(--pos-shadow-sm)]'
+                      : 'bg-[var(--pos-surface-muted)] text-[var(--pos-text)] border border-[var(--pos-border)] hover:bg-[var(--pos-surface)] hover:border-[var(--pos-border-strong)]'
                   }
                 `}
-                style={{ fontSize: 'var(--pos-fs-category)', lineHeight: 1.35 }}
+                style={{ fontSize: 'var(--pos-fs-category)', lineHeight: 1.25 }}
               >
-                <span className="line-clamp-3 break-words hyphens-auto w-full">{category.name}</span>
+                <span className="whitespace-nowrap block">{category.name}</span>
               </button>
             );
           })}
         </div>
       </div>
+      <p
+        className="mt-1 text-[var(--pos-text-tertiary)] font-medium px-0.5 sm:hidden"
+        style={{ fontSize: 'var(--pos-fs-overline)' }}
+      >
+        Daha fazla kategori için sola-sağa kaydırın
+      </p>
     </section>
   );
 };

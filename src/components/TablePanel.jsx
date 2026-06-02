@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
 import { initializeApp, getApp } from 'firebase/app';
 import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
@@ -20,13 +20,23 @@ import {
   MAKARA_HAVZAN_MAIN_TABLE_COUNT,
   MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS,
 } from '../constants/makaraMasaLayout';
+import TableGridCard from './tables/TableGridCard';
+import {
+  TablesFloorHeader,
+  TablesSectionBlock,
+  TablesFloorDivider,
+} from './tables/TablesFloorChrome';
+import OccupiedTablesPanel from './tables/OccupiedTablesPanel';
 
 const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId, autoOpenTableId, onAutoOpenConsumed, onShowReceipt }) => {
   const [selectedType, setSelectedType] = useState('inside'); // 'inside', 'outside', or 'online'
   const [tableOrders, setTableOrders] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [orderItems, setOrderItems] = useState([]);
+  const [orderItemsLoading, setOrderItemsLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const showModalRef = useRef(false);
+  const selectedOrderRef = useRef(null);
   const [showPartialPaymentModal, setShowPartialPaymentModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
@@ -311,6 +321,33 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     [sultanTablesFlat, sultanSectionKey]
   );
 
+  const countOccupiedInList = useCallback(
+    (tables) =>
+      tables.filter((t) =>
+        tableOrders.some((o) => o.table_id === t.id && o.status === 'pending')
+      ).length,
+    [tableOrders]
+  );
+
+  const havzanFloorStats = useMemo(
+    () => ({
+      inside: { filled: countOccupiedInList(insideTables), total: insideTables.length },
+      outside: { filled: countOccupiedInList(outsideTables), total: outsideTables.length },
+      package: { filled: countOccupiedInList(packageTables), total: packageTables.length },
+    }),
+    [insideTables, outsideTables, packageTables, countOccupiedInList]
+  );
+
+  const suriciFloorStats = useMemo(
+    () => ({
+      all: {
+        filled: countOccupiedInList(suriciUnifiedTables),
+        total: suriciUnifiedTables.length,
+      },
+    }),
+    [suriciUnifiedTables, countOccupiedInList]
+  );
+
   /** Sultan bölüm sekmeleri: dolu / toplam masa (örn. 3/14) */
   const sultanSectionOccupancy = useMemo(() => {
     if (!isSultanBranch) return {};
@@ -325,43 +362,63 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     return map;
   }, [isSultanBranch, sultanTablesFlat, tableOrders]);
 
-  // Masa siparişlerini yükle
+  useEffect(() => {
+    showModalRef.current = showModal;
+  }, [showModal]);
+
+  useEffect(() => {
+    selectedOrderRef.current = selectedOrder;
+  }, [selectedOrder]);
+
+  const loadTableOrders = useCallback(async () => {
+    if (window.electronAPI && window.electronAPI.getTableOrders) {
+      try {
+        const orders = await window.electronAPI.getTableOrders();
+        setTableOrders(orders || []);
+      } catch (error) {
+        console.error('Masa siparişleri yüklenemedi:', error);
+      }
+    }
+  }, []);
+
+  // Masa siparişlerini yükle (yalnızca mount)
   useEffect(() => {
     loadTableOrders();
-    
-    // Yeni sipariş geldiğinde dinle (mobil cihazdan veya Electron'dan gelen siparişler için)
-    if (window.electronAPI && window.electronAPI.onNewOrderCreated) {
-      const unsubscribe = window.electronAPI.onNewOrderCreated(async (data) => {
-        console.log('📦 Yeni sipariş alındı:', data);
-        // Siparişleri yenile (kısa bir gecikme ile veritabanının güncellenmesini bekle)
-        setTimeout(async () => {
-          await loadTableOrders();
-          
-          // Eğer modal açıksa ve aynı masaya sipariş eklendiyse, modal'daki sipariş detaylarını da yenile
-          if (showModal && selectedOrder && data.tableId === selectedOrder.table_id) {
-            try {
-              // Güncel siparişleri API'den yükle
-              const orders = await window.electronAPI.getTableOrders();
-              const updatedOrder = orders.find(o => o.id === selectedOrder.id && o.status === 'pending');
-              if (updatedOrder) {
-                const updatedItems = await window.electronAPI.getTableOrderItems(updatedOrder.id);
-                setSelectedOrder(updatedOrder);
-                setOrderItems(updatedItems || []);
-              }
-            } catch (error) {
-              console.error('Sipariş detayları yenilenirken hata:', error);
-            }
+  }, [loadTableOrders]);
+
+  // Yeni sipariş geldiğinde dinle — modal state ref ile okunur, yeniden abone olunmaz
+  useEffect(() => {
+    if (!window.electronAPI?.onNewOrderCreated) return;
+
+    const unsubscribe = window.electronAPI.onNewOrderCreated((data) => {
+      console.log('📦 Yeni sipariş alındı:', data);
+      setTimeout(async () => {
+        await loadTableOrders();
+
+        const modalOpen = showModalRef.current;
+        const currentOrder = selectedOrderRef.current;
+        if (!modalOpen || !currentOrder || data.tableId !== currentOrder.table_id) return;
+
+        try {
+          const orders = await window.electronAPI.getTableOrders();
+          const updatedOrder = orders.find(
+            (o) => o.id === currentOrder.id && o.status === 'pending'
+          );
+          if (updatedOrder) {
+            const updatedItems = await window.electronAPI.getTableOrderItems(updatedOrder.id);
+            setSelectedOrder(updatedOrder);
+            setOrderItems(updatedItems || []);
           }
-        }, 500);
-      });
-      
-      return () => {
-        if (unsubscribe && typeof unsubscribe === 'function') {
-          unsubscribe();
+        } catch (error) {
+          console.error('Sipariş detayları yenilenirken hata:', error);
         }
-      };
-    }
-  }, [showModal, selectedOrder]);
+      }, 500);
+    });
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [loadTableOrders]);
 
   useEffect(() => {
     if (!autoOpenOrderId && !autoOpenTableId) return;
@@ -556,17 +613,6 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     return () => { unsubscribe?.(); };
   }, []);
 
-  const loadTableOrders = async () => {
-    if (window.electronAPI && window.electronAPI.getTableOrders) {
-      try {
-        const orders = await window.electronAPI.getTableOrders();
-        setTableOrders(orders || []);
-      } catch (error) {
-        console.error('Masa siparişleri yüklenemedi:', error);
-      }
-    }
-  };
-
   // Online siparişleri yükle
   const loadOnlineOrders = async (db) => {
     try {
@@ -723,42 +769,107 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   };
 
   // Belirli bir masa için sipariş var mı kontrol et
-  const getTableOrder = (tableId) => {
-    // Önce yeni formatı kontrol et
-    let order = tableOrders.find(order => order.table_id === tableId && order.status === 'pending');
-    
-    // Eğer bulunamazsa ve dışarı masası ise eski formatı da kontrol et
+  const getTableOrder = useCallback((tableId) => {
+    let order = tableOrders.find((o) => o.table_id === tableId && o.status === 'pending');
+
     if (!order && tableId.startsWith('outside-')) {
       const tableNumber = parseInt(tableId.replace('outside-', ''), 10) || 0;
       const idx = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.indexOf(tableNumber);
       if (idx >= 0) {
         const oldTableId = `outside-${idx + 1}`;
-        order = tableOrders.find(o => o.table_id === oldTableId && o.status === 'pending');
+        order = tableOrders.find((o) => o.table_id === oldTableId && o.status === 'pending');
       } else if (tableNumber >= 1 && tableNumber <= 24) {
         const newNum = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[tableNumber - 1];
         if (newNum) {
-          order = tableOrders.find(o => o.table_id === `outside-${newNum}` && o.status === 'pending');
+          order = tableOrders.find((o) => o.table_id === `outside-${newNum}` && o.status === 'pending');
         }
       }
     }
-    
-    return order;
-  };
 
-  // Masa sipariş detaylarını göster
-  const handleViewOrder = async (table) => {
-    const order = getTableOrder(table.id);
-    if (order && window.electronAPI && window.electronAPI.getTableOrderItems) {
-      try {
-        const items = await window.electronAPI.getTableOrderItems(order.id);
-        setSelectedOrder(order);
-        setOrderItems(items || []);
-        setShowModal(true);
-      } catch (error) {
-        console.error('Sipariş detayları yüklenemedi:', error);
-      }
+    return order;
+  }, [tableOrders]);
+
+  const occupiedTableGroups = useMemo(() => {
+    const toOccupiedItems = (tables) =>
+      tables
+        .map((table) => ({ table, order: getTableOrder(table.id) }))
+        .filter(({ order }) => order);
+
+    if (isSultanBranch) {
+      return SULTAN_TABLE_SECTIONS.map((sec) => ({
+        key: sec.key,
+        label: sec.label,
+        variant: 'large',
+        items: toOccupiedItems(sultanTablesFlat.filter((t) => t.sectionKey === sec.key)),
+      })).filter((g) => g.items.length > 0);
     }
-  };
+
+    if (isSuriciBranch) {
+      const items = toOccupiedItems(suriciUnifiedTables);
+      if (!items.length) return [];
+      return [{
+        key: 'all',
+        label: 'Aktif müşteriler',
+        variant: 'surici',
+        gridClass: 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2 md:gap-2.5',
+        items,
+      }];
+    }
+
+    return [
+      {
+        key: 'inside',
+        label: 'İç salon',
+        variant: 'default',
+        items: toOccupiedItems(insideTables),
+      },
+      {
+        key: 'outside',
+        label: 'Dış salon',
+        variant: 'default',
+        items: toOccupiedItems(outsideTables),
+      },
+      {
+        key: 'package',
+        label: 'Paket',
+        variant: 'large',
+        showPackageIcon: true,
+        gridClass: 'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2.5 md:gap-3 max-w-4xl',
+        items: toOccupiedItems(packageTables),
+      },
+    ].filter((g) => g.items.length > 0);
+  }, [
+    getTableOrder,
+    isSultanBranch,
+    isSuriciBranch,
+    sultanTablesFlat,
+    suriciUnifiedTables,
+    insideTables,
+    outsideTables,
+    packageTables,
+  ]);
+
+  // Masa sipariş detaylarını göster — modal hemen açılır, ürünler arka planda yüklenir
+  const handleViewOrder = useCallback(async (table) => {
+    const order = getTableOrder(table.id);
+    if (!order || !window.electronAPI?.getTableOrderItems) return;
+
+    setSelectedOrder(order);
+    setOrderItems([]);
+    setOrderItemsLoading(true);
+    setShowModal(true);
+
+    try {
+      const items = await window.electronAPI.getTableOrderItems(order.id);
+      startTransition(() => {
+        setOrderItems(items || []);
+        setOrderItemsLoading(false);
+      });
+    } catch (error) {
+      console.error('Sipariş detayları yüklenemedi:', error);
+      setOrderItemsLoading(false);
+    }
+  }, [getTableOrder]);
 
   // Masa butonuna tıklandığında
   const handleTableClick = (table) => {
@@ -1689,18 +1800,34 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
 
 
   return (
-    <div className="mb-4">
-      {!isSultanBranch && (
-        <div className="text-center mb-4">
-          <h2 className="text-4xl font-black tracking-tight heading-display">{pluralLabel}</h2>
-        </div>
+    <div className="mb-4 max-w-[1600px] mx-auto">
+      {selectedType !== 'online' && !isSultanBranch && (
+        <TablesFloorHeader
+          title={pluralLabel}
+          subtitle={
+            isSuriciBranch
+              ? 'Üstte dolu kayıtlar, altta tüm müşteriler'
+              : 'Üstte dolu masalar, altta salon planı'
+          }
+          stats={
+            isSuriciBranch
+              ? [{ label: 'Toplam', filled: suriciFloorStats.all.filled, total: suriciFloorStats.all.total }]
+              : [
+                  { label: 'İç salon', filled: havzanFloorStats.inside.filled, total: havzanFloorStats.inside.total },
+                  ...(outsideTables.length > 0
+                    ? [{ label: 'Dış', filled: havzanFloorStats.outside.filled, total: havzanFloorStats.outside.total }]
+                    : []),
+                  { label: 'Paket', filled: havzanFloorStats.package.filled, total: havzanFloorStats.package.total },
+                ]
+          }
+        />
       )}
-      <div className="flex justify-end gap-3 mb-4">
-        <div className="flex items-center gap-3">
+      <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mb-5">
+        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
           {isSultanBranch && (
             <button
               onClick={() => setShowReservationsModal(true)}
-              className="px-6 py-3 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+              className="px-4 sm:px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl transition-all duration-200 hover:shadow-md active:scale-[0.98] flex items-center gap-2 text-sm"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -1722,16 +1849,16 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                 setLoadingRecentSales(false);
               }
             }}
-            className="px-6 py-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+            className="px-4 sm:px-5 py-2.5 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-700 theme-sultan:hover:from-emerald-700 hover:to-pink-700 theme-sultan:hover:to-emerald-700 text-white font-bold rounded-xl transition-all duration-200 hover:shadow-md active:scale-[0.98] flex items-center gap-2 text-sm"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            <span>Geçmiş Adisyon İste</span>
+            <span>Geçmiş Adisyon</span>
           </button>
           <button
             onClick={() => setShowTransferModal(true)}
-            className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-blue-500 hover:from-pink-700 theme-sultan:hover:from-pink-700 theme-sultan:from-emerald-700 hover:to-blue-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+            className="px-4 sm:px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-all duration-200 hover:shadow-md active:scale-[0.98] flex items-center gap-2 text-sm"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
@@ -1740,7 +1867,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           </button>
           <button
             onClick={() => setShowMergeModal(true)}
-            className="px-6 py-3 bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-indigo-500 theme-sultan:to-teal-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-indigo-600 theme-sultan:hover:to-indigo-600 theme-sultan:to-teal-600 text-white font-bold rounded-xl transition-all duration-300 hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
+            className="px-4 sm:px-5 py-2.5 bg-white border-2 border-slate-200 text-slate-800 hover:border-pink-400 theme-sultan:hover:border-emerald-400 hover:bg-pink-50/50 theme-sultan:hover:bg-emerald-50/50 font-bold rounded-xl transition-all duration-200 active:scale-[0.98] flex items-center gap-2 text-sm shadow-sm"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
@@ -1752,13 +1879,13 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
 
       {/* Masa Tipi Seçimi: Masalar / Online — Sultan Somatı'nda yalnızca masalar (online yok) */}
       {!isSultanBranch && (
-        <div className="flex justify-center gap-4 mb-4">
+        <div className="flex justify-center gap-3 mb-6 p-1.5 rounded-2xl bg-slate-100/80 border border-slate-200/80 w-fit mx-auto">
           <button
             onClick={() => setSelectedType('inside')}
-            className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
+            className={`relative px-6 sm:px-8 py-3 rounded-xl text-base font-semibold transition-all duration-200 flex items-center gap-3 ${
               selectedType === 'inside'
-                ? 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-500 theme-sultan:to-emerald-500 border-pink-400 theme-sultan:border-emerald-400 text-white shadow-md'
-                : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
+                ? 'bg-white text-slate-900 shadow-md ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1768,10 +1895,10 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           </button>
           <button
             onClick={() => setSelectedType('online')}
-            className={`relative px-8 py-4 rounded-xl border text-lg font-medium transition-all duration-200 flex items-center gap-4 ${
+            className={`relative px-6 sm:px-8 py-3 rounded-xl text-base font-semibold transition-all duration-200 flex items-center gap-3 ${
               selectedType === 'online'
-                ? 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-500 theme-sultan:to-emerald-500 border-pink-400 theme-sultan:border-emerald-400 text-white shadow-md'
-                : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50 hover:border-slate-400'
+                ? 'bg-white text-slate-900 shadow-md ring-1 ring-slate-200/80'
+                : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2218,224 +2345,165 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         </div>
       ) : (
         <>
+          <OccupiedTablesPanel
+            groups={occupiedTableGroups}
+            onTableClick={handleTableClick}
+            title={isSuriciBranch ? 'Dolu müşteriler' : 'Dolu masalar'}
+          />
+
           {isSultanBranch ? (
             <div className="space-y-6 mb-6">
-              <div>
-                <div className="flex flex-wrap justify-center gap-3">
-                  {SULTAN_TABLE_SECTIONS.map((sec) => (
-                    <button
-                      key={sec.key}
-                      type="button"
-                      onClick={() => setSultanSectionKey(sec.key)}
-                      className={`px-5 py-3.5 md:px-6 md:py-4 rounded-2xl text-base md:text-lg font-extrabold border-2 transition-all duration-200 ${
-                        sultanSectionKey === sec.key
-                          ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white border-emerald-500 shadow-lg scale-[1.02]'
-                          : 'bg-white border-slate-200 text-slate-800 hover:border-emerald-400 hover:bg-emerald-50/90 shadow-sm'
-                      }`}
-                    >
-                      {sec.label}
-                      <span className="ml-1.5 opacity-90 font-bold text-[0.92em] tabular-nums">
-                        ({sultanSectionOccupancy[sec.key]?.filled ?? 0}/{sec.count})
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div>
-                <p className="text-center text-lg md:text-xl font-extrabold text-slate-800 mb-4 tracking-tight">
-                  {SULTAN_TABLE_SECTIONS.find((s) => s.key === sultanSectionKey)?.label} — Masa seçin
-                </p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-                  {sultanTablesInSection.map((table) => {
-                    const hasOrder = getTableOrder(table.id);
-                    return (
-                      <button
-                        key={table.id}
-                        type="button"
-                        onClick={() => handleTableClick(table)}
-                        className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-2xl border-2 transition-all duration-200 hover:shadow-lg active:scale-[0.98] p-3 ${
-                          hasOrder
-                            ? 'border-red-700 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
-                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
-                        }`}
-                      >
-                        {hasOrder ? (
-                          <>
-                            <span className="text-2xl md:text-3xl font-black text-white tabular-nums leading-none">
-                              {table.number}
-                            </span>
-                            <span className="font-bold text-[11px] md:text-xs text-center leading-tight line-clamp-2 text-red-100 mt-2 px-1">
-                              {table.name}
-                            </span>
-                            <span className="mt-2 text-[10px] font-bold uppercase tracking-wide px-2.5 py-1 rounded-md bg-red-950/40 text-red-100 border border-red-800/50">
-                              Dolu
-                            </span>
-                            <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-amber-300 rounded-full animate-pulse shadow-[0_0_8px_rgba(252,211,77,0.9)]" />
-                          </>
-                        ) : (
-                          <>
-                            <span className="text-3xl md:text-4xl font-black text-slate-500 tabular-nums leading-none">
-                              {table.number}
-                            </span>
-                            <span className="mt-3 text-[11px] font-bold text-slate-400 uppercase tracking-wide px-2.5 py-1 rounded-md bg-slate-100 border border-slate-200">
-                              Boş
-                            </span>
-                          </>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          ) : isSuriciBranch ? (
-            <div className="grid grid-cols-5 md:grid-cols-8 lg:grid-cols-10 gap-2 mb-6">
-              {suriciUnifiedTables.map((table) => {
-                const hasOrder = getTableOrder(table.id);
-                const displayName = hasOrder?.table_name || hasOrder?.tableName || '';
-                return (
+              <TablesFloorHeader
+                title={pluralLabel}
+                subtitle="Bölüm seçin, ardından masaya dokunun"
+                stats={SULTAN_TABLE_SECTIONS.map((sec) => ({
+                  label: sec.label,
+                  filled: sultanSectionOccupancy[sec.key]?.filled ?? 0,
+                  total: sec.count,
+                }))}
+              />
+              <div className="flex flex-wrap justify-center gap-2 p-2 rounded-2xl bg-slate-100/70 border border-slate-200/80">
+                {SULTAN_TABLE_SECTIONS.map((sec) => (
                   <button
-                    key={table.id}
-                    onClick={() => handleTableClick(table)}
-                    className={`table-btn group relative flex flex-col items-center justify-center rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] aspect-square p-2 ${
-                      hasOrder
-                        ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
-                        : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
+                    key={sec.key}
+                    type="button"
+                    onClick={() => setSultanSectionKey(sec.key)}
+                    className={`px-4 py-3 md:px-5 md:py-3.5 rounded-xl text-sm md:text-base font-bold transition-all duration-200 ${
+                      sultanSectionKey === sec.key
+                        ? 'bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-md'
+                        : 'bg-white text-slate-700 hover:bg-emerald-50 border border-slate-200/80'
                     }`}
                   >
-                    {hasOrder ? (
-                      <>
-                        <span className="text-xs md:text-sm font-black text-white text-center leading-tight line-clamp-3 px-0.5 break-words w-full">
-                          {displayName}
-                        </span>
-                        <span className="mt-2 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">
-                          Dolu
-                        </span>
-                        <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 bg-amber-300 rounded-full animate-pulse" />
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
-                        <span className="mt-2 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">
-                          Boş
-                        </span>
-                      </>
-                    )}
+                    {sec.label}
+                    <span className="ml-1.5 opacity-90 tabular-nums text-[0.92em]">
+                      ({sultanSectionOccupancy[sec.key]?.filled ?? 0}/{sec.count})
+                    </span>
                   </button>
-                );
-              })}
+                ))}
+              </div>
+              <TablesSectionBlock
+                title={`${SULTAN_TABLE_SECTIONS.find((s) => s.key === sultanSectionKey)?.label} — masa seçin`}
+                filled={sultanSectionOccupancy[sultanSectionKey]?.filled ?? 0}
+                total={sultanSectionOccupancy[sultanSectionKey]?.total ?? sultanTablesInSection.length}
+                icon={
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+                  </svg>
+                }
+              >
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2.5 md:gap-3">
+                  {sultanTablesInSection.map((table) => (
+                    <TableGridCard
+                      key={table.id}
+                      table={table}
+                      order={getTableOrder(table.id)}
+                      variant="large"
+                      onClick={() => handleTableClick(table)}
+                    />
+                  ))}
+                </div>
+              </TablesSectionBlock>
             </div>
+          ) : isSuriciBranch ? (
+            <TablesSectionBlock
+              title="Tüm müşteriler"
+              filled={suriciFloorStats.all.filled}
+              total={suriciFloorStats.all.total}
+              icon={
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              }
+            >
+              <div className="grid grid-cols-5 sm:grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2 md:gap-2.5">
+                {suriciUnifiedTables.map((table) => (
+                  <TableGridCard
+                    key={table.id}
+                    table={table}
+                    order={getTableOrder(table.id)}
+                    variant="surici"
+                    onClick={() => handleTableClick(table)}
+                  />
+                ))}
+              </div>
+            </TablesSectionBlock>
           ) : (
             <>
-              <div className="grid grid-cols-10 gap-2 mb-2">
-                {insideTables.map((table) => {
-                  const hasOrder = getTableOrder(table.id);
-                  return (
-                <button
-                  key={table.id}
-                  onClick={() => handleTableClick(table)}
-                  className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] p-1.5 ${
-                    hasOrder
-                      ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
-                      : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
-                  }`}
-                >
-                  {hasOrder ? (
-                    <>
-                      <span className="text-lg md:text-xl font-black text-white tabular-nums leading-none">{table.number}</span>
-                      <span className="text-[9px] md:text-[10px] font-bold text-red-100 text-center leading-tight mt-1 line-clamp-2 px-0.5">{table.name}</span>
-                      <span className="mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">Dolu</span>
-                      <span className="absolute top-1 right-1 w-2 h-2 bg-amber-300 rounded-full animate-pulse" />
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
-                      <span className="mt-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">Boş</span>
-                    </>
-                  )}
-                </button>
-                  );
-                })}
-              </div>
+              <TablesSectionBlock
+                title="İç salon"
+                filled={havzanFloorStats.inside.filled}
+                total={havzanFloorStats.inside.total}
+                icon={
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                  </svg>
+                }
+              >
+                <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2 md:gap-2.5">
+                  {insideTables.map((table) => (
+                    <TableGridCard
+                      key={table.id}
+                      table={table}
+                      order={getTableOrder(table.id)}
+                      variant="compact"
+                      onClick={() => handleTableClick(table)}
+                    />
+                  ))}
+                </div>
+              </TablesSectionBlock>
+
               {outsideTables.length > 0 && (
                 <>
-                  <div className="w-full py-5 flex items-center justify-center">
-                    <div className="relative w-full flex items-center justify-center">
-                      <div className="absolute inset-0 h-0.5 w-full bg-gradient-to-r from-slate-200 via-slate-400 to-slate-200 shadow-sm" />
-                      <div className="relative z-10 w-3 h-3 rounded-full bg-white border-2 border-slate-400 shadow-lg shadow-slate-300/50 ring-2 ring-slate-200/80" />
+                  <TablesFloorDivider />
+                  <TablesSectionBlock
+                    title="Dış salon"
+                    filled={havzanFloorStats.outside.filled}
+                    total={havzanFloorStats.outside.total}
+                    icon={
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                      </svg>
+                    }
+                  >
+                    <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2 md:gap-2.5">
+                      {outsideTables.map((table) => (
+                        <TableGridCard
+                          key={table.id}
+                          table={table}
+                          order={getTableOrder(table.id)}
+                          variant="compact"
+                          onClick={() => handleTableClick(table)}
+                        />
+                      ))}
                     </div>
-                  </div>
-                  <div className="grid grid-cols-10 gap-2 mb-6">
-                    {outsideTables.map((table) => {
-                      const hasOrder = getTableOrder(table.id);
-                      return (
-                    <button
-                      key={table.id}
-                      onClick={() => handleTableClick(table)}
-                      className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-xl border-2 transition-all duration-200 hover:shadow-md active:scale-[0.98] p-1.5 ${
-                        hasOrder
-                          ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
-                          : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
-                      }`}
-                    >
-                      {hasOrder ? (
-                        <>
-                          <span className="text-lg md:text-xl font-black text-white tabular-nums leading-none">{table.number}</span>
-                          <span className="text-[9px] md:text-[10px] font-bold text-red-100 text-center leading-tight mt-1 line-clamp-2 px-0.5">{table.name}</span>
-                          <span className="mt-1 text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded bg-red-950/45 text-red-100 border border-red-900/40">Dolu</span>
-                          <span className="absolute top-1 right-1 w-2 h-2 bg-amber-300 rounded-full animate-pulse" />
-                        </>
-                      ) : (
-                        <>
-                          <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
-                          <span className="mt-1.5 text-[9px] font-bold text-slate-400 uppercase tracking-wide px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200">Boş</span>
-                        </>
-                      )}
-                    </button>
-                      );
-                    })}
-                  </div>
+                  </TablesSectionBlock>
                 </>
               )}
 
-              {/* Paket Masaları - Kurumsal */}
-              <div className="mb-6 mt-10">
-                <h3 className="text-center text-base md:text-lg font-extrabold uppercase tracking-[0.18em] text-slate-500 mb-5">Paket Masaları</h3>
-                <div className="grid grid-cols-5 gap-3">
-                  {packageTables.map((table) => {
-                    const hasOrder = getTableOrder(table.id);
-                    return (
-                      <button
-                        key={table.id}
-                        onClick={() => handleTableClick(table)}
-                        className={`table-btn group relative flex flex-col items-center justify-center aspect-square rounded-2xl border-2 transition-all duration-200 hover:shadow-lg active:scale-[0.98] p-3 ${
-                          hasOrder
-                            ? 'border-red-800 bg-gradient-to-br from-red-600 via-red-700 to-red-900 shadow-md'
-                            : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50 shadow-sm'
-                        }`}
-                      >
-                        {hasOrder ? (
-                          <>
-                            <span className="text-2xl md:text-3xl font-black text-white tabular-nums leading-none">{table.number}</span>
-                            <span className="text-xs font-bold text-red-100 text-center leading-tight mt-2 line-clamp-2">{table.name}</span>
-                            <span className="mt-2 text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded-md bg-red-950/40 text-red-100 border border-red-800/50">Dolu</span>
-                            <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-amber-300 rounded-full animate-pulse" />
-                          </>
-                        ) : (
-                          <>
-                            <svg className="w-7 h-7 text-slate-400 mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                            </svg>
-                            <span className="text-xl md:text-2xl font-black text-slate-500 tabular-nums leading-none">{table.number}</span>
-                            <span className="text-[10px] font-bold text-slate-500 text-center mt-1.5 line-clamp-2">{table.name}</span>
-                            <span className="mt-2 text-[10px] font-bold text-slate-400 uppercase tracking-wide px-2 py-1 rounded-md bg-slate-100 border border-slate-200">Boş</span>
-                          </>
-                        )}
-                      </button>
-                    );
-                  })}
+              <TablesSectionBlock
+                title="Paket masaları"
+                filled={havzanFloorStats.package.filled}
+                total={havzanFloorStats.package.total}
+                className="mt-2"
+                icon={
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                  </svg>
+                }
+              >
+                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2.5 md:gap-3 max-w-3xl mx-auto">
+                  {packageTables.map((table) => (
+                    <TableGridCard
+                      key={table.id}
+                      table={table}
+                      order={getTableOrder(table.id)}
+                      variant="large"
+                      showPackageIcon
+                      onClick={() => handleTableClick(table)}
+                    />
+                  ))}
                 </div>
-              </div>
+              </TablesSectionBlock>
             </>
           )}
         </>
@@ -2462,13 +2530,15 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         <TableOrderModal
           order={selectedOrder}
           items={orderItems}
+          itemsLoading={orderItemsLoading}
           customerMode={isSuriciBranch}
           branchKey={branchKey}
           onClose={() => {
             setShowModal(false);
             setSelectedOrder(null);
             setOrderItems([]);
-            loadTableOrders(); // Siparişleri yenile
+            setOrderItemsLoading(false);
+            loadTableOrders();
           }}
           onCompleteTable={handleCompleteTable}
           onPartialPayment={handlePartialPayment}

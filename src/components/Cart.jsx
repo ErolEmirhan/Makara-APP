@@ -1,344 +1,381 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 
-const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, onSaveToTable, isSavingToTable = false, totalAmount, selectedTable, isSuriciBranch = false, orderNote, onOrderNoteChange, onToggleGift, onRequestAdisyon }) => {
+const Cart = ({
+  cart,
+  onUpdateQuantity,
+  onRemoveItem,
+  onClearCart,
+  onCheckout,
+  onSaveToTable,
+  isSavingToTable = false,
+  totalAmount,
+  selectedTable,
+  isSuriciBranch = false,
+  orderNote,
+  onOrderNoteChange,
+  onToggleGift,
+  onRequestAdisyon,
+}) => {
   const [showNoteModal, setShowNoteModal] = useState(false);
   const [noteText, setNoteText] = useState(orderNote || '');
   const textareaRef = useRef(null);
-  
+
+  const itemCount = useMemo(
+    () => cart.reduce((sum, item) => sum + (item.quantity || 0), 0),
+    [cart]
+  );
+
   useEffect(() => {
     setNoteText(orderNote || '');
   }, [orderNote]);
-  
+
   useEffect(() => {
     if (showNoteModal && textareaRef.current) {
-      // Modal açıldığında textarea'ya focus et
-      setTimeout(() => {
-        textareaRef.current?.focus();
-      }, 100);
+      setTimeout(() => textareaRef.current?.focus(), 100);
     }
   }, [showNoteModal]);
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center space-x-3">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 flex items-center justify-center shadow-lg">
-            <svg className="w-7 h-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-          </div>
-          <div>
-            <h2 className="text-2xl font-bold gradient-text">Sepet</h2>
-            <p className="text-sm text-gray-500 dark:text-slate-400">{cart.length > 0 ? `${cart.length} ürün` : 'Ürün seçin'}</p>
-          </div>
+    <div className="pos-cart pos-catalog h-full flex flex-col min-h-0">
+      {/* Başlık */}
+      <div className="shrink-0 flex items-center justify-between gap-3 mb-4 pb-4 border-b border-black/[0.06] dark:border-white/10">
+        <div className="min-w-0">
+          <h2
+            className="font-bold text-[#1d1d1f] dark:text-[#f5f5f7] tracking-tight"
+            style={{ fontSize: 'var(--pos-fs-input)' }}
+          >
+            Sepet
+          </h2>
+          <p
+            className="text-[#86868b] dark:text-[#a1a1a6] font-medium mt-0.5"
+            style={{ fontSize: 'var(--pos-fs-meta)' }}
+          >
+            {cart.length > 0 ? `${itemCount} adet · ${cart.length} kalem` : 'Ürün ekleyin'}
+          </p>
         </div>
+        {selectedTable && (
+          <span
+            className="shrink-0 max-w-[45%] truncate px-3 py-1.5 rounded-full bg-[#f5f5f7] dark:bg-[#2c2c2e] text-[#1d1d1f] dark:text-[#f5f5f7] font-semibold border border-black/[0.06] dark:border-white/10"
+            style={{ fontSize: 'var(--pos-fs-meta)' }}
+            title={selectedTable.name}
+          >
+            {isSuriciBranch ? 'Müşteri' : 'Masa'} · {selectedTable.name}
+          </span>
+        )}
       </div>
 
-      <div className="flex-1 overflow-y-auto scrollbar-custom space-y-2 mb-6">
+      {/* Ürün listesi */}
+      <div className="flex-1 overflow-y-auto scrollbar-custom min-h-0 -mx-1 px-1 space-y-2.5 mb-4">
         {cart.length === 0 ? (
-          <div className="text-center py-12">
-            <svg className="w-24 h-24 mx-auto text-pink-200 theme-sultan:text-emerald-200 dark:text-pink-800/80 dark:theme-sultan:text-emerald-800/70 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
-            </svg>
-            <p className="text-gray-600 dark:text-slate-300">Sepetiniz boş</p>
-            <p className="text-sm text-gray-500 dark:text-slate-500 mt-2">Ürün eklemek için tıklayın</p>
+          <div
+            className="flex flex-col items-center justify-center text-center py-14 px-4 rounded-[var(--pos-radius-lg)] bg-[var(--pos-surface-muted)] border border-[var(--pos-border)]"
+            role="status"
+          >
+            <div
+              className="w-14 h-14 rounded-2xl bg-[var(--pos-surface)] border border-[var(--pos-border)] flex items-center justify-center mb-3 text-[var(--pos-text-tertiary)]"
+              aria-hidden
+            >
+              <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+              </svg>
+            </div>
+            <p className="font-semibold text-[var(--pos-text)]" style={{ fontSize: 'var(--pos-fs-product)' }}>
+              Sepet boş
+            </p>
+            <p className="text-[var(--pos-text-secondary)] mt-1.5" style={{ fontSize: 'var(--pos-fs-meta)' }}>
+              Soldan ürün seçerek başlayın
+            </p>
           </div>
         ) : (
           cart.map((item) => {
             const isGift = item.isGift || false;
-            const displayPrice = isGift ? 0 : item.price;
-            const displayTotal = isGift ? 0 : (item.price * item.quantity);
-            
+            const lineTotal = isGift ? 0 : item.price * item.quantity;
+
             return (
-            <div 
-              key={item.id} 
-              className={`bg-white dark:bg-slate-800/95 rounded-lg border transition-all duration-200 animate-fade-in ${
-                isGift 
-                  ? 'border-fuchsia-200 theme-sultan:border-green-200 bg-gradient-to-br from-fuchsia-50 theme-sultan:from-green-50/40 to-white dark:from-fuchsia-950/40 dark:to-slate-900 shadow-sm dark:border-fuchsia-800/60' 
-                  : 'border-gray-200/60 dark:border-slate-600 hover:border-gray-300/80 dark:hover:border-slate-500 hover:shadow-md shadow-sm'
-              }`}
-              style={{ padding: '14px' }}
-            >
-              {/* Tek Satır - Ürün Adı, Miktar, Fiyat ve Butonlar */}
-              <div className="flex items-center justify-between gap-3">
-                {/* Sol - Ürün Adı ve İkram Badge */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-2">
-                    <h4 className={`font-semibold text-base leading-tight flex-1 truncate ${
-                      isGift ? 'text-gray-400 line-through dark:text-slate-500' : 'text-gray-900 dark:text-slate-100'
-                    }`}>
-                      {item.name}
-                    </h4>
-                    {isGift && (
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-fuchsia-100 theme-sultan:bg-green-100 text-fuchsia-700 theme-sultan:text-green-700 rounded-md text-xs font-bold whitespace-nowrap flex-shrink-0">
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                        İKRAM
-                      </span>
-                    )}
-                  </div>
-                  
-                  {/* Alt Satır - Birim Fiyat ve Miktar */}
-                  <div className="flex items-center gap-4">
-                    <span className="text-xs text-gray-500 dark:text-slate-400">Birim: <span className={`font-medium ${isGift ? 'text-gray-400 line-through dark:text-slate-500' : 'text-gray-700 dark:text-slate-300'}`}>₺{item.price.toFixed(2)}</span></span>
-                    
-                    {/* Miktar Kontrolü */}
-                    <div className="flex items-center gap-1 bg-gray-50 dark:bg-slate-900/80 rounded-md p-0.5 border border-gray-200/60 dark:border-slate-600">
-                      <button
-                        onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
-                        className="w-7 h-7 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700 active:bg-gray-200 dark:active:bg-slate-600 border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 rounded flex items-center justify-center transition-all duration-150 active:scale-95"
-                        title="Azalt"
+              <article
+                key={item.id}
+                className={`rounded-[var(--pos-radius-md)] border bg-[var(--pos-surface-elevated)] transition-all duration-200 ${
+                  isGift
+                    ? 'border-emerald-200/80 dark:border-emerald-800/50 bg-emerald-50/30 dark:bg-emerald-950/20'
+                    : 'border-[var(--pos-border)] hover:border-[var(--pos-border-strong)] hover:shadow-[var(--pos-shadow-sm)]'
+                }`}
+                style={{ boxShadow: isGift ? undefined : 'var(--pos-shadow-sm)' }}
+              >
+                <div className="p-3.5">
+                  <div className="flex items-start justify-between gap-2 mb-2.5">
+                    <div className="min-w-0 flex-1">
+                      <h4
+                        className={`font-semibold leading-snug break-words ${
+                          isGift
+                            ? 'text-[var(--pos-text-secondary)] line-through'
+                            : 'text-[var(--pos-text)]'
+                        }`}
+                        style={{ fontSize: 'var(--pos-fs-product)' }}
                       >
-                        <svg className="w-3.5 h-3.5 text-gray-700 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                        {item.name}
+                      </h4>
+                      {isGift && (
+                        <span
+                          className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold uppercase tracking-wide"
+                          style={{ fontSize: 'var(--pos-fs-overline)' }}
+                        >
+                          İkram
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      className={`shrink-0 font-bold tabular-nums tracking-tight ${
+                        isGift ? 'text-[var(--pos-text-tertiary)] line-through' : 'pos-price-gradient'
+                      }`}
+                      style={{ fontSize: 'var(--pos-fs-price)' }}
+                    >
+                      ₺{lineTotal.toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1 p-0.5 rounded-xl bg-[var(--pos-surface-muted)] border border-[var(--pos-border)]">
+                      <button
+                        type="button"
+                        onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
+                        className="pos-cart-qty-btn"
+                        title="Azalt"
+                        aria-label="Azalt"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M20 12H4" />
                         </svg>
                       </button>
-                      
-                      <div className="w-8 h-7 flex items-center justify-center">
-                        <span className="text-sm font-bold text-gray-900 dark:text-slate-100">
-                          {item.quantity}
-                        </span>
-                      </div>
-                      
-                      <button
-                        onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
-                        className="w-7 h-7 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700 active:bg-gray-200 dark:active:bg-slate-600 border border-gray-200 dark:border-slate-600 hover:border-gray-300 dark:hover:border-slate-500 rounded flex items-center justify-center transition-all duration-150 active:scale-95"
-                        title="Artır"
+                      <span
+                        className="w-8 text-center font-bold tabular-nums text-[var(--pos-text)]"
+                        style={{ fontSize: 'var(--pos-fs-product)' }}
                       >
-                        <svg className="w-3.5 h-3.5 text-gray-700 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                        {item.quantity}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
+                        className="pos-cart-qty-btn"
+                        title="Artır"
+                        aria-label="Artır"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onToggleGift && onToggleGift(item.id)}
+                        className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors border ${
+                          isGift
+                            ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-200/80 dark:border-emerald-800/60'
+                            : 'bg-[var(--pos-surface-muted)] text-[var(--pos-text-secondary)] border-[var(--pos-border)] hover:bg-[var(--pos-surface)]'
+                        }`}
+                        title={isGift ? 'İkramı iptal et' : 'İkram et'}
+                      >
+                        {isGift ? 'İkram ✓' : 'İkram'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveItem(item.id)}
+                        className="pos-cart-qty-btn text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                        title="Kaldır"
+                        aria-label="Ürünü kaldır"
+                      >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                         </svg>
                       </button>
                     </div>
                   </div>
-                </div>
 
-                {/* Sağ - Butonlar */}
-                <div className="flex items-center gap-2.5">
-                  {/* İkram Butonu */}
-                  <button
-                    onClick={() => onToggleGift && onToggleGift(item.id)}
-                    className={`px-2.5 py-1.5 text-xs font-semibold rounded-md transition-all whitespace-nowrap border flex items-center gap-1 ${
-                      isGift 
-                        ? 'bg-fuchsia-50 theme-sultan:bg-green-50 text-fuchsia-700 theme-sultan:text-green-700 border-fuchsia-200 theme-sultan:border-green-200 hover:bg-fuchsia-100 theme-sultan:hover:bg-fuchsia-100 theme-sultan:bg-green-100 hover:border-fuchsia-300 theme-sultan:hover:border-fuchsia-300 theme-sultan:border-green-300' 
-                        : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100 hover:border-amber-300'
-                    } shadow-sm active:scale-95`}
-                    title={isGift ? 'İkramı İptal Et' : 'İkram Et'}
-                  >
-                    {isGift ? (
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                      </svg>
-                    ) : (
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
-                      </svg>
-                    )}
-                    <span className="hidden sm:inline">İkram</span>
-                  </button>
-
-                  {/* Sil Butonu */}
-                  <button
-                    onClick={() => onRemoveItem(item.id)}
-                    className="w-8 h-8 bg-red-50 hover:bg-red-100 active:bg-red-200 border border-red-200 hover:border-red-300 rounded-md flex items-center justify-center transition-all duration-150 active:scale-95 shadow-sm"
-                    title="Ürünü Kaldır"
-                  >
-                    <svg className="w-3.5 h-3.5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  {!isGift && (
+                    <p
+                      className="mt-2 text-[var(--pos-text-tertiary)] tabular-nums"
+                      style={{ fontSize: 'var(--pos-fs-overline)' }}
+                    >
+                      Birim ₺{item.price.toFixed(2)}
+                    </p>
+                  )}
                 </div>
-              </div>
-            </div>
-          )})
+              </article>
+            );
+          })
         )}
       </div>
 
-      <div className="border-t border-pink-200 theme-sultan:border-emerald-200 dark:border-slate-600 pt-6 space-y-4">
+      {/* Alt: özet + aksiyonlar */}
+      <div className="shrink-0 pt-4 border-t border-black/[0.06] dark:border-white/10 space-y-3">
         {cart.length > 0 && (
-          <div className="flex justify-between items-center pb-4">
-            <span className="text-sm text-gray-500 dark:text-slate-400">Sepeti temizle</span>
+          <div className="flex items-center justify-between">
             <button
+              type="button"
               onClick={onClearCart}
-              className="px-4 py-2 text-sm font-medium rounded-lg bg-red-500/10 text-red-500 hover:bg-red-500/20 transition-colors"
+              className="text-sm font-semibold text-[#86868b] hover:text-rose-600 dark:hover:text-rose-400 transition-colors"
             >
-              Temizle
+              Sepeti temizle
             </button>
+            <span
+              className="text-[var(--pos-text-secondary)] tabular-nums font-medium"
+              style={{ fontSize: 'var(--pos-fs-meta)' }}
+            >
+              Ara toplam ₺{totalAmount.toFixed(2)}
+            </span>
           </div>
         )}
 
-        <div className="flex justify-between items-center">
-          <span className="text-gray-600 dark:text-slate-400">Ara Toplam</span>
-          <span className="text-gray-800 dark:text-slate-200 font-medium">₺{totalAmount.toFixed(2)}</span>
-        </div>
-        
-        <div className="flex justify-between items-center text-lg font-bold text-gray-900 dark:text-slate-100">
-          <span>TOPLAM</span>
-          <span className="text-3xl bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-pink-400 theme-sultan:to-emerald-400 bg-clip-text text-transparent">
+        <div className="flex items-end justify-between gap-3 px-0.5">
+          <span
+            className="font-bold text-[var(--pos-text-secondary)] uppercase tracking-wide"
+            style={{ fontSize: 'var(--pos-fs-meta)' }}
+          >
+            Toplam
+          </span>
+          <span
+            className="font-black tabular-nums pos-price-gradient leading-none"
+            style={{ fontSize: 'clamp(1.25rem, 4vw, 1.75rem)' }}
+          >
             ₺{totalAmount.toFixed(2)}
           </span>
         </div>
 
-        {/* Order Note Button */}
         {cart.length > 0 && (
           <button
+            type="button"
             onClick={() => setShowNoteModal(true)}
-            className="w-full py-2 px-3 rounded-lg text-sm font-medium transition-all duration-300 bg-amber-50 dark:bg-amber-950/35 hover:bg-amber-100 dark:hover:bg-amber-950/55 border border-amber-200 dark:border-amber-800/70 hover:border-amber-300 dark:hover:border-amber-700 text-amber-700 dark:text-amber-300 flex items-center justify-between"
+            className="pos-cart-secondary-btn !py-2.5 justify-between px-4"
           >
-            <div className="flex items-center space-x-2">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+            <span className="flex items-center gap-2">
+              <svg className="w-4 h-4 opacity-70" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
               </svg>
-              <span>{orderNote ? 'Not Düzenle' : 'Not Ekle'}</span>
-            </div>
-            {orderNote && (
-              <span className="px-2 py-0.5 bg-amber-200 rounded-full text-xs font-bold">
-                ✓
-              </span>
-            )}
+              {orderNote ? 'Notu düzenle' : 'Sipariş notu ekle'}
+            </span>
+            {orderNote ? (
+              <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0" aria-hidden />
+            ) : null}
           </button>
         )}
 
         {selectedTable ? (
-          <div className="space-y-3">
+          <div className="space-y-2 pt-1">
             <button
+              type="button"
               onClick={onSaveToTable}
               disabled={cart.length === 0 || isSavingToTable}
-              className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 flex items-center justify-center gap-2 ${
-                cart.length === 0 || isSavingToTable
-                  ? 'bg-gray-600 dark:bg-slate-700 text-gray-400 dark:text-slate-500 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-blue-500 to-cyan-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
-              }`}
+              className="pos-cart-primary-btn"
             >
-              <div className="flex items-center justify-center space-x-2">
-                {isSavingToTable ? (
-                  <>
-                    <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" style={{ animationDuration: '0.8s' }} />
-                    <span>Gönderiliyor...</span>
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    <span>{isSuriciBranch ? 'Müşteriye Kaydet' : 'Masaya Kaydet'}</span>
-                  </>
-                )}
-              </div>
+              {isSavingToTable ? (
+                <>
+                  <span className="w-5 h-5 border-2 border-current border-t-transparent rounded-full animate-spin opacity-80" />
+                  Gönderiliyor…
+                </>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                  </svg>
+                  {isSuriciBranch ? 'Müşteriye kaydet' : 'Masaya kaydet'}
+                </>
+              )}
             </button>
             <button
+              type="button"
               onClick={onRequestAdisyon}
               disabled={cart.length === 0}
-              className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
-                cart.length === 0
-                  ? 'bg-gray-600 dark:bg-slate-700 text-gray-400 dark:text-slate-500 cursor-not-allowed'
-                  : 'bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
-              }`}
+              className="pos-cart-secondary-btn"
             >
-              <div className="flex items-center justify-center space-x-2">
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <span>Adisyon Yazdır</span>
-              </div>
+              <svg className="w-5 h-5 opacity-80" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Adisyon yazdır
             </button>
           </div>
         ) : (
           <button
+            type="button"
             onClick={onCheckout}
             disabled={cart.length === 0}
-            className={`w-full py-4 rounded-xl font-bold text-lg transition-all duration-300 ${
-              cart.length === 0
-                ? 'bg-gray-600 dark:bg-slate-700 text-gray-400 dark:text-slate-500 cursor-not-allowed'
-                : 'bg-gradient-to-r from-pink-500 theme-sultan:from-emerald-500 to-lime-500 text-white hover:shadow-2xl hover:scale-105 active:scale-95'
-            }`}
+            className="pos-cart-primary-btn mt-1"
           >
-            <div className="flex items-center justify-center space-x-2">
-              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-              </svg>
-              <span>Ödeme Al</span>
-            </div>
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            Ödeme al
           </button>
         )}
       </div>
 
-      {/* Order Note Modal */}
       {showNoteModal && createPortal(
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-lg flex items-center justify-center z-[999] animate-fade-in px-4">
-          <div className="bg-white dark:bg-slate-900 rounded-3xl p-8 w-full max-w-md shadow-2xl transform animate-scale-in relative overflow-hidden border border-slate-200/80 dark:border-slate-600">
-            <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-amber-500 via-orange-500 to-amber-500"></div>
-            
-            <button
-              onClick={() => {
-                setShowNoteModal(false);
-                setNoteText(orderNote || '');
-              }}
-              className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-100 dark:bg-slate-800 hover:bg-gray-200 dark:hover:bg-slate-700 flex items-center justify-center transition-all hover:rotate-90"
-            >
-              <svg className="w-6 h-6 text-gray-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-            
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-gradient-to-br from-amber-500 to-orange-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                </svg>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-md flex items-center justify-center z-[999] animate-fade-in px-4">
+          <div
+            className="pos-catalog bg-[var(--pos-surface-elevated)] rounded-[var(--pos-radius-lg)] p-6 w-full max-w-md shadow-[var(--pos-shadow-md)] border border-[var(--pos-border)] transform animate-scale-in"
+            role="dialog"
+            aria-labelledby="cart-note-title"
+          >
+            <div className="flex items-start justify-between gap-3 mb-5">
+              <div>
+                <h2 id="cart-note-title" className="font-bold text-[var(--pos-text)]" style={{ fontSize: 'var(--pos-fs-input)' }}>
+                  Sipariş notu
+                </h2>
+                <p className="text-[var(--pos-text-secondary)] mt-1" style={{ fontSize: 'var(--pos-fs-meta)' }}>
+                  Mutfak veya kasa için kısa not
+                </p>
               </div>
-              <h2 className="text-2xl font-bold gradient-text mb-2">Sipariş Notu</h2>
-              <p className="text-sm text-gray-500 dark:text-slate-400">Sipariş içeriği ile ilgili not ekleyin</p>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNoteModal(false);
+                  setNoteText(orderNote || '');
+                }}
+                className="pos-cart-qty-btn shrink-0"
+                aria-label="Kapat"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
             </div>
 
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-slate-300 mb-2">
-                  Not (Örn: Sütü az olacak, Ekstra peynir, vs.)
-                </label>
-                <textarea
-                  ref={textareaRef}
-                  value={noteText}
-                  onChange={(e) => {
-                    const newValue = e.target.value;
-                    setNoteText(newValue);
-                  }}
-                  onInput={(e) => {
-                    // Dokunmatik klavye için input event'ini handle et
-                    const newValue = e.target.value;
-                    setNoteText(newValue);
-                  }}
-                  className="w-full px-4 py-3 rounded-xl border-2 border-gray-200 dark:border-slate-600 bg-white dark:bg-slate-800/80 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 dark:placeholder:text-slate-500 focus:border-amber-500 dark:focus:border-amber-500 focus:outline-none transition-all resize-none"
-                  placeholder="Sipariş notunuzu buraya yazın..."
-                  rows="4"
-                  maxLength={200}
-                />
-                <p className="text-xs text-gray-400 dark:text-slate-500 mt-1 text-right">{noteText.length}/200</p>
-              </div>
+            <textarea
+              ref={textareaRef}
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+              className="w-full px-4 py-3 rounded-[var(--pos-radius-md)] border border-[var(--pos-border-strong)] bg-[var(--pos-surface-muted)] text-[var(--pos-text)] placeholder:text-[var(--pos-text-tertiary)] focus:outline-none focus:ring-2 focus:ring-pink-500/20 theme-sultan:focus:ring-emerald-500/25 focus:border-[var(--pos-border-strong)] resize-none"
+              style={{ fontSize: 'var(--pos-fs-input)' }}
+              placeholder="Örn: az şekerli, ekstra peynir…"
+              rows={4}
+              maxLength={200}
+            />
+            <p className="text-right text-[var(--pos-text-tertiary)] mt-1.5 tabular-nums" style={{ fontSize: 'var(--pos-fs-overline)' }}>
+              {noteText.length}/200
+            </p>
 
-              <div className="flex space-x-3">
-                <button
-                  onClick={() => {
-                    setShowNoteModal(false);
-                    setNoteText(orderNote || '');
-                  }}
-                  className="flex-1 px-6 py-3 bg-gray-100 dark:bg-slate-800 text-gray-700 dark:text-slate-200 rounded-xl font-semibold hover:bg-gray-200 dark:hover:bg-slate-700 transition-all"
-                >
-                  İptal
-                </button>
-                <button
-                  onClick={() => {
-                    if (onOrderNoteChange) {
-                      onOrderNoteChange(noteText.trim());
-                    }
-                    setShowNoteModal(false);
-                  }}
-                  className="flex-1 px-6 py-3 bg-gradient-to-r from-amber-500 to-orange-500 text-white rounded-xl font-semibold hover:shadow-lg transition-all transform hover:scale-105"
-                >
-                  Kaydet
-                </button>
-              </div>
+            <div className="flex gap-2 mt-4">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNoteModal(false);
+                  setNoteText(orderNote || '');
+                }}
+                className="pos-cart-secondary-btn flex-1"
+              >
+                İptal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onOrderNoteChange?.(noteText.trim());
+                  setShowNoteModal(false);
+                }}
+                className="pos-cart-primary-btn flex-1"
+              >
+                Kaydet
+              </button>
             </div>
           </div>
         </div>,
@@ -348,6 +385,4 @@ const Cart = ({ cart, onUpdateQuantity, onRemoveItem, onClearCart, onCheckout, o
   );
 };
 
-// PERFORMANS: React.memo ile gereksiz re-render'ları önle
 export default React.memo(Cart);
-

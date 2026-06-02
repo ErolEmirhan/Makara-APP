@@ -1,219 +1,188 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 
+const SPLASH_DURATION_MS = 2800;
+const EXIT_MS = 550;
+
 const SplashScreen = ({ onComplete, branchKey = '' }) => {
   const [visible, setVisible] = useState(true);
-  const [fadeOut, setFadeOut] = useState(false);
+  const [exiting, setExiting] = useState(false);
 
   const isSultanSplash = (branchKey || '').trim().toLowerCase() === 'sultansomati';
-
-  const text = 'MAKARA';
-  const subtitle = 'Profesyonel Adisyon Sistemi';
+  const letters = 'MAKARA'.split('');
 
   useEffect(() => {
-    // 2.5 saniye sonra fade out başlat
     const endTimeout = setTimeout(() => {
-      setFadeOut(true);
+      setExiting(true);
       setTimeout(() => {
         setVisible(false);
-        onComplete();
-      }, 500);
-    }, 2500);
+        onComplete?.();
+      }, EXIT_MS);
+    }, SPLASH_DURATION_MS);
 
-    return () => {
-      clearTimeout(endTimeout);
-    };
+    return () => clearTimeout(endTimeout);
   }, [onComplete]);
 
   if (!visible) return null;
 
   return createPortal(
-    <div 
+    <div
+      className={`splash-screen fixed inset-0 z-[99999] flex flex-col items-center justify-center overflow-hidden ${
+        exiting ? 'splash-screen--exit' : ''
+      }`}
       style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
         background: isSultanSplash
-          ? 'linear-gradient(160deg, #059669 0%, #047857 45%, #065f46 100%)'
-          : '#ffffff',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        zIndex: 99999,
-        opacity: fadeOut ? 0 : 1,
-        transition: 'opacity 0.5s ease',
-        overflow: 'hidden'
+          ? 'linear-gradient(165deg, #064e3b 0%, #047857 38%, #059669 72%, #0d9488 100%)'
+          : 'linear-gradient(180deg, #fafafa 0%, #f5f5f7 45%, #eef0f5 100%)',
       }}
+      role="presentation"
+      aria-hidden
     >
-      <style>{`
-        @keyframes mainTextReveal {
-          0% {
-            opacity: 0;
-            transform: translateY(40px) scale(0.95);
-            letter-spacing: 0.3em;
-          }
-          100% {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-            letter-spacing: 0.15em;
-          }
-        }
-        @keyframes subtitleFadeIn {
-          from {
-            opacity: 0;
-            transform: translateY(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-        @keyframes lineExpand {
-          from {
-            width: 0%;
-            opacity: 0;
-          }
-          to {
-            width: 100%;
-            opacity: 1;
-          }
-        }
-        .splash-main-text {
-          animation: mainTextReveal 1.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-          opacity: 1;
-        }
-        .splash-subtitle-text {
-          animation: subtitleFadeIn 0.8s ease-out forwards;
-          animation-delay: 0.3s;
-          opacity: 1;
-        }
-        .splash-decorative-line {
-          animation: lineExpand 1s ease-out forwards;
-          animation-delay: 0.5s;
-          opacity: 1;
-        }
-        @keyframes sultanTitleIn {
-          from {
-            opacity: 0;
-            transform: translateY(12px) scale(0.98);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0) scale(1);
-          }
-        }
-        .splash-sultan-title {
-          animation: sultanTitleIn 0.9s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-        }
-      `}</style>
-
-      {!isSultanSplash && (
+      {/* Arka plan orb'ları */}
+      {!isSultanSplash ? (
         <>
-          <div 
+          <div
+            className="splash-orb absolute -top-[20%] -left-[10%] w-[55vw] h-[55vw] max-w-[520px] max-h-[520px] rounded-full pointer-events-none opacity-70"
             style={{
-              position: 'absolute',
-              top: '20%',
-              left: '10%',
-              width: '200px',
-              height: '200px',
-              background: 'radial-gradient(circle, rgba(236, 72, 153, 0.03) 0%, transparent 70%)',
-              borderRadius: '50%',
+              background: 'radial-gradient(circle, rgba(236, 72, 153, 0.22) 0%, transparent 68%)',
               filter: 'blur(40px)',
-              pointerEvents: 'none'
             }}
           />
-          <div 
+          <div
+            className="splash-orb splash-orb--delay absolute -bottom-[15%] -right-[8%] w-[50vw] h-[50vw] max-w-[480px] max-h-[480px] rounded-full pointer-events-none opacity-60"
             style={{
-              position: 'absolute',
-              bottom: '20%',
-              right: '10%',
-              width: '300px',
-              height: '300px',
-              background: 'radial-gradient(circle, rgba(236, 72, 153, 0.02) 0%, transparent 70%)',
-              borderRadius: '50%',
-              filter: 'blur(60px)',
-              pointerEvents: 'none'
+              background: 'radial-gradient(circle, rgba(167, 139, 250, 0.2) 0%, transparent 70%)',
+              filter: 'blur(48px)',
+            }}
+          />
+          <div
+            className="splash-orb absolute top-[35%] right-[15%] w-[28vw] h-[28vw] max-w-[240px] max-h-[240px] rounded-full pointer-events-none opacity-50"
+            style={{
+              background: 'radial-gradient(circle, rgba(244, 114, 182, 0.15) 0%, transparent 72%)',
+              filter: 'blur(32px)',
+              animationDelay: '-5s',
+            }}
+          />
+        </>
+      ) : (
+        <>
+          <div
+            className="splash-sultan-glow absolute top-1/4 left-1/2 -translate-x-1/2 w-[70vw] max-w-[600px] aspect-square rounded-full pointer-events-none"
+            style={{
+              background: 'radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 65%)',
+              filter: 'blur(24px)',
+            }}
+          />
+          <div
+            className="splash-orb splash-orb--delay absolute bottom-0 left-0 right-0 h-1/3 pointer-events-none opacity-40"
+            style={{
+              background: 'linear-gradient(to top, rgba(0,0,0,0.25), transparent)',
             }}
           />
         </>
       )}
 
-      <div className="text-center" style={{ position: 'relative', zIndex: 1, width: '100%', padding: '0 24px' }}>
+      {/* İçerik */}
+      <div className="relative z-10 flex flex-col items-center px-8 w-full max-w-lg">
+        {!isSultanSplash && (
+          <div className="splash-icon-wrap mb-8 sm:mb-10">
+            <div
+              className="relative w-[88px] h-[88px] sm:w-[96px] sm:h-[96px] rounded-[22%] bg-white flex items-center justify-center overflow-hidden"
+              style={{
+                boxShadow:
+                  '0 2px 4px rgba(0,0,0,0.04), 0 12px 40px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04)',
+              }}
+            >
+              <img
+                src="./logo.png"
+                alt=""
+                className="w-[72%] h-[72%] object-contain"
+                onError={(e) => {
+                  e.target.src = './icon.png';
+                }}
+              />
+            </div>
+          </div>
+        )}
+
         {isSultanSplash ? (
-          <h1
-            className="splash-sultan-title"
-            style={{
-              fontFamily: '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-              fontWeight: 700,
-              fontSize: 'clamp(2rem, 6vw, 3.25rem)',
-              lineHeight: 1.2,
-              letterSpacing: '0.02em',
-              color: '#ffffff',
-              margin: 0,
-              padding: 0,
-              textAlign: 'center',
-              textShadow: '0 2px 24px rgba(0, 0, 0, 0.2)'
-            }}
-          >
-            Sultan Somatı
-          </h1>
+          <div className="text-center">
+            <div
+              className="splash-icon-wrap inline-flex w-20 h-20 sm:w-24 sm:h-24 rounded-[22%] bg-white/15 backdrop-blur-md items-center justify-center mb-6 ring-1 ring-white/25"
+              style={{ boxShadow: '0 8px 32px rgba(0,0,0,0.15)' }}
+            >
+              <span className="text-3xl sm:text-4xl font-black text-white tracking-tight">S</span>
+            </div>
+            <h1
+              className="splash-wordmark text-white font-bold tracking-tight"
+              style={{
+                fontSize: 'clamp(1.75rem, 5vw, 2.75rem)',
+                textShadow: '0 2px 24px rgba(0,0,0,0.2)',
+              }}
+            >
+              Sultan Somatı
+            </h1>
+            <p className="splash-tagline mt-3 text-emerald-100/85 text-sm sm:text-base font-medium tracking-wide">
+              Profesyonel adisyon sistemi
+            </p>
+          </div>
         ) : (
           <>
-            <h1 
-              className="splash-main-text"
-              style={{ 
-                fontFamily: '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-                fontWeight: 800,
-                fontSize: 'clamp(6rem, 15vw, 12rem)',
-                lineHeight: '0.9',
-                letterSpacing: '0.15em',
-                color: '#0a0a0a',
-                margin: 0,
-                padding: 0,
-                textAlign: 'center',
-                textTransform: 'uppercase',
-                position: 'relative',
-                display: 'block',
-                opacity: 1
-              }}
+            <h1
+              className="font-black uppercase text-center leading-none"
+              style={{ fontSize: 'clamp(2.5rem, 8vw, 4.5rem)' }}
+              aria-label="MAKARA"
             >
-              {text}
+              {letters.map((char, i) => (
+                <span
+                  key={i}
+                  className="splash-letter bg-gradient-to-br from-pink-500 via-fuchsia-500 to-violet-600 bg-clip-text text-transparent"
+                  style={{ animationDelay: `${0.2 + i * 0.06}s` }}
+                >
+                  {char}
+                </span>
+              ))}
             </h1>
 
-            <div 
-              className="splash-decorative-line"
-              style={{
-                width: '0%',
-                height: '1px',
-                background: 'linear-gradient(90deg, transparent 0%, #d1d5db 50%, transparent 100%)',
-                margin: '32px auto 40px',
-                maxWidth: '400px',
-                opacity: 1
-              }}
-            />
-
-            <p 
-              className="splash-subtitle-text"
-              style={{
-                fontFamily: '"Inter", "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-                fontSize: 'clamp(0.875rem, 1.5vw, 1.125rem)',
-                fontWeight: 400,
-                color: '#6b7280',
-                margin: 0,
-                padding: 0,
-                letterSpacing: '0.2em',
-                textTransform: 'uppercase',
-                textAlign: 'center',
-                opacity: 0.7,
-                display: 'block'
-              }}
-            >
-              {subtitle}
+            <p className="splash-tagline mt-5 text-[#86868b] text-xs sm:text-sm font-semibold uppercase tracking-[0.22em] text-center">
+              Profesyonel adisyon sistemi
             </p>
           </>
         )}
+      </div>
+
+      {/* Alt progress — Apple tarzı ince çizgi */}
+      <div className="absolute bottom-0 left-0 right-0 pb-10 sm:pb-12 flex flex-col items-center gap-3 px-12">
+        <div
+          className="w-full max-w-[200px] h-[3px] rounded-full overflow-hidden"
+          style={{
+            background: isSultanSplash ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.08)',
+          }}
+        >
+          <div
+            className={`splash-progress-track relative h-full rounded-full ${
+              isSultanSplash
+                ? 'bg-white/90'
+                : 'bg-gradient-to-r from-pink-500 via-fuchsia-500 to-violet-500'
+            }`}
+          >
+            {!isSultanSplash && (
+              <div
+                className="splash-progress-shimmer absolute inset-0 w-1/3 bg-gradient-to-r from-transparent via-white/50 to-transparent"
+                aria-hidden
+              />
+            )}
+          </div>
+        </div>
+        <p
+          className="splash-tagline text-[10px] sm:text-[11px] font-medium tracking-widest uppercase"
+          style={{
+            color: isSultanSplash ? 'rgba(255,255,255,0.55)' : '#aeaeb2',
+            animationDelay: '0.65s',
+          }}
+        >
+          Yükleniyor
+        </p>
       </div>
     </div>,
     document.body

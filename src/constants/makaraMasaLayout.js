@@ -1,5 +1,5 @@
-/** Makara Havzan (ana şube): numaralı masalar `inside-1` … `inside-99` */
-export const MAKARA_HAVZAN_MAIN_TABLE_COUNT = 99;
+/** Makara Havzan (ana şube): numaralı masalar `inside-1` … `inside-100` */
+export const MAKARA_HAVZAN_MAIN_TABLE_COUNT = 100;
 
 /** Suriçi birleşik ekran + eski Havzan “dışarı” sırası (61–88, bazı numaralar yok) */
 export const MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS = Object.freeze([

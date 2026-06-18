@@ -1,6 +1,6 @@
 {
   "name": "makara-pos",
-  "version": "45.0.0",
+  "version": "55.0.0",
   "description": "MAKARA - Modern POS Uygulaması",
   "main": "electron/main.js",
   "scripts": {
@@ -13,6 +13,8 @@
     "build:win": "npm run clean && npm run build && electron-builder --win",
     "build:win:publish": "npm run clean && npm run build && electron-builder --win --publish always",
     "preview": "vite preview",
+    "dev:mobile": "cd mobile-pwa && npm run dev",
+    "build:mobile": "cd mobile-pwa && npm install && npm run build",
     "version:bump": "node scripts/update-version.js",
     "deploy:web": "npm run version:bump && firebase deploy --only hosting",
     "deploy": "npm run deploy:web"
@@ -24,6 +26,10 @@
   ],
   "author": "MAKARA",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ErolEmirhan/Makara-APP.git"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.955.0",
     "@aws-sdk/s3-request-presigner": "^3.955.0",
@@ -85,12 +91,14 @@
       "runAfterFinish": true,
       "menuCategory": "Business",
       "artifactName": "MAKARA-POS-Setup-${version}.${ext}",
-      "differentialPackage": true
+      "differentialPackage": false
     },
     "publish": {
       "provider": "github",
       "owner": "ErolEmirhan",
-      "repo": "Makara-APP"
+      "repo": "Makara-APP",
+      "releaseType": "release",
+      "vPrefixedTagName": true
     }
   }
 }

@@ -21,6 +21,7 @@ let firebaseCollection = null;
 let firebaseAddDoc = null;
 let firebaseServerTimestamp = null;
 let firebaseGetDocs = null;
+let firebaseGetDoc = null;
 let firebaseDeleteDoc = null;
 let firebaseWriteBatch = null;
 let firebaseDoc = null;
@@ -30,6 +31,7 @@ let firebaseWhere = null;
 let firebaseQuery = null;
 let firebaseOrderBy = null;
 let firebaseLimit = null;
+let firebaseUpdateDoc = null;
 let storageRef = null;
 let storageUploadBytes = null;
 let storageGetDownloadURL = null;
@@ -80,8 +82,8 @@ const FIREBASE_SULTAN_SOMATI = {
   measurementId: "G-SV23DHVNDG"
 };
 
-/** Makara Havzan: `inside-1` … `inside-99`. Suriçi: eski dışarı numara listesi (IPC/mobil ile uyumlu). */
-const MAKARA_HAVZAN_MAIN_TABLE_COUNT = 99;
+/** Makara Havzan: `inside-1` … `inside-100`. Suriçi: eski dışarı numara listesi (IPC/mobil ile uyumlu). */
+const MAKARA_HAVZAN_MAIN_TABLE_COUNT = 100;
 const MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS = [61, 62, 63, 64, 65, 66, 67, 68, 71, 72, 73, 74, 75, 76, 77, 78, 81, 82, 83, 84, 85, 86, 87, 88];
 
 // Çoklu şube yapılandırması
@@ -189,6 +191,10 @@ let productsRealtimeUnsubscribe = null;
 let broadcastsRealtimeUnsubscribe = null;
 /** Makara Havzan: masalar projesi `tables` koleksiyonu — çoklu kasa PC senkronu (Firestore → yerel db) */
 let makaraTablesRealtimeUnsubscribe = null;
+/** PWA'dan gelen siparişler — Firestore mobile_orders koleksiyonu */
+let mobileOrdersRealtimeUnsubscribe = null;
+/** PWA'dan gelen müdür/şef işlemleri — Firestore mobile_actions koleksiyonu */
+let mobileActionsRealtimeUnsubscribe = null;
 /** Şube değişince eski arka plan warmup iptal etmek için */
 let branchWarmupGeneration = 0;
 let saveDatabaseTimer = null;
@@ -310,6 +316,7 @@ let dbPath;
 let apiServer = null;
 let io = null;
 let serverPort = 3000;
+const MOBILE_STAFF_PWA_URL = 'https://personelmakara.vercel.app/';
 
 function sendCatalogSyncProgress(payload) {
   try {
@@ -385,6 +392,8 @@ async function initializeFirebaseForBranch(branchKey) {
   try { productsRealtimeUnsubscribe?.(); } catch (_) {}
   try { broadcastsRealtimeUnsubscribe?.(); } catch (_) {}
   try { stopMakaraTablesFirestorePullListener(); } catch (_) {}
+  try { stopMobileOrdersFirestoreListener(); } catch (_) {}
+  try { stopMobileActionsFirestoreListener(); } catch (_) {}
   categoriesRealtimeUnsubscribe = null;
   productsRealtimeUnsubscribe = null;
   broadcastsRealtimeUnsubscribe = null;
@@ -410,6 +419,7 @@ async function initializeFirebaseForBranch(branchKey) {
     firebaseAddDoc = firebaseFirestoreModule.addDoc;
     firebaseServerTimestamp = firebaseFirestoreModule.serverTimestamp;
     firebaseGetDocs = firebaseFirestoreModule.getDocs;
+    firebaseGetDoc = firebaseFirestoreModule.getDoc;
     firebaseDeleteDoc = firebaseFirestoreModule.deleteDoc;
     firebaseWriteBatch = firebaseFirestoreModule.writeBatch;
     firebaseDoc = firebaseFirestoreModule.doc;
@@ -419,6 +429,7 @@ async function initializeFirebaseForBranch(branchKey) {
     firebaseQuery = firebaseFirestoreModule.query;
     firebaseOrderBy = firebaseFirestoreModule.orderBy;
     firebaseLimit = firebaseFirestoreModule.limit;
+    firebaseUpdateDoc = firebaseFirestoreModule.updateDoc;
     storageRef = firebaseStorageModule.ref;
     storageUploadBytes = firebaseStorageModule.uploadBytes;
     storageGetDownloadURL = firebaseStorageModule.getDownloadURL;
@@ -461,10 +472,15 @@ async function initializeFirebaseForBranch(branchKey) {
     } else {
       stopMakaraTablesFirestorePullListener();
     }
+    syncAllStaffToFirestore().catch((e) => console.warn('Personel Firestore senkronu:', e.message));
+    startMobileOrdersFirestoreListener();
+    startMobileActionsFirestoreListener();
     return true;
   } catch (error) {
     console.error(`❌ Firebase branch başlatılamadı (${branch.key}):`, error);
     try { stopMakaraTablesFirestorePullListener(); } catch (_) {}
+    try { stopMobileOrdersFirestoreListener(); } catch (_) {}
+  try { stopMobileActionsFirestoreListener(); } catch (_) {}
     firestore = null;
     firebaseWriteBatch = null;
     storage = null;
@@ -1756,6 +1772,15 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  if (app.isPackaged) {
+    mainWindow.on('focus', () => {
+      const elapsed = Date.now() - lastUpdateCheckAt;
+      if (elapsed > 30 * 60 * 1000) {
+        runUpdateCheck('focus').catch(() => {});
+      }
+    });
+  }
 }
 
 function enableLaunchAtStartup() {
@@ -2790,9 +2815,16 @@ function tableHasOpenItems(tableId) {
   return db.tableOrderItems.some((oi) => oi.order_id === ord.id);
 }
 
-// Masa siparişinden ürün iptal etme
-ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, cancelReason = null, staffId = null) => {
-  const item = db.tableOrderItems.find(oi => oi.id === itemId);
+/** PWA + IPC + Express: masa siparişinden ürün iptali */
+async function cancelTableOrderItemInternal(
+  itemId,
+  cancelQuantity = null,
+  cancelReason = null,
+  staffId = null,
+  options = {}
+) {
+  const source = options.source || 'desktop';
+  const item = db.tableOrderItems.find((oi) => oi.id == itemId);
   if (!item) {
     return { success: false, error: 'Ürün bulunamadı' };
   }
@@ -2808,7 +2840,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
 
   // Sultan: tümü; Havzan: müdür/şef; Suriçi: müdür
   if (staffId && activeBranchKey !== 'sultansomati') {
-    const staff = (db.staff || []).find(s => s.id === staffId);
+    const staff = (db.staff || []).find((s) => s.id == staffId);
     if (!staffHasTableOrderCancelRole(staff)) {
       return { 
         success: false, 
@@ -2888,7 +2920,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     // Tüm ürün iptal ediliyorsa, item'ı silmeden önce açıklamayı kaydet
     item.cancel_reason = cancelReason.trim();
     item.cancel_date = new Date().toISOString();
-    const itemIndex = db.tableOrderItems.findIndex(oi => oi.id === itemId);
+    const itemIndex = db.tableOrderItems.findIndex((oi) => oi.id == itemId);
     if (itemIndex !== -1) {
       db.tableOrderItems.splice(itemIndex, 1);
     }
@@ -2917,7 +2949,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
     const orderStaffName = order.staff_name || item.staff_name || null;
     
     // İptal eden personel bilgisi
-    const cancelStaff = staffId ? (db.staff || []).find(s => s.id === staffId) : null;
+    const cancelStaff = staffId ? (db.staff || []).find((s) => s.id == staffId) : null;
     const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
     const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
     const cancelStaffIsChef = cancelStaff ? (cancelStaff.is_chef || false) : false;
@@ -2942,7 +2974,7 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
       staff_is_manager: cancelStaffIsManager,
       staff_is_chef: cancelStaffIsChef,
       order_staff_name: orderStaffName, // Siparişi oluşturan garson
-      source: 'desktop', // 'desktop' veya 'mobile'
+      source,
       created_at: firebaseServerTimestamp()
     }).then(() => {
       console.log('✅ İptal kaydı Firebase\'e başarıyla kaydedildi');
@@ -2975,6 +3007,11 @@ ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, 
   const pendingAfter = db.tableOrders.find((o) => o.id === order.id && o.status === 'pending');
   const remainingAmount = pendingAfter ? pendingAfter.total_amount : 0;
   return { success: true, remainingAmount };
+}
+
+// Masa siparişinden ürün iptal etme
+ipcMain.handle('cancel-table-order-item', async (event, itemId, cancelQuantity, cancelReason = null, staffId = null) => {
+  return cancelTableOrderItemInternal(itemId, cancelQuantity, cancelReason, staffId, { source: 'desktop' });
 });
 
 // Toplu iptal handler - birden fazla item'ı tek fişte iptal et
@@ -3215,85 +3252,7 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
 
 // Masa siparişini başka bir masaya aktar
 ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableId) => {
-  // Kaynak masanın siparişini bul
-  const sourceOrder = db.tableOrders.find(
-    o => o.table_id === sourceTableId && o.status === 'pending'
-  );
-
-  if (!sourceOrder) {
-    return { success: false, error: 'Kaynak masada aktif sipariş bulunamadı' };
-  }
-
-  // Hedef masada aktif sipariş var mı kontrol et
-  const targetOrder = db.tableOrders.find(
-    o => o.table_id === targetTableId && o.status === 'pending'
-  );
-
-  if (targetOrder) {
-    return { success: false, error: 'Hedef masada zaten aktif bir sipariş var' };
-  }
-
-  // Kaynak masanın sipariş itemlarını al
-  const sourceItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrder.id);
-
-  if (sourceItems.length === 0) {
-    return { success: false, error: 'Aktarılacak ürün bulunamadı' };
-  }
-
-  const targetTableName = getTableNameFromId(targetTableId);
-  const targetTableType = getTableTypeFromId(targetTableId);
-
-  // Kaynak siparişin tüm bilgilerini koru (order_date, order_time, order_note, total_amount)
-  // Sadece table_id, table_name ve table_type'ı güncelle
-  sourceOrder.table_id = targetTableId;
-  sourceOrder.table_name = targetTableName;
-  sourceOrder.table_type = targetTableType;
-
-  // Tüm itemların order_id'si zaten doğru (aynı order'a ait oldukları için değişmeyecek)
-  // Ancak emin olmak için kontrol edelim
-  sourceItems.forEach(item => {
-    if (item.order_id !== sourceOrder.id) {
-      item.order_id = sourceOrder.id;
-    }
-  });
-
-  saveDatabase();
-
-  // Electron renderer process'e güncelleme gönder
-  if (mainWindow && mainWindow.webContents) {
-    mainWindow.webContents.send('table-order-updated', { 
-      orderId: sourceOrder.id,
-      tableId: targetTableId,
-      sourceTableId: sourceTableId
-    });
-  }
-
-  // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
-  if (io) {
-    io.emit('table-update', {
-      tableId: sourceTableId,
-      hasOrder: false
-    });
-    io.emit('table-update', {
-      tableId: targetTableId,
-      hasOrder: true
-    });
-  }
-
-  // Yeni Firebase'e hem kaynak hem hedef masayı kaydet (makaramasalar)
-  syncSingleTableToFirebase(sourceTableId).catch(err => {
-    console.error('Kaynak masa Firebase kaydetme hatası:', err);
-  });
-  syncSingleTableToFirebase(targetTableId).catch(err => {
-    console.error('Hedef masa Firebase kaydetme hatası:', err);
-  });
-
-  return { 
-    success: true, 
-    orderId: sourceOrder.id,
-    sourceTableId: sourceTableId,
-    targetTableId: targetTableId
-  };
+  return transferTableOrderInternal(sourceTableId, targetTableId);
 });
 
 // Sipariş ürünlerini başka masaya aktar (ürünleri kaynak masadan sil, hedef masaya ekle, kategori bazlı yazdır + aktarım bildirimi)
@@ -3317,6 +3276,171 @@ function getTableTypeFromId(tableId) {
   if (tableId.startsWith('inside-') || (tableId.startsWith('package-') && tableId.includes('inside'))) return 'inside';
   if (tableId.startsWith('outside-') || (tableId.startsWith('package-') && tableId.includes('outside'))) return 'outside';
   return 'inside';
+}
+
+function tableIdsEqual(a, b) {
+  return String(a) === String(b);
+}
+
+/** PWA + IPC: masa aktarımı (Firebase senkronu arka planda, yanıtı bloklamaz) */
+async function transferTableOrderInternal(sourceTableId, targetTableId) {
+  const sourceId = String(sourceTableId);
+  const targetId = String(targetTableId);
+
+  const sourceOrder = db.tableOrders.find(
+    (o) => tableIdsEqual(o.table_id, sourceId) && o.status === 'pending'
+  );
+  if (!sourceOrder) {
+    return { success: false, error: 'Kaynak masada aktif sipariş bulunamadı' };
+  }
+
+  const targetOrder = db.tableOrders.find(
+    (o) => tableIdsEqual(o.table_id, targetId) && o.status === 'pending'
+  );
+  if (targetOrder) {
+    return { success: false, error: 'Hedef masada zaten aktif bir sipariş var' };
+  }
+
+  const sourceItems = db.tableOrderItems.filter((oi) => oi.order_id === sourceOrder.id);
+  if (sourceItems.length === 0) {
+    return { success: false, error: 'Aktarılacak ürün bulunamadı' };
+  }
+
+  sourceOrder.table_id = targetId;
+  sourceOrder.table_name = getTableNameFromId(targetId);
+  sourceOrder.table_type = getTableTypeFromId(targetId);
+
+  sourceItems.forEach((item) => {
+    if (item.order_id !== sourceOrder.id) {
+      item.order_id = sourceOrder.id;
+    }
+  });
+
+  saveDatabase();
+
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', {
+      orderId: sourceOrder.id,
+      tableId: targetId,
+      sourceTableId: sourceId,
+    });
+  }
+  if (io) {
+    io.emit('table-update', { tableId: sourceId, hasOrder: false });
+    io.emit('table-update', { tableId: targetId, hasOrder: true });
+  }
+
+  syncSingleTableToFirebase(sourceId).catch((err) => {
+    console.error('Kaynak masa Firebase kaydetme hatası:', err);
+  });
+  syncSingleTableToFirebase(targetId).catch((err) => {
+    console.error('Hedef masa Firebase kaydetme hatası:', err);
+  });
+
+  return {
+    success: true,
+    orderId: sourceOrder.id,
+    sourceTableId: sourceId,
+    targetTableId: targetId,
+  };
+}
+
+/** PWA + IPC: masa birleştirme */
+async function mergeTableOrderInternal(sourceTableId, targetTableId, staffId) {
+  const sourceId = String(sourceTableId);
+  const targetId = String(targetTableId);
+
+  if (activeBranchKey !== 'sultansomati' && staffId != null && staffId !== '') {
+    const staff = (db.staff || []).find((s) => s.id == staffId);
+    if (!staff || !staff.is_manager) {
+      return {
+        success: false,
+        error: 'Masa birleştirme yetkisi yok. Bu işlem için müdür yetkisi gereklidir.',
+      };
+    }
+  }
+
+  const sourceOrder = db.tableOrders.find(
+    (o) => tableIdsEqual(o.table_id, sourceId) && o.status === 'pending'
+  );
+  if (!sourceOrder) {
+    return { success: false, error: 'Kaynak masada aktif sipariş bulunamadı' };
+  }
+
+  const targetOrder = db.tableOrders.find(
+    (o) => tableIdsEqual(o.table_id, targetId) && o.status === 'pending'
+  );
+  if (!targetOrder) {
+    return { success: false, error: 'Hedef masada aktif sipariş bulunamadı. Lütfen dolu bir masa seçin.' };
+  }
+
+  if (tableIdsEqual(sourceId, targetId)) {
+    return { success: false, error: 'Aynı masayı seçemezsiniz' };
+  }
+
+  const sourceItems = db.tableOrderItems.filter((oi) => oi.order_id === sourceOrder.id);
+  if (sourceItems.length === 0) {
+    return { success: false, error: 'Kaynak masada ürün bulunamadı' };
+  }
+
+  const nextItemId = db.tableOrderItems.length > 0
+    ? Math.max(...db.tableOrderItems.map((oi) => oi.id)) + 1
+    : 1;
+  let addedAmount = 0;
+  const newItems = [];
+  sourceItems.forEach((item, idx) => {
+    const newItem = {
+      id: nextItemId + idx,
+      order_id: targetOrder.id,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      quantity: item.quantity,
+      price: item.price,
+      isGift: item.isGift || false,
+      staff_id: item.staff_id || null,
+      staff_name: item.staff_name || null,
+      paid_quantity: item.paid_quantity || 0,
+      is_paid: item.is_paid || false,
+      payment_method: item.payment_method || null,
+      paid_date: item.paid_date || null,
+      paid_time: item.paid_time || null,
+      category_id: item.category_id || null,
+    };
+    newItems.push(newItem);
+    db.tableOrderItems.push(newItem);
+    if (!newItem.isGift) addedAmount += item.price * item.quantity;
+  });
+
+  targetOrder.total_amount = (targetOrder.total_amount || 0) + addedAmount;
+
+  const sourceOrderId = sourceOrder.id;
+  db.tableOrderItems = db.tableOrderItems.filter((oi) => oi.order_id !== sourceOrderId);
+  db.tableOrders = db.tableOrders.filter((o) => o.id !== sourceOrderId);
+
+  saveDatabase();
+
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', {
+      orderId: targetOrder.id,
+      tableId: targetId,
+      sourceTableId: sourceId,
+      merged: true,
+    });
+  }
+  if (io) {
+    io.emit('table-update', { tableId: sourceId, hasOrder: false });
+    io.emit('table-update', { tableId: targetId, hasOrder: true });
+  }
+  syncSingleTableToFirebase(sourceId).catch(() => {});
+  syncSingleTableToFirebase(targetId).catch(() => {});
+
+  return {
+    success: true,
+    targetOrderId: targetOrder.id,
+    sourceTableId: sourceId,
+    targetTableId: targetId,
+    itemsMerged: newItems.length,
+  };
 }
 
 ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableId, itemsToTransfer) => {
@@ -3463,85 +3587,7 @@ ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableI
 
 // Masa birleştir: dolu masayı başka bir dolu masaya aktar (kaynak masanın ürünleri hedef masaya eklenir, kaynak kapanır)
 ipcMain.handle('merge-table-order', async (event, sourceTableId, targetTableId) => {
-  const sourceOrder = db.tableOrders.find(
-    o => o.table_id === sourceTableId && o.status === 'pending'
-  );
-  if (!sourceOrder) {
-    return { success: false, error: 'Kaynak masada aktif sipariş bulunamadı' };
-  }
-
-  const targetOrder = db.tableOrders.find(
-    o => o.table_id === targetTableId && o.status === 'pending'
-  );
-  if (!targetOrder) {
-    return { success: false, error: 'Hedef masada aktif sipariş bulunamadı. Lütfen dolu bir masa seçin.' };
-  }
-
-  if (sourceTableId === targetTableId) {
-    return { success: false, error: 'Aynı masayı seçemezsiniz' };
-  }
-
-  const sourceItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrder.id);
-  if (sourceItems.length === 0) {
-    return { success: false, error: 'Kaynak masada ürün bulunamadı' };
-  }
-
-  const nextItemId = db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 : 1;
-  let addedAmount = 0;
-  const newItems = [];
-  sourceItems.forEach((item, idx) => {
-    const newItem = {
-      id: nextItemId + idx,
-      order_id: targetOrder.id,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: item.quantity,
-      price: item.price,
-      isGift: item.isGift || false,
-      staff_id: item.staff_id || null,
-      staff_name: item.staff_name || null,
-      paid_quantity: item.paid_quantity || 0,
-      is_paid: item.is_paid || false,
-      payment_method: item.payment_method || null,
-      paid_date: item.paid_date || null,
-      paid_time: item.paid_time || null,
-      category_id: item.category_id || null
-    };
-    newItems.push(newItem);
-    db.tableOrderItems.push(newItem);
-    if (!newItem.isGift) addedAmount += item.price * item.quantity;
-  });
-
-  targetOrder.total_amount = (targetOrder.total_amount || 0) + addedAmount;
-
-  const sourceOrderId = sourceOrder.id;
-  db.tableOrderItems = db.tableOrderItems.filter(oi => oi.order_id !== sourceOrderId);
-  db.tableOrders = db.tableOrders.filter(o => o.id !== sourceOrderId);
-
-  saveDatabase();
-
-  if (mainWindow && mainWindow.webContents) {
-    mainWindow.webContents.send('table-order-updated', {
-      orderId: targetOrder.id,
-      tableId: targetTableId,
-      sourceTableId: sourceTableId,
-      merged: true
-    });
-  }
-  if (io) {
-    io.emit('table-update', { tableId: sourceTableId, hasOrder: false });
-    io.emit('table-update', { tableId: targetTableId, hasOrder: true });
-  }
-  syncSingleTableToFirebase(sourceTableId).catch(() => {});
-  syncSingleTableToFirebase(targetTableId).catch(() => {});
-
-  return {
-    success: true,
-    targetOrderId: targetOrder.id,
-    sourceTableId: sourceTableId,
-    targetTableId: targetTableId,
-    itemsMerged: newItems.length
-  };
+  return mergeTableOrderInternal(sourceTableId, targetTableId, null);
 });
 
 // Tüm masayı iptal et - tek grup iptal kaydı Firebase'e yazılır, sonra sipariş silinir
@@ -5393,10 +5439,24 @@ ipcMain.handle('select-image-file', async (event, productId = null) => {
 });
 
 // Auto Updater Configuration
-autoUpdater.autoDownload = true; // Otomatik indirme aktif
-autoUpdater.autoInstallOnAppQuit = true;
+const GITHUB_RELEASES_FEED =
+  'https://github.com/ErolEmirhan/Makara-APP/releases/latest/download/';
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+let updateCheckInFlight = false;
+let lastUpdateCheckAt = 0;
 
-// Log dosyası oluştur
+let semver;
+try {
+  semver = require('semver');
+} catch (_) {
+  semver = null;
+}
+
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.disableDifferentialDownload = true;
+autoUpdater.allowDowngrade = false;
+
 const logPath = path.join(app.getPath('userData'), 'update-log.txt');
 
 function writeLog(message) {
@@ -5404,108 +5464,148 @@ function writeLog(message) {
   const logMessage = `[${timestamp}] ${message}\n`;
   try {
     fs.appendFileSync(logPath, logMessage, 'utf8');
-    console.log(message); // Console'a da yaz
+    console.log(message);
   } catch (error) {
     console.error('Log yazma hatası:', error);
   }
 }
 
-// GitHub update server URL'ini manuel olarak ayarla
-if (app.isPackaged) {
-  const feedURL = {
-    provider: 'github',
-    owner: 'ErolEmirhan',
-    repo: 'Makara-APP'
-  };
-  autoUpdater.setFeedURL(feedURL);
-  writeLog(`Auto-updater yapılandırıldı: ${feedURL.owner}/${feedURL.repo}`);
-  writeLog(`Update URL: https://github.com/${feedURL.owner}/${feedURL.repo}/releases/latest/download/latest.yml`);
+function isRemoteVersionNewer(remoteVersion, currentVersion) {
+  if (!remoteVersion) return false;
+  const remote = String(remoteVersion).replace(/^v/i, '');
+  const current = String(currentVersion).replace(/^v/i, '');
+  if (semver) {
+    try {
+      return semver.gt(remote, current);
+    } catch (_) {
+      return remote !== current;
+    }
+  }
+  return remote !== current;
+}
+
+function configureAutoUpdaterFeed() {
+  if (!app.isPackaged) return;
+
+  // GitHub API yerine doğrudan latest.yml — public release'lerde daha güvenilir
+  autoUpdater.setFeedURL({
+    provider: 'generic',
+    url: GITHUB_RELEASES_FEED,
+  });
+
+  writeLog(`Auto-updater feed: ${GITHUB_RELEASES_FEED}`);
   writeLog(`Mevcut uygulama versiyonu: ${app.getVersion()}`);
 }
 
-// Update event handlers
+function sendUpdateEvent(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+async function runUpdateCheck(reason = 'manual') {
+  if (!app.isPackaged) {
+    return { success: true, available: false, message: 'Development modunda güncelleme kontrol edilemez' };
+  }
+  if (updateCheckInFlight) {
+    return { success: true, available: false, message: 'Güncelleme kontrolü zaten sürüyor' };
+  }
+
+  updateCheckInFlight = true;
+  lastUpdateCheckAt = Date.now();
+  writeLog(`Güncelleme kontrolü başladı (${reason})`);
+
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    const remoteVersion = result?.updateInfo?.version;
+    const currentVersion = app.getVersion();
+    const available = isRemoteVersionNewer(remoteVersion, currentVersion);
+
+    writeLog(
+      `Güncelleme kontrolü bitti (${reason}) — mevcut: ${currentVersion}, uzak: ${remoteVersion || '-'}, yeni: ${available}`
+    );
+
+    return {
+      success: true,
+      available,
+      currentVersion,
+      latestVersion: remoteVersion || currentVersion,
+      message: available
+        ? `Yeni sürüm mevcut: v${remoteVersion}`
+        : 'Zaten en güncel sürümü kullanıyorsunuz',
+    };
+  } catch (error) {
+    const message = error?.message || String(error);
+    writeLog(`Güncelleme kontrolü hatası (${reason}): ${message}`);
+    sendUpdateEvent('update-error', message);
+    return { success: false, error: message };
+  } finally {
+    updateCheckInFlight = false;
+  }
+}
+
+function scheduleUpdateChecks() {
+  if (!app.isPackaged) return;
+
+  setTimeout(() => {
+    runUpdateCheck('startup').catch(() => {});
+  }, 4000);
+
+  setInterval(() => {
+    runUpdateCheck('interval').catch(() => {});
+  }, UPDATE_CHECK_INTERVAL_MS);
+}
+
+configureAutoUpdaterFeed();
+
 autoUpdater.on('checking-for-update', () => {
-  const msg = `Güncelleme kontrol ediliyor... (Mevcut: ${app.getVersion()})`;
-  writeLog(msg);
+  writeLog(`Güncelleme kontrol ediliyor... (Mevcut: ${app.getVersion()})`);
   console.log('🔍 Güncelleme kontrol ediliyor...');
 });
 
 autoUpdater.on('update-available', (info) => {
-  const msg = `Yeni güncelleme mevcut: ${info.version} - Otomatik indirme başlatılıyor...`;
-  writeLog(msg);
-  console.log('📥 Yeni güncelleme bulundu, otomatik indirme başlatılıyor...');
-  if (mainWindow) {
-    mainWindow.webContents.send('update-available', info);
-  }
-  // Otomatik indirme zaten aktif (autoDownload = true), burada sadece bilgilendirme yapıyoruz
+  writeLog(`Yeni güncelleme mevcut: ${info.version} — indirme başlıyor...`);
+  console.log('📥 Yeni güncelleme bulundu, indirme başlatılıyor...');
+  sendUpdateEvent('update-available', info);
 });
 
 autoUpdater.on('update-not-available', (info) => {
   const currentVersion = app.getVersion();
-  const msg = `Güncelleme yok - Mevcut versiyon: ${currentVersion}, En son sürüm: ${info.version || currentVersion}`;
-  writeLog(msg);
+  writeLog(
+    `Güncelleme yok — mevcut: ${currentVersion}, uzak: ${info?.version || currentVersion}`
+  );
   console.log('✅ En güncel versiyonu kullanıyorsunuz:', currentVersion);
 });
 
 autoUpdater.on('error', (err) => {
-  const msg = `Güncelleme hatası: ${err.message || err}`;
-  writeLog(msg);
-  if (mainWindow) {
-    mainWindow.webContents.send('update-error', err.message);
-  }
+  const message = err?.message || String(err);
+  writeLog(`Güncelleme hatası: ${message}`);
+  sendUpdateEvent('update-error', message);
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
-  if (mainWindow) {
-    mainWindow.webContents.send('update-download-progress', progressObj);
-  }
+  sendUpdateEvent('update-download-progress', progressObj);
 });
 
 autoUpdater.on('update-downloaded', (info) => {
-  const msg = `Güncelleme indirildi: ${info.version} - Otomatik yükleme ve yeniden başlatma yapılıyor...`;
-  writeLog(msg);
-  console.log('✅ Güncelleme indirildi, otomatik yükleme başlatılıyor...');
-  
-  // Kullanıcıya bilgi ver (opsiyonel - kısa bir süre gösterilebilir)
-  if (mainWindow) {
-    mainWindow.webContents.send('update-downloaded', info);
-  }
-  
-  // 2 saniye bekle (kullanıcıya bilgi vermek için), sonra otomatik yükle ve yeniden başlat
-  setTimeout(() => {
-    writeLog('Uygulama kapatılıyor, güncelleme yükleniyor ve yeniden başlatılıyor...');
-    // isSilent: true = Windows dialog'unu gösterme
-    // isForceRunAfter: true = Yüklemeden sonra otomatik çalıştır
-    autoUpdater.quitAndInstall(true, true);
-  }, 2000); // 2 saniye bekle, kullanıcı bilgilendirilsin
+  writeLog(`Güncelleme indirildi: ${info.version}`);
+  console.log('✅ Güncelleme indirildi');
+  sendUpdateEvent('update-downloaded', info);
 });
 
-// IPC Handlers for update
-ipcMain.handle('check-for-updates', async () => {
-  if (!app.isPackaged) {
-    return { available: false, message: 'Development modunda güncelleme kontrol edilemez' };
-  }
-  try {
-    await autoUpdater.checkForUpdates();
-    return { success: true };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-});
+ipcMain.handle('check-for-updates', async () => runUpdateCheck('ipc'));
 
 ipcMain.handle('download-update', async () => {
   try {
     await autoUpdater.downloadUpdate();
     return { success: true };
   } catch (error) {
-    return { success: false, error: error.message };
+    return { success: false, error: error.message || String(error) };
   }
 });
 
 ipcMain.handle('install-update', () => {
-  // isSilent: true = Windows dialog'unu gösterme, direkt yükle
-  // isForceRunAfter: true = Yüklemeden sonra otomatik çalıştır
-  autoUpdater.quitAndInstall(true, true);
+  autoUpdater.quitAndInstall(false, true);
 });
 
 // Print Receipt Handler
@@ -6759,26 +6859,10 @@ app.whenReady().then(() => {
 
   // Uygulama paketlenmişse güncelleme kontrolü yap
   if (app.isPackaged) {
-    writeLog(`Uygulama başlatıldı - Versiyon: ${app.getVersion()}`);
-    writeLog('Güncelleme kontrolü başlatılıyor...');
-    
-    // İlk açılışta kontrol et
-    setTimeout(() => {
-      writeLog('Güncelleme kontrolü yapılıyor...');
-      autoUpdater.checkForUpdates().catch(err => {
-        writeLog(`Güncelleme kontrolü hatası: ${err.message || err}`);
-      });
-    }, 3000); // 3 saniye bekle, uygulama tam yüklensin
-    
-    // Her 4 saatte bir kontrol et
-    setInterval(() => {
-      writeLog('Periyodik güncelleme kontrolü...');
-      autoUpdater.checkForUpdates().catch(err => {
-        writeLog(`Güncelleme kontrolü hatası: ${err.message || err}`);
-      });
-    }, 4 * 60 * 60 * 1000); // 4 saat
+    writeLog(`Uygulama başlatıldı — Versiyon: ${app.getVersion()}`);
+    scheduleUpdateChecks();
   } else {
-    writeLog('Development modu - güncelleme kontrolü yapılmıyor');
+    writeLog('Development modu — güncelleme kontrolü yapılmıyor');
   }
 
   app.on('activate', () => {
@@ -7445,15 +7529,72 @@ function prepareAdisyonReceipts(items, adisyonData) {
 }
 
 // Sepetteyken fişi HTML olarak hazırla — yazıcı adı -> HTML map (Siparişi Gönder anında anında yazdırma)
+function resolveProductForPrintItem(item) {
+  const rawId = item.id ?? item.product_id;
+  let product = null;
+  if (rawId != null && rawId !== '') {
+    product = db.products.find(
+      (p) => String(p.id) === String(rawId) || Number(p.id) === Number(rawId)
+    );
+  }
+  if (!product && item.name) {
+    const norm = String(item.name).trim().toLowerCase();
+    product = db.products.find(
+      (p) => String(p.name || '').trim().toLowerCase() === norm
+    );
+  }
+  return product;
+}
+
+function getCategoryIdForPrintItem(item) {
+  if (item.category_id != null && item.category_id !== 'no-category') {
+    const cid = typeof item.category_id === 'string' ? parseInt(item.category_id, 10) : item.category_id;
+    if (!Number.isNaN(cid)) return cid;
+  }
+  const product = resolveProductForPrintItem(item);
+  if (product?.category_id != null) {
+    return typeof product.category_id === 'string' ? parseInt(product.category_id, 10) : product.category_id;
+  }
+  return 'no-category';
+}
+
+function enrichPwaOrderItemsForPrint(items) {
+  if (!items || !Array.isArray(items)) return [];
+  return items.map((item) => {
+    const product = resolveProductForPrintItem(item);
+    const id = product ? product.id : (item.id ?? item.product_id);
+    let categoryId = item.category_id ?? product?.category_id;
+    if (categoryId != null && categoryId !== 'no-category') {
+      categoryId = typeof categoryId === 'string' ? parseInt(categoryId, 10) : categoryId;
+      if (Number.isNaN(categoryId)) categoryId = product?.category_id ?? item.category_id;
+    }
+    return {
+      ...item,
+      id,
+      product_id: id,
+      name: item.name || item.product_name || product?.name || 'Ürün',
+      price: Number(item.price ?? product?.price ?? 0),
+      quantity: Number(item.quantity) || 1,
+      isGift: !!item.isGift,
+      category_id: categoryId,
+      extraNote: item.extraNote ?? item.item_note ?? null,
+      staff_name: item.staff_name ?? null,
+      added_date: item.added_date,
+      added_time: item.added_time
+    };
+  });
+}
+
 function prepareAdisyonHtmlReceipts(items, adisyonData) {
   const htmlReceipts = {};
   if (!items || items.length === 0) return htmlReceipts;
   const categoryItemsMap = new Map();
   const categoryInfoMap = new Map();
   for (const item of items) {
-    const product = db.products.find(p => String(p.id) === String(item.id));
-    const categoryId = product?.category_id ?? 'no-category';
-    const category = db.categories.find(c => c.id === categoryId);
+    const categoryId = getCategoryIdForPrintItem(item);
+    const category = db.categories.find(
+      (c) => c.id === categoryId || String(c.id) === String(categoryId)
+    );
     if (!categoryItemsMap.has(categoryId)) {
       categoryItemsMap.set(categoryId, []);
       categoryInfoMap.set(categoryId, { id: categoryId, name: category?.name || 'Diğer' });
@@ -7617,11 +7758,11 @@ async function printAdisyonByCategory(items, adisyonData) {
       const categoryInfoMap = new Map(); // categoryId -> { name, id }
       
       for (const item of staffGroup.items) {
-        // Ürünün kategori ID'sini bul
-        const product = db.products.find(p => p.id === item.id);
-        if (product && product.category_id) {
-          const categoryId = product.category_id;
-          const category = db.categories.find(c => c.id === categoryId);
+        const categoryId = getCategoryIdForPrintItem(item);
+        if (categoryId && categoryId !== 'no-category') {
+          const category = db.categories.find(
+            (c) => c.id === categoryId || String(c.id) === String(categoryId)
+          );
           
           if (!categoryItemsMap.has(categoryId)) {
             categoryItemsMap.set(categoryId, []);
@@ -12805,7 +12946,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         sultanBar.style.display = 'none';
         sultanBar.innerHTML = '';
       }
-      // Havzan: 1-99 + paket | Suriçi: iç 1-20, ayırıcı, dış numaralar, paket
+      // Havzan: 1-100 + paket | Suriçi: iç 1-20, ayırıcı, dış numaralar, paket
       const insideTables = tables.filter(t => t.id.startsWith('inside-') && !t.id.startsWith('package-'));
       const outsideTables = tables.filter(t => t.id.startsWith('outside-') && !t.id.startsWith('package-'));
       const packageTables = tables.filter(t => t.id.startsWith('package-'));
@@ -16831,6 +16972,46 @@ async function printPreloadedJob(printJobId) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** PWA / Firestore siparişleri — mobil LAN API ile aynı yazdırma yolu */
+async function printPwaOrderReceipts(itemsWithStaff, adisyonData) {
+  console.log('\n🖨️ [PWA] Adisyon yazdırma başlıyor...');
+  const enriched = enrichPwaOrderItemsForPrint(itemsWithStaff);
+  const printData = { ...adisyonData, items: enriched };
+  console.log(
+    `[PWA print] ${enriched.length} kalem, ${(db.products || []).length} yerel ürün, ` +
+    `${(db.printerAssignments || []).length} yazıcı ataması`
+  );
+  enriched.forEach((item) => {
+    const catId = getCategoryIdForPrintItem(item);
+    const hasPrinter = (db.printerAssignments || []).some((a) => {
+      const cid = typeof a.category_id === 'string' ? parseInt(a.category_id, 10) : a.category_id;
+      const itemCat = typeof catId === 'string' && catId !== 'no-category' ? parseInt(catId, 10) : catId;
+      return cid === itemCat;
+    });
+    console.log(`[PWA print]   - ${item.name} (id=${item.id}, kat=${catId}, yazıcı=${hasPrinter ? 'var' : 'YOK'})`);
+  });
+
+  const htmlReceipts = prepareAdisyonHtmlReceipts(enriched, printData);
+  const printerNames = Object.keys(htmlReceipts);
+  console.log(`[PWA print] Yazıcılar: [${printerNames.join(', ') || 'yok'}]`);
+
+  if (printerNames.length > 0) {
+    const printJobId = preloadPrintWindows(htmlReceipts);
+    if (printJobId && preloadedPrintJobs.has(printJobId)) {
+      console.log(`[PWA print] Hazır pencere ile yazdırılıyor (jobId=${printJobId})`);
+      await printPreloadedJob(printJobId);
+      return true;
+    }
+    console.log('[PWA print] preload başarısız, HTML fallback');
+    await printPreparedHtmlReceipts(htmlReceipts);
+    return true;
+  }
+
+  console.warn('[PWA print] Kategori yazıcısı bulunamadı, printAdisyonByCategory deneniyor');
+  await printAdisyonByCategory(enriched, printData);
+  return false;
+}
+
 // HTTP Server ve API Setup
 function startAPIServer() {
   const appExpress = express();
@@ -16882,6 +17063,14 @@ function startAPIServer() {
   }
 
   // API Endpoints
+  appExpress.get('/api/branch-info', (req, res) => {
+    const branch = BRANCH_CONFIGS[activeBranchKey] || BRANCH_CONFIGS.makara;
+    res.json({
+      success: true,
+      branch: { key: activeBranchKey, label: branch.label || activeBranchKey },
+    });
+  });
+
   appExpress.get('/api/categories', async (req, res) => {
     try {
       // Firebase'den direkt çek
@@ -17268,6 +17457,7 @@ function startAPIServer() {
     // Yeni şifreyi kaydet
     staff.password = newPassword.toString();
     saveDatabase();
+    syncStaffMemberToFirestore(staff).catch(() => {});
     
     res.json({ success: true, message: 'Şifre başarıyla değiştirildi' });
   });
@@ -17620,7 +17810,7 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
       }
       if (activeBranchKey !== 'sultansomati') {
-        const staff = (db.staff || []).find(s => s.id === staffId);
+        const staff = findStaffById(staffId);
         if (!staff || !staff.is_manager) {
           return res.status(403).json({ 
             success: false, 
@@ -17800,9 +17990,12 @@ function startAPIServer() {
       }
 
       // ipcMain.transfer-table-order ile aynı: makaramasalar Firebase'de kaynak boş, hedef dolu
-      // Mobil istemciye başarı dönmeden önce bitir — admin dashboard anlık dinleyicide eski masa kalmasın
-      await syncSingleTableToFirebase(sourceTableId);
-      await syncSingleTableToFirebase(targetTableId);
+      syncSingleTableToFirebase(sourceTableId).catch((err) => {
+        console.error('Kaynak masa Firebase kaydetme hatası:', err);
+      });
+      syncSingleTableToFirebase(targetTableId).catch((err) => {
+        console.error('Hedef masa Firebase kaydetme hatası:', err);
+      });
 
       res.json({ 
         success: true, 
@@ -17819,207 +18012,35 @@ function startAPIServer() {
   // Ürün iptal etme (mobil arayüz için)
   appExpress.post('/api/cancel-table-order-item', async (req, res) => {
     try {
-      const { itemId, cancelQuantity, staffId } = req.body;
-      
+      const { itemId, cancelQuantity, cancelReason, staffId } = req.body;
+
       if (!itemId) {
         return res.status(400).json({ success: false, error: 'Ürün ID\'si gerekli' });
       }
-
-      // Sultan: tümü; Havzan: müdür/şef; Suriçi: müdür
       if (!staffId) {
         return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
       }
-      if (activeBranchKey !== 'sultansomati') {
-        const staff = (db.staff || []).find(s => s.id === staffId);
-        if (!staffHasTableOrderCancelRole(staff)) {
-          return res.status(403).json({ 
-            success: false, 
-            error: 'İptal yetkisi yok. İptal ettirmek için lütfen müdürle görüşünüz.' 
-          });
-        }
-      }
 
-      const item = db.tableOrderItems.find(oi => oi.id === itemId);
-      if (!item) {
-        return res.status(404).json({ success: false, error: 'Ürün bulunamadı' });
-      }
+      const result = await cancelTableOrderItemInternal(
+        itemId,
+        cancelQuantity,
+        cancelReason,
+        staffId,
+        { source: 'mobile' }
+      );
 
-      const order = db.tableOrders.find(o => o.id === item.order_id);
-      if (!order) {
-        return res.status(404).json({ success: false, error: 'Sipariş bulunamadı' });
-      }
-
-      if (order.status !== 'pending') {
-        return res.status(400).json({ success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' });
-      }
-
-      // İptal edilecek miktarı belirle
-      const quantityToCancel = cancelQuantity || item.quantity;
-      if (quantityToCancel <= 0 || quantityToCancel > item.quantity) {
-        return res.status(400).json({ success: false, error: 'Geçersiz iptal miktarı' });
-      }
-
-      // Yan ürün kontrolü
-      const isYanUrun = typeof item.product_id === 'string' && item.product_id.startsWith('yan_urun_');
-      let categoryName = 'Yan Ürünler';
-      let printerName = null;
-      let printerType = null;
-
-      if (isYanUrun) {
-        categoryName = 'Yan Ürünler';
-        const pr = resolveCancelPrinterNameType(null, true);
-        printerName = pr.printerName;
-        printerType = pr.printerType;
-      } else {
-        // Normal ürünler için ürün bilgilerini al (kategori ve yazıcı için)
-        const product = db.products.find(p => p.id === item.product_id);
-        if (!product) {
-          return res.status(404).json({ success: false, error: 'Ürün bilgisi bulunamadı' });
-        }
-
-        // Kategori bilgisini al
-        const category = db.categories.find(c => c.id === product.category_id);
-        categoryName = category ? category.name : 'Diğer';
-
-        const pr = resolveCancelPrinterNameType(product.category_id, false);
-        printerName = pr.printerName;
-        printerType = pr.printerType;
-      }
-
-      // İptal açıklaması kontrolü - açıklama yoksa fiş yazdırma, sadece açıklama iste
-      let { cancelReason } = req.body;
-      const hasCancelReason = cancelReason && cancelReason.trim() !== '';
-      
-      if (!hasCancelReason) {
-        // Açıklama yok, fiş yazdırma - sadece açıklama iste
-        return res.status(200).json({ 
-          success: false, 
+      if (result.requiresReason) {
+        return res.status(200).json({
+          success: false,
           requiresReason: true,
-          message: 'Lütfen iptal açıklaması girin.' 
+          message: result.error || 'Lütfen iptal açıklaması girin.',
         });
       }
-      
-      // Açıklama var, işleme devam et - fiş yazdır
-      cancelReason = cancelReason.trim();
-      
-      // İptal fişi yazdır (mobil — kategori yazıcısına)
-      const now = new Date();
-      const cancelDate = now.toLocaleDateString('tr-TR');
-      const cancelTime = getFormattedTime(now);
-
-      const cancelReceiptData = {
-        tableName: order.table_name,
-        tableType: order.table_type,
-        productName: item.product_name,
-        quantity: quantityToCancel,
-        price: item.price,
-        cancelDate: cancelDate,
-        cancelTime: cancelTime,
-        categoryName: categoryName
-      };
-
-      try {
-        await printCancelReceipt(printerName, printerType, cancelReceiptData);
-      } catch (err) {
-        console.error('İptal fişi yazdırma hatası:', err);
+      if (!result.success) {
+        const status = result.error?.includes('yetkisi') ? 403 : 400;
+        return res.status(status).json(result);
       }
-
-      // İptal edilecek tutarı hesapla (ikram değilse)
-      const cancelAmount = item.isGift ? 0 : (item.price * quantityToCancel);
-
-      // Stok iadesi (ikram edilen ürünler hariç, sadece stok takibi yapılan ürünler için, yan ürünler hariç)
-      if (!item.isGift && !isYanUrun) {
-        const product = db.products.find(p => p.id === item.product_id);
-        if (product && product.trackStock) {
-          await increaseProductStock(item.product_id, quantityToCancel);
-        }
-      }
-
-      // Masa siparişinin toplam tutarını güncelle
-      order.total_amount = Math.max(0, order.total_amount - cancelAmount);
-
-      // İptal açıklamasını kaydet
-      if (quantityToCancel >= item.quantity) {
-        // Tüm ürün iptal ediliyorsa, item'ı silmeden önce açıklamayı kaydet
-        item.cancel_reason = cancelReason.trim();
-        item.cancel_date = new Date().toISOString();
-        // İptal edilmiş item'ı ayrı bir tabloya kaydetmek yerine, silmeden önce loglayabiliriz
-        const itemIndex = db.tableOrderItems.findIndex(oi => oi.id === itemId);
-        if (itemIndex !== -1) {
-          db.tableOrderItems.splice(itemIndex, 1);
-        }
-      } else {
-        // Sadece bir kısmı iptal ediliyorsa, quantity'yi azalt ve açıklamayı kaydet
-        item.quantity -= quantityToCancel;
-        item.cancel_reason = cancelReason.trim();
-        item.cancel_date = new Date().toISOString();
-      }
-
-      const tableIdForSync = order.table_id;
-      removePendingTableOrderIfNoItemsLeft(order);
-      saveDatabase();
-
-      // Firebase'e iptal kaydı ekle - arka planda
-      if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
-        const now = new Date();
-        const cancelDate = now.toLocaleDateString('tr-TR');
-        const cancelTime = getFormattedTime(now);
-        
-        // Siparişi oluşturan garson bilgisini bul
-        const orderStaffName = order.staff_name || item.staff_name || null;
-        
-        // İptal eden personel bilgisi
-        const cancelStaff = staffId ? (db.staff || []).find(s => s.id === staffId) : null;
-        const cancelStaffName = cancelStaff ? `${cancelStaff.name} ${cancelStaff.surname}` : null;
-        const cancelStaffIsManager = cancelStaff ? (cancelStaff.is_manager || false) : false;
-        const cancelStaffIsChef = cancelStaff ? (cancelStaff.is_chef || false) : false;
-        
-        const cancelRef = firebaseCollection(getSalesFirestore(), 'cancels');
-        // Firebase kaydetme işlemini arka planda yap (await kullanmadan)
-        firebaseAddDoc(cancelRef, {
-          item_id: itemId,
-          order_id: order.id,
-          table_id: order.table_id,
-          table_name: order.table_name,
-          table_type: order.table_type,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: quantityToCancel,
-          price: item.price,
-          cancel_reason: cancelReason,
-          cancel_date: cancelDate,
-          cancel_time: cancelTime,
-          staff_id: staffId || null,
-          staff_name: cancelStaffName,
-          staff_is_manager: cancelStaffIsManager,
-          staff_is_chef: cancelStaffIsChef,
-          order_staff_name: orderStaffName, // Siparişi oluşturan garson
-          source: 'mobile', // 'desktop' veya 'mobile'
-          created_at: firebaseServerTimestamp()
-        }).then(() => {
-          console.log('✅ İptal kaydı Firebase\'e başarıyla kaydedildi');
-        }).catch(error => {
-          console.error('❌ Firebase\'e iptal kaydı kaydedilemedi:', error);
-        });
-      }
-
-      syncSingleTableToFirebase(tableIdForSync).catch((err) => {
-        console.error('Masa Firebase kaydetme hatası (mobil iptal):', err);
-      });
-
-      // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
-      if (io) {
-        io.emit('table-update', {
-          tableId: tableIdForSync,
-          hasOrder: tableHasOpenItems(tableIdForSync)
-        });
-      }
-
-      const pendingMobil = db.tableOrders.find((o) => o.id === order.id && o.status === 'pending');
-      res.json({ 
-        success: true, 
-        remainingAmount: pendingMobil ? pendingMobil.total_amount : 0
-      });
+      return res.json(result);
     } catch (error) {
       console.error('Ürün iptal hatası:', error);
       res.status(500).json({ success: false, error: 'Ürün iptal edilirken bir hata oluştu' });
@@ -18566,9 +18587,21 @@ self.addEventListener('fetch', (event) => {
     res.send(swCode);
   });
 
-  appExpress.get('/mobile', (req, res) => {
-    res.send(generateMobileHTML(serverURL, activeBranchKey));
-  });
+  // Vite PWA mobil personel arayüzü (mobile-pwa/dist)
+  const mobilePwaDist = path.join(__dirname, '..', 'mobile-pwa', 'dist');
+  if (fs.existsSync(mobilePwaDist)) {
+    appExpress.use('/mobile', express.static(mobilePwaDist, { index: 'index.html' }));
+    appExpress.get('/mobile{*path}', (req, res) => {
+      res.sendFile(path.join(mobilePwaDist, 'index.html'));
+    });
+    writeLog('Mobil PWA (Vite) static dosyalar servis ediliyor: /mobile');
+  } else {
+    // Fallback: eski inline HTML
+    appExpress.get('/mobile', (req, res) => {
+      res.send(generateMobileHTML(serverURL, activeBranchKey));
+    });
+    writeLog('Mobil PWA build bulunamadı — eski inline HTML kullanılıyor: /mobile');
+  }
 
   // Mesaj gönderme API endpoint'i
   appExpress.post('/api/broadcast-message', async (req, res) => {
@@ -19288,25 +19321,7 @@ function isIpAddress(host) {
 
 ipcMain.handle('generate-qr-code', async () => {
   try {
-    const preferred = db.settings && db.settings.mobilePreferredHost;
-    let serverURL;
-    if (preferred) {
-      const host = isIpAddress(preferred) ? preferred : `${preferred}.local`;
-      serverURL = `http://${host}:${serverPort}/mobile`;
-    } else {
-      const interfaces = os.networkInterfaces();
-      let localIP = 'localhost';
-      for (const name of Object.keys(interfaces)) {
-        for (const iface of interfaces[name]) {
-          if (iface.family === 'IPv4' && !iface.internal) {
-            localIP = iface.address;
-            break;
-          }
-        }
-        if (localIP !== 'localhost') break;
-      }
-      serverURL = `http://${localIP}:${serverPort}/mobile`;
-    }
+    const serverURL = MOBILE_STAFF_PWA_URL;
     const qrCodeDataURL = await QRCode.toDataURL(serverURL, {
       width: 400,
       margin: 2,
@@ -19334,6 +19349,544 @@ function verifyManagerOperationsPassword(input) {
   return a === b;
 }
 
+function normalizeStaffProfileImage(raw) {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('data:image')) return trimmed;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  if (trimmed.length > 80) return `data:image/jpeg;base64,${trimmed}`;
+  return null;
+}
+
+async function fetchStaffProfileImageFromFirestore(staffId) {
+  if (!firestore || !firebaseDoc || !firebaseGetDoc) return null;
+  try {
+    const snap = await firebaseGetDoc(firebaseDoc(firestore, 'staff', String(staffId)));
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    return normalizeStaffProfileImage(
+      data.profile_image_base64 || data.image_base64 || data.profileImage
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+// ── Personel Firestore senkronu (PWA uzaktan giriş) ─────────────────────────
+async function syncStaffMemberToFirestore(staff, options = {}) {
+  if (!firestore || !firebaseDoc || !firebaseSetDoc || !staff) {
+    const err = new Error('Firestore personel kaydı hazır değil');
+    if (options.throwOnError) throw err;
+    return false;
+  }
+  try {
+    const ref = firebaseDoc(firestore, 'staff', String(staff.id));
+    await firebaseSetDoc(ref, {
+      id: staff.id,
+      name: staff.name,
+      surname: staff.surname,
+      password: staff.password,
+      is_manager: !!staff.is_manager,
+      is_chef: !!staff.is_chef,
+      branchKey: activeBranchKey,
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+    return true;
+  } catch (e) {
+    console.error('Personel Firestore kayıt hatası:', e);
+    if (options.throwOnError) throw e;
+    return false;
+  }
+}
+
+async function deleteStaffFromFirestore(staffId) {
+  if (!firestore || !firebaseDoc || !firebaseDeleteDoc) return;
+  try {
+    const ref = firebaseDoc(firestore, 'staff', String(staffId));
+    await firebaseDeleteDoc(ref);
+  } catch (e) {
+    console.error('Personel Firestore silme hatası:', e);
+  }
+}
+
+async function syncAllStaffToFirestore(options = {}) {
+  if (!firestore || !db.staff) {
+    if (options.throwOnError) {
+      throw new Error('Firestore bağlantısı veya yerel personel listesi hazır değil');
+    }
+    return { synced: 0 };
+  }
+  let synced = 0;
+  for (const s of db.staff) {
+    const ok = await syncStaffMemberToFirestore(s, options);
+    if (ok) synced += 1;
+  }
+  console.log(`✅ ${synced} personel Firestore'a senkronize edildi`);
+  return { synced };
+}
+
+// ── PWA sipariş kuyruğu (Firestore mobile_orders → yazdır + yerel db) ───────
+const mobileOrdersProcessing = new Set();
+
+async function processMobileOrderPayload(payload) {
+  const { items, tableId, tableName, tableType, orderNote, staffId, staffName } = payload;
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    throw new Error('Ürün listesi gerekli');
+  }
+
+  const totalAmount = payload.totalAmount != null
+    ? Number(payload.totalAmount)
+    : items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0);
+
+  const staff = staffId && db.staff ? db.staff.find((s) => s.id === staffId) : null;
+  const resolvedStaffName = staffName || (staff ? `${staff.name} ${staff.surname}` : null);
+
+  const now = new Date();
+  const adisyonDate = now.toLocaleDateString('tr-TR');
+  const adisyonTime = getFormattedTime(now);
+  const itemsWithStaffForPrint = items.map((item) => ({
+    ...item,
+    staff_name: resolvedStaffName || null,
+    added_date: adisyonDate,
+    added_time: adisyonTime
+  }));
+  const enrichedForPrint = enrichPwaOrderItemsForPrint(itemsWithStaffForPrint);
+  const adisyonDataForPrint = {
+    items: enrichedForPrint,
+    tableName: tableName || '',
+    tableType: tableType || '',
+    orderNote: orderNote || null,
+    sale_date: adisyonDate,
+    sale_time: adisyonTime,
+    staff_name: resolvedStaffName || null
+  };
+
+  // Yazdırmayı ÖNCE ve await ile tetikle (mobil LAN API ile aynı)
+  const printedOk = await printPwaOrderReceipts(enrichedForPrint, adisyonDataForPrint);
+
+  for (const item of enrichedForPrint) {
+    if (!item.isGift) {
+      const product = db.products.find((p) => String(p.id) === String(item.id));
+      if (product && product.trackStock) {
+        const stockDecreased = await decreaseProductStock(item.id, item.quantity);
+        if (!stockDecreased) {
+          throw new Error(`${item.name} için yetersiz stok`);
+        }
+      }
+    }
+  }
+
+  const existingOrder = (db.tableOrders || []).find(
+    (o) => o.table_id === tableId && o.status === 'pending'
+  );
+
+  let orderId;
+  let isNewOrder = false;
+
+  if (existingOrder) {
+    orderId = existingOrder.id;
+    items.forEach((newItem) => {
+      const resolved = enrichPwaOrderItemsForPrint([newItem])[0] || newItem;
+      const itemId = (db.tableOrderItems || []).length > 0
+        ? Math.max(...db.tableOrderItems.map((oi) => oi.id)) + 1
+        : 1;
+      if (!db.tableOrderItems) db.tableOrderItems = [];
+      db.tableOrderItems.push({
+        id: itemId,
+        order_id: orderId,
+        product_id: resolved.id,
+        product_name: resolved.name,
+        quantity: newItem.quantity,
+        price: newItem.price,
+        isGift: newItem.isGift || false,
+        staff_id: staffId || null,
+        staff_name: resolvedStaffName,
+        added_date: adisyonDate,
+        added_time: adisyonTime,
+        item_note: (newItem.extraNote && String(newItem.extraNote).trim()) ? String(newItem.extraNote).trim() : null
+      });
+    });
+    existingOrder.total_amount = (existingOrder.total_amount || 0) + totalAmount;
+    if (orderNote) {
+      existingOrder.order_note = existingOrder.order_note
+        ? `${existingOrder.order_note}\n${orderNote}`
+        : orderNote;
+    }
+  } else {
+    isNewOrder = true;
+    const orderDate = adisyonDate;
+    const orderTime = adisyonTime;
+    orderId = (db.tableOrders || []).length > 0
+      ? Math.max(...db.tableOrders.map((o) => o.id)) + 1
+      : 1;
+    if (!db.tableOrders) db.tableOrders = [];
+    db.tableOrders.push({
+      id: orderId,
+      table_id: tableId,
+      table_name: tableName,
+      table_type: tableType,
+      total_amount: totalAmount,
+      order_date: orderDate,
+      order_time: orderTime,
+      status: 'pending',
+      order_note: orderNote || null,
+      staff_id: staffId || null,
+      staff_name: resolvedStaffName
+    });
+    items.forEach((item) => {
+      const resolved = enrichPwaOrderItemsForPrint([item])[0] || item;
+      const itemId = (db.tableOrderItems || []).length > 0
+        ? Math.max(...db.tableOrderItems.map((oi) => oi.id)) + 1
+        : 1;
+      if (!db.tableOrderItems) db.tableOrderItems = [];
+      db.tableOrderItems.push({
+        id: itemId,
+        order_id: orderId,
+        product_id: resolved.id,
+        product_name: resolved.name,
+        quantity: item.quantity,
+        price: item.price,
+        isGift: item.isGift || false,
+        staff_id: staffId || null,
+        staff_name: resolvedStaffName,
+        added_date: orderDate,
+        added_time: orderTime,
+        item_note: (item.extraNote && String(item.extraNote).trim()) ? String(item.extraNote).trim() : null
+      });
+    });
+  }
+
+  saveDatabase();
+  const finalTotalAmount = (db.tableOrders || []).find((o) => o.id === orderId)?.total_amount || totalAmount;
+
+  const pwaPrintPayload = enrichedForPrint.map((i) => ({
+    id: i.id,
+    product_id: i.id,
+    name: i.name,
+    price: i.price,
+    quantity: i.quantity,
+    isGift: i.isGift,
+    category_id: i.category_id,
+    extraNote: i.extraNote,
+    staff_name: i.staff_name,
+    added_date: i.added_date,
+    added_time: i.added_time
+  }));
+  syncSingleTableToFirebase(tableId, {
+    last_order_source: 'pwa',
+    pwa_print_items: printedOk ? [] : pwaPrintPayload
+  }).catch((err) => {
+    console.error('PWA sipariş Firebase masa kaydı hatası:', err);
+  });
+
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('new-order-created', {
+      orderId,
+      tableId,
+      tableName,
+      tableType,
+      totalAmount: finalTotalAmount,
+      isNewOrder,
+      source: 'pwa'
+    });
+  }
+
+  if (io) {
+    io.emit('new-order', { orderId, tableId, tableName, tableType, totalAmount: finalTotalAmount, isNewOrder });
+    io.emit('table-update', { tableId, hasOrder: true });
+  }
+
+  return { orderId, isNewOrder, totalAmount: finalTotalAmount };
+}
+
+async function handleFirestoreMobileOrder(docSnap) {
+  const docId = docSnap.id;
+  if (mobileOrdersProcessing.has(docId)) return;
+  const data = docSnap.data();
+  if (!data || data.status !== 'pending') return;
+
+  if (data.branchKey && data.branchKey !== activeBranchKey) {
+    try {
+      if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
+        const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
+        await firebaseUpdateDoc(ref, {
+          status: 'failed',
+          error: `Şube uyuşmazlığı: masaüstü "${activeBranchKey}", istek "${data.branchKey}"`,
+          failedAt: new Date().toISOString(),
+        });
+      }
+    } catch (_) {}
+    console.warn(`⚠️ PWA kuyruk şube uyuşmazlığı (${docId}): ${data.branchKey} ≠ ${activeBranchKey}`);
+    return;
+  }
+
+  mobileOrdersProcessing.add(docId);
+  try {
+    if (!tablesFirestore || !tablesFirebaseDoc || !firebaseUpdateDoc) {
+      throw new Error('Firestore mobile_orders güncellemesi hazır değil');
+    }
+    const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
+    await firebaseUpdateDoc(ref, { status: 'processing', processingAt: new Date().toISOString() });
+
+    if (isMobileQueueAction(data)) {
+      const result = await processMobileActionPayload(data);
+
+      if (result?.requiresReason) {
+        await firebaseUpdateDoc(ref, {
+          status: 'failed',
+          requiresReason: true,
+          error: result.message || 'İptal açıklaması gerekli',
+          failedAt: new Date().toISOString(),
+        });
+        console.warn(`⚠️ PWA işlem açıklama bekliyor: ${docId}`);
+        return;
+      }
+
+      await firebaseUpdateDoc(ref, {
+        status: 'processed',
+        result: result || null,
+        processedAt: new Date().toISOString(),
+      });
+      console.log(`✅ PWA işlem tamamlandı: ${docId} (${data.type})`);
+    } else {
+      await processMobileOrderPayload(data);
+
+      await firebaseUpdateDoc(ref, {
+        status: 'processed',
+        processedAt: new Date().toISOString(),
+      });
+      console.log(`✅ PWA sipariş işlendi: ${docId} masa ${data.tableId}`);
+    }
+  } catch (err) {
+    console.error(`❌ PWA kuyruk işleme hatası (${docId}):`, err);
+    try {
+      if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
+        const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
+        await firebaseUpdateDoc(ref, {
+          status: 'failed',
+          error: err.message || String(err),
+          failedAt: new Date().toISOString(),
+        });
+      }
+    } catch (_) {}
+  } finally {
+    mobileOrdersProcessing.delete(docId);
+  }
+}
+
+function stopMobileOrdersFirestoreListener() {
+  try {
+    if (mobileOrdersRealtimeUnsubscribe) mobileOrdersRealtimeUnsubscribe();
+  } catch (_) {}
+  mobileOrdersRealtimeUnsubscribe = null;
+}
+
+function startMobileOrdersFirestoreListener() {
+  stopMobileOrdersFirestoreListener();
+  if (!tablesFirestore || !tablesFirebaseCollection || !firebaseOnSnapshot || !firebaseQuery || !firebaseWhere) {
+    console.warn('PWA sipariş dinleyici: Firestore hazır değil');
+    return;
+  }
+  try {
+    const colRef = tablesFirebaseCollection(tablesFirestore, 'mobile_orders');
+    const q = firebaseQuery(colRef, firebaseWhere('status', '==', 'pending'));
+    mobileOrdersRealtimeUnsubscribe = firebaseOnSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added' || change.type === 'modified') {
+          handleFirestoreMobileOrder(change.doc).catch((e) =>
+            console.error('PWA sipariş handler:', e)
+          );
+        }
+      });
+    }, (err) => {
+      console.error('PWA sipariş dinleyici hatası:', err);
+    });
+    console.log('✅ PWA mobile_orders Firestore dinleyicisi aktif');
+    processPendingMobileOrdersOnStartup().catch((e) =>
+      console.warn('Bekleyen PWA sipariş taraması:', e.message)
+    );
+  } catch (e) {
+    console.error('PWA sipariş dinleyici başlatılamadı:', e);
+  }
+}
+
+async function processPendingMobileOrdersOnStartup() {
+  if (!tablesFirestore || !tablesFirebaseCollection || !firebaseGetDocs || !firebaseQuery || !firebaseWhere) return;
+  const colRef = tablesFirebaseCollection(tablesFirestore, 'mobile_orders');
+  const q = firebaseQuery(colRef, firebaseWhere('status', '==', 'pending'));
+  const snap = await firebaseGetDocs(q);
+  if (snap.empty) return;
+  console.log(`📋 ${snap.size} bekleyen PWA siparişi işleniyor...`);
+  for (const docSnap of snap.docs) {
+    await handleFirestoreMobileOrder(docSnap);
+  }
+}
+
+// ── PWA müdür/şef işlemleri (Firestore mobile_orders kuyruğu → yerel işlem) ──
+const mobileActionsProcessing = new Set();
+const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'merge_table']);
+
+function isMobileQueueAction(data) {
+  if (!data) return false;
+  if (data.queueKind === 'action') return true;
+  return !!(data.type && MOBILE_ACTION_TYPES.has(data.type) && !Array.isArray(data.items));
+}
+
+function findStaffById(staffId) {
+  if (staffId == null || !db.staff) return null;
+  return db.staff.find((s) => s.id == staffId) || null;
+}
+
+async function processMobileActionPayload(data) {
+  switch (data.type) {
+    case 'cancel_item': {
+      const result = await cancelTableOrderItemInternal(
+        data.itemId,
+        data.cancelQuantity || data.quantity,
+        data.cancelReason || data.reason || '',
+        data.staffId,
+        { source: 'pwa' }
+      );
+      if (result.requiresReason) {
+        return { requiresReason: true, message: result.error || 'İptal açıklaması gerekli' };
+      }
+      if (!result.success) {
+        throw new Error(result.error || 'İptal başarısız');
+      }
+      return result;
+    }
+    case 'transfer_table': {
+      const result = await transferTableOrderInternal(data.sourceTableId, data.targetTableId);
+      if (!result.success) throw new Error(result.error || 'Masa aktarımı başarısız');
+      return result;
+    }
+    case 'merge_table': {
+      const result = await mergeTableOrderInternal(
+        data.sourceTableId,
+        data.targetTableId,
+        data.staffId
+      );
+      if (!result.success) throw new Error(result.error || 'Masa birleştirme başarısız');
+      return result;
+    }
+    default:
+      throw new Error(`Bilinmeyen işlem türü: ${data.type}`);
+  }
+}
+
+async function handleFirestoreMobileAction(docSnap) {
+  const docId = docSnap.id;
+  if (mobileActionsProcessing.has(docId)) return;
+  const data = docSnap.data();
+  if (!data || data.status !== 'pending') return;
+
+  if (data.branchKey && data.branchKey !== activeBranchKey) {
+    try {
+      if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
+        const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_actions', docId);
+        await firebaseUpdateDoc(ref, {
+          status: 'failed',
+          error: `Şube uyuşmazlığı: masaüstü "${activeBranchKey}", istek "${data.branchKey}"`,
+          failedAt: new Date().toISOString(),
+        });
+      }
+    } catch (_) {}
+    return;
+  }
+
+  mobileActionsProcessing.add(docId);
+  try {
+    if (!tablesFirestore || !tablesFirebaseDoc || !firebaseUpdateDoc) {
+      throw new Error('Firestore mobile_actions güncellemesi hazır değil');
+    }
+    const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_actions', docId);
+    await firebaseUpdateDoc(ref, { status: 'processing', processingAt: new Date().toISOString() });
+
+    const result = await processMobileActionPayload(data);
+
+    if (result?.requiresReason) {
+      await firebaseUpdateDoc(ref, {
+        status: 'failed',
+        requiresReason: true,
+        error: result.message || 'İptal açıklaması gerekli',
+        failedAt: new Date().toISOString(),
+      });
+      console.warn(`⚠️ PWA işlem açıklama bekliyor: ${docId}`);
+      return;
+    }
+
+    await firebaseUpdateDoc(ref, {
+      status: 'processed',
+      result: result || null,
+      processedAt: new Date().toISOString(),
+    });
+    console.log(`✅ PWA işlem tamamlandı: ${docId} (${data.type})`);
+  } catch (err) {
+    console.error(`❌ PWA işlem hatası (${docId}):`, err);
+    try {
+      if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
+        const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_actions', docId);
+        await firebaseUpdateDoc(ref, {
+          status: 'failed',
+          error: err.message || String(err),
+          failedAt: new Date().toISOString(),
+        });
+      }
+    } catch (_) {}
+  } finally {
+    mobileActionsProcessing.delete(docId);
+  }
+}
+
+function stopMobileActionsFirestoreListener() {
+  try {
+    if (mobileActionsRealtimeUnsubscribe) mobileActionsRealtimeUnsubscribe();
+  } catch (_) {}
+  mobileActionsRealtimeUnsubscribe = null;
+}
+
+function startMobileActionsFirestoreListener() {
+  stopMobileActionsFirestoreListener();
+  if (!tablesFirestore || !tablesFirebaseCollection || !firebaseOnSnapshot || !firebaseQuery || !firebaseWhere) {
+    console.warn('PWA işlem dinleyici: Firestore hazır değil');
+    return;
+  }
+  try {
+    const colRef = tablesFirebaseCollection(tablesFirestore, 'mobile_actions');
+    const q = firebaseQuery(colRef, firebaseWhere('status', '==', 'pending'));
+    mobileActionsRealtimeUnsubscribe = firebaseOnSnapshot(q, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === 'added' || change.type === 'modified') {
+          handleFirestoreMobileAction(change.doc).catch((e) =>
+            console.error('PWA işlem handler:', e)
+          );
+        }
+      });
+    }, (err) => {
+      console.error('PWA işlem dinleyici hatası:', err);
+    });
+    console.log('✅ PWA mobile_actions Firestore dinleyicisi aktif');
+    processPendingMobileActionsOnStartup().catch((e) =>
+      console.warn('Bekleyen PWA işlem taraması:', e.message)
+    );
+  } catch (e) {
+    console.error('PWA işlem dinleyici başlatılamadı:', e);
+  }
+}
+
+async function processPendingMobileActionsOnStartup() {
+  if (!tablesFirestore || !tablesFirebaseCollection || !firebaseGetDocs || !firebaseQuery || !firebaseWhere) return;
+  const colRef = tablesFirebaseCollection(tablesFirestore, 'mobile_actions');
+  const q = firebaseQuery(colRef, firebaseWhere('status', '==', 'pending'));
+  const snap = await firebaseGetDocs(q);
+  if (snap.empty) return;
+  console.log(`📋 ${snap.size} bekleyen PWA işlemi işleniyor...`);
+  for (const docSnap of snap.docs) {
+    await handleFirestoreMobileAction(docSnap);
+  }
+}
+
 // Staff Management IPC Handlers
 ipcMain.handle('create-staff', (event, staffData) => {
   const { name, surname, password } = staffData;
@@ -19354,6 +19907,7 @@ ipcMain.handle('create-staff', (event, staffData) => {
   };
   db.staff.push(newStaff);
   saveDatabase();
+  syncStaffMemberToFirestore(newStaff).catch(() => {});
   return { success: true, staff: newStaff };
 });
 
@@ -19366,6 +19920,7 @@ ipcMain.handle('delete-staff', (event, staffId) => {
   const deletedStaff = db.staff[index];
   db.staff.splice(index, 1);
   saveDatabase();
+  deleteStaffFromFirestore(staffId).catch(() => {});
   
   // Mobil personel arayüzüne personel silme event'i gönder
   if (io) {
@@ -19416,6 +19971,7 @@ ipcMain.handle('update-staff-password', (event, staffId, newPassword) => {
     // Şifreyi güncelle
     staff.password = newPassword.toString();
     saveDatabase();
+    syncStaffMemberToFirestore(staff).catch(() => {});
 
     console.log('✅ Şifre güncellendi ve veritabanına kaydedildi');
 
@@ -19435,15 +19991,38 @@ ipcMain.handle('update-staff-password', (event, staffId, newPassword) => {
   }
 });
 
-ipcMain.handle('get-staff', () => {
+ipcMain.handle('get-staff', async () => {
   if (!db.staff) db.staff = [];
-  return db.staff.map(s => ({
+  const list = db.staff.map((s) => ({
     id: s.id,
     name: s.name,
     surname: s.surname,
     is_manager: s.is_manager || false,
-    is_chef: s.is_chef || false
+    is_chef: s.is_chef || false,
+    profileImageSrc: normalizeStaffProfileImage(s.profile_image_base64) || null,
   }));
+
+  await Promise.all(
+    list.map(async (entry, index) => {
+      const fromFirestore = await fetchStaffProfileImageFromFirestore(entry.id);
+      if (fromFirestore) list[index].profileImageSrc = fromFirestore;
+    })
+  );
+
+  return list;
+});
+
+ipcMain.handle('sync-staff-to-firestore', async () => {
+  try {
+    if (!db.staff || db.staff.length === 0) {
+      return { success: false, error: 'Yerel personel kaydı bulunamadı' };
+    }
+    const { synced } = await syncAllStaffToFirestore({ throwOnError: true });
+    return { success: true, count: synced };
+  } catch (error) {
+    console.error('Personel Firestore toplu senkron hatası:', error);
+    return { success: false, error: error.message || 'Firestore senkronu başarısız' };
+  }
 });
 
 // Müdür atama/kaldırma (managerAuthPassword: managerOperationsPassword tanımlıysa zorunlu)
@@ -19469,6 +20048,7 @@ ipcMain.handle('set-staff-manager', (event, staffId, isManager, managerAuthPassw
   
   staff.is_manager = isManager;
   saveDatabase();
+  syncAllStaffToFirestore().catch(() => {});
   return { success: true, staff: staff };
 });
 
@@ -19492,6 +20072,7 @@ ipcMain.handle('set-staff-chef', (event, staffId, isChef, managerAuthPassword) =
     staff.is_chef = false;
   }
   saveDatabase();
+  syncStaffMemberToFirestore(staff).catch(() => {});
   return { success: true, staff };
 });
 
@@ -19631,6 +20212,40 @@ function applyMakaraRemoteTableDocument(tableId, data) {
   const localFp = makaraLocalPendingFingerprintForTable(tableId);
   if (remoteFp === localFp) return false;
 
+  // PWA siparişi: yazıcısı olan kasa Firebase'den çekerken adisyon bas (çoklu kasa senaryosu)
+  if (Array.isArray(data.pwa_print_items) && data.pwa_print_items.length > 0) {
+    const printItems = enrichPwaOrderItemsForPrint(
+      data.pwa_print_items.map((i) => ({
+        id: i.id ?? i.product_id,
+        name: i.name ?? i.product_name,
+        price: i.price,
+        quantity: i.quantity,
+        isGift: i.isGift,
+        category_id: i.category_id,
+        extraNote: i.extraNote ?? i.item_note,
+        staff_name: i.staff_name,
+        added_date: i.added_date,
+        added_time: i.added_time
+      }))
+    );
+    const adisyonData = {
+      items: printItems,
+      tableName: data.table_name || '',
+      tableType: data.table_type || '',
+      orderNote: data.order_note || null,
+      sale_date: data.order_date || printItems[0]?.added_date || null,
+      sale_time: data.order_time || printItems[0]?.added_time || null,
+      staff_name: printItems[0]?.staff_name || null
+    };
+    printPwaOrderReceipts(printItems, adisyonData)
+      .then((ok) => {
+        if (ok) {
+          syncSingleTableToFirebase(tableId, { pwa_print_items: [] }).catch(() => {});
+        }
+      })
+      .catch((err) => console.error('[PWA] applyMakaraRemote yazdırma:', err));
+  }
+
   const isEmptyRemote =
     !data ||
     data.is_occupied === false ||
@@ -19757,7 +20372,7 @@ function startMakaraTablesFirestorePullListener() {
 }
 
 // Tek bir masayı yeni Firebase'e kaydet (makaramasalar) - sadece sipariş değişikliklerinde çağrılır
-async function syncSingleTableToFirebase(tableId) {
+async function syncSingleTableToFirebase(tableId, extraFields = {}) {
   if (!tablesFirestore || !tablesFirebaseCollection || !tablesFirebaseDoc || !tablesFirebaseSetDoc) {
     console.warn('⚠️ Masalar Firebase başlatılamadı, masa kaydedilemedi');
     return;
@@ -19772,7 +20387,7 @@ async function syncSingleTableToFirebase(tableId) {
     console.log(`📦 Toplam item sayısı: ${tableOrderItems.length}`);
 
     // Masa bilgilerini bul (sipariş var ama satır yoksa boş masa — eski tutarlılık)
-    const order = tableOrders.find(o => o.table_id === tableId && o.status === 'pending');
+    const order = tableOrders.find((o) => tableIdsEqual(o.table_id, tableId) && o.status === 'pending');
     const orderItemsForTable = order
       ? tableOrderItems.filter((oi) => oi.order_id === order.id)
       : [];
@@ -19864,7 +20479,8 @@ async function syncSingleTableToFirebase(tableId) {
       order_time: orderTime,
       order_note: orderNote,
       items: items,
-      last_updated: new Date().toISOString()
+      last_updated: new Date().toISOString(),
+      ...extraFields
     };
 
     // Yeni Firebase'e kaydet (makaramasalar)

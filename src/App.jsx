@@ -265,8 +265,6 @@ function App() {
       
       window.electronAPI.onUpdateError((error) => {
         console.error('Update error:', error);
-        // Hata durumunda modal'ı kapat
-        setUpdateInfo(null);
       });
       
       window.electronAPI.onUpdateProgress((progress) => {

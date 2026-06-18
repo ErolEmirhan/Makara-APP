@@ -5,6 +5,7 @@ import SettingsSplash from './SettingsSplash';
 import DateTimeDisplay from './DateTimeDisplay';
 import Toast from './Toast';
 import ThemeToggle from './ThemeToggle';
+import StaffAvatar from './StaffAvatar';
 
 const tablesNavLabel = (isSuriciBranch, isSultanBranch) =>
   isSuriciBranch ? 'Müşteriler' : isSultanBranch ? 'Salon' : 'Masalar';
@@ -21,6 +22,9 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [qrCode, setQrCode] = useState(null);
   const [serverURL, setServerURL] = useState('');
   const [staffList, setStaffList] = useState([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [staffSyncing, setStaffSyncing] = useState(false);
+  const staffCacheRef = useRef(null);
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [newStaff, setNewStaff] = useState({ name: '', surname: '', password: '' });
   const [deleteConfirm, setDeleteConfirm] = useState(null);
@@ -34,10 +38,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
-  const [networkDevices, setNetworkDevices] = useState([]);
-  const [networkScanning, setNetworkScanning] = useState(false);
-  const [mobilePreferredHost, setMobilePreferredHost] = useState(null);
-  const [computerHostname, setComputerHostname] = useState('');
   const [mobileDiagOpen, setMobileDiagOpen] = useState(false);
   const [mobileDiagLoading, setMobileDiagLoading] = useState(false);
   const [mobileDiagSteps, setMobileDiagSteps] = useState([]);
@@ -92,8 +92,16 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     setShowHamburgerMenu(false);
     try {
       if (window.electronAPI?.checkForUpdates) {
-        await window.electronAPI.checkForUpdates();
-        showToast('Güncelleme kontrol edildi', 'success');
+        const result = await window.electronAPI.checkForUpdates();
+        if (result?.success) {
+          if (result.available) {
+            showToast(result.message || `Yeni sürüm: v${result.latestVersion}`, 'success');
+          } else {
+            showToast(result.message || 'Zaten en güncel sürümü kullanıyorsunuz', 'info');
+          }
+        } else {
+          showToast(result?.error || 'Güncelleme kontrolü başarısız', 'error');
+        }
       } else {
         showToast('Bu sürümde güncelleme kontrolü yok', 'info');
       }
@@ -148,15 +156,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
   const loadMobileModalData = async () => {
     setShowMobileModal(true);
-    loadStaff();
-    try {
-      const preferred = await window.electronAPI.getMobilePreferredHost?.();
-      setMobilePreferredHost(preferred ?? null);
-    } catch (_) {}
-    try {
-      const hostname = await window.electronAPI.getComputerHostname?.();
-      setComputerHostname(hostname || '');
-    } catch (_) {}
+    await loadStaff({ preferCache: true });
     try {
       const result = await window.electronAPI.generateQRCode();
       if (result && result.success) {
@@ -180,58 +180,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       setShowMobileStaffSplash(false);
       void loadMobileModalData();
     }, 1000);
-  };
-
-  const handleScanNetwork = async () => {
-    if (!window.electronAPI.scanNetwork) return;
-    setNetworkScanning(true);
-    setNetworkDevices([]);
-    try {
-      const result = await window.electronAPI.scanNetwork();
-      if (result && result.success && result.devices) {
-        setNetworkDevices(result.devices);
-        showToast(result.devices.length ? `${result.devices.length} cihaz bulundu` : 'Açık cihaz bulunamadı', 'info');
-      } else {
-        showToast(result?.error || 'Ağ taranamadı', 'error');
-      }
-    } catch (error) {
-      console.error('Ağ tarama hatası:', error);
-      showToast('Ağ taranamadı', 'error');
-    } finally {
-      setNetworkScanning(false);
-    }
-  };
-
-  const handleUseIpForQR = async (ip) => {
-    if (!window.electronAPI.setMobilePreferredHost) return;
-    try {
-      await window.electronAPI.setMobilePreferredHost(ip);
-      setMobilePreferredHost(ip);
-      const result = await window.electronAPI.generateQRCode();
-      if (result && result.success) {
-        setQrCode(result.qrCode);
-        setServerURL(result.url);
-        showToast('QR artık bu adrese yönlendiriliyor: ' + ip, 'success');
-      }
-    } catch (error) {
-      showToast('Ayarlanırken hata oluştu', 'error');
-    }
-  };
-
-  const handleClearPreferredHost = async () => {
-    if (!window.electronAPI.setMobilePreferredHost) return;
-    try {
-      await window.electronAPI.setMobilePreferredHost(null);
-      setMobilePreferredHost(null);
-      const result = await window.electronAPI.generateQRCode();
-      if (result && result.success) {
-        setQrCode(result.qrCode);
-        setServerURL(result.url);
-        showToast('QR tekrar otomatik IP kullanacak', 'info');
-      }
-    } catch (error) {
-      showToast('Ayarlanırken hata oluştu', 'error');
-    }
   };
 
   const runMobileConnectionDiagnostics = async () => {
@@ -301,13 +249,45 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     }
   };
 
-  const loadStaff = async () => {
+  const loadStaff = async ({ preferCache = false, silent = false } = {}) => {
+    if (preferCache && staffCacheRef.current?.length) {
+      setStaffList(staffCacheRef.current);
+    }
+    if (!silent) setStaffLoading(true);
     try {
       const staff = await window.electronAPI.getStaff();
+      staffCacheRef.current = staff;
       setStaffList(staff);
       await refreshManagerOpsConfig();
     } catch (error) {
       console.error('Personel yükleme hatası:', error);
+      if (!staffCacheRef.current?.length) {
+        showToast('Personel listesi yüklenemedi', 'error');
+      }
+    } finally {
+      if (!silent) setStaffLoading(false);
+    }
+  };
+
+  const handleSyncStaffToFirestore = async () => {
+    if (!window.electronAPI?.syncStaffToFirestore) {
+      showToast('Bu sürümde Firestore senkronu yok', 'error');
+      return;
+    }
+    setStaffSyncing(true);
+    try {
+      const result = await window.electronAPI.syncStaffToFirestore();
+      if (result?.success) {
+        showToast(`${result.count ?? 0} personel Firestore'a yazıldı`, 'success');
+        await loadStaff({ preferCache: false });
+      } else {
+        showToast(result?.error || 'Firestore güncellenemedi', 'error');
+      }
+    } catch (error) {
+      console.error('Firestore personel senkronu:', error);
+      showToast('Firestore güncellenemedi', 'error');
+    } finally {
+      setStaffSyncing(false);
     }
   };
 
@@ -962,13 +942,34 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
                 <span className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-zinc-200 sm:inline">
-                  {staffList.length} kayıt
+                  {staffLoading && !staffList.length ? '…' : `${staffList.length} kayıt`}
                 </span>
                 {managerOpsConfigured && (
                   <span className="rounded-full border border-zinc-500/50 bg-white/10 px-3 py-1 text-[11px] font-bold text-zinc-100 shadow-sm">
                     Müdür şifresi aktif
                   </span>
                 )}
+                <button
+                  type="button"
+                  onClick={handleSyncStaffToFirestore}
+                  disabled={staffSyncing || staffLoading}
+                  className="inline-flex items-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 sm:py-3.5 sm:text-[14px]"
+                  title="Yerel personeli mevcut şifreleriyle Firestore'a yazar"
+                >
+                  {staffSyncing ? (
+                    <>
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                      <span>Güncelleniyor…</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                      </svg>
+                      <span>Veritabanı güncelle</span>
+                    </>
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowAddStaff(true)}
@@ -1014,12 +1015,23 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                   <span className="bg-gradient-to-r from-zinc-800 to-zinc-600 bg-clip-text text-sm font-bold uppercase tracking-wide text-transparent">
                     Personel
                   </span>
-                  <span className="rounded-full bg-zinc-200/90 px-2.5 py-0.5 text-xs font-semibold text-zinc-800">
-                    {staffList.length} kişi
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {staffLoading && staffList.length > 0 && (
+                      <span className="text-[11px] font-medium text-zinc-500">Güncelleniyor…</span>
+                    )}
+                    <span className="rounded-full bg-zinc-200/90 px-2.5 py-0.5 text-xs font-semibold text-zinc-800">
+                      {staffLoading && !staffList.length ? '…' : `${staffList.length} kişi`}
+                    </span>
+                  </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4 sm:px-5">
-                  {staffList.length === 0 ? (
+                  {staffLoading && staffList.length === 0 ? (
+                    <div className="flex h-full min-h-[200px] flex-col items-center justify-center rounded-2xl border border-zinc-200/80 bg-white px-6 py-12 text-center">
+                      <div className="mb-4 h-11 w-11 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-700" />
+                      <p className="text-base font-semibold text-zinc-800">Yükleniyor…</p>
+                      <p className="mt-1 max-w-xs text-sm text-zinc-500">Personel listesi hazırlanıyor</p>
+                    </div>
+                  ) : staffList.length === 0 ? (
                     <div className="flex h-full min-h-[200px] flex-col items-center justify-center rounded-2xl border-2 border-dashed border-zinc-300/80 bg-gradient-to-b from-white to-zinc-50 px-6 py-12 text-center">
                       <div className="mb-3 rounded-2xl bg-zinc-100 p-4">
                         <svg className="h-10 w-10 text-zinc-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1042,45 +1054,30 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                         .map((staff) => (
                         <li
                           key={staff.id}
-                          className={
-                            staff.is_manager
-                              ? 'overflow-hidden rounded-2xl border-[3px] border-zinc-800 bg-gradient-to-br from-zinc-100 via-white to-zinc-50 p-4 shadow-[0_8px_32px_-8px_rgba(0,0,0,0.2)] ring-2 ring-zinc-400/60 ring-offset-2 ring-offset-white transition hover:border-black hover:shadow-[0_12px_40px_-8px_rgba(0,0,0,0.25)]'
-                              : 'overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-white via-zinc-50/90 to-white p-4 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.08)] ring-1 ring-zinc-200/80 transition hover:border-zinc-300 hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.12)]'
-                          }
+                          className="overflow-hidden rounded-2xl border border-zinc-200/90 bg-gradient-to-br from-white via-zinc-50/90 to-white p-4 shadow-[0_4px_24px_-8px_rgba(0,0,0,0.08)] ring-1 ring-zinc-200/80 transition hover:border-zinc-300 hover:shadow-[0_8px_32px_-8px_rgba(0,0,0,0.12)]"
                         >
-                          {staff.is_manager && (
-                            <div className="-mx-4 -mt-4 mb-3 rounded-t-[13px] border-b border-zinc-300 bg-gradient-to-r from-zinc-200/80 via-zinc-100 to-zinc-200/80 px-4 py-2 text-center">
-                              <span className="text-[11px] font-extrabold uppercase tracking-[0.25em] text-zinc-900">
-                                Şube müdürü
-                              </span>
-                            </div>
-                          )}
                           <div className="flex gap-4">
-                            <div
-                              className={
-                                staff.is_manager
-                                  ? 'flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-zinc-800 via-zinc-900 to-black text-lg font-bold text-white shadow-lg shadow-black/25 ring-2 ring-zinc-500/50'
-                                  : 'flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-zinc-600 via-zinc-700 to-zinc-900 text-lg font-bold text-white shadow-lg shadow-zinc-500/25'
-                              }
-                            >
-                              {staff.name.charAt(0)}
-                              {staff.surname.charAt(0)}
-                            </div>
-                            <div className="min-w-0 flex-1 pt-0.5">
+                            <StaffAvatar
+                              name={staff.name}
+                              surname={staff.surname}
+                              profileImageSrc={staff.profileImageSrc}
+                              isManager={staff.is_manager}
+                              isChef={staff.is_chef}
+                              size="xl"
+                              accent="from-zinc-600 via-zinc-700 to-zinc-900"
+                            />
+                            <div className="min-w-0 flex-1 pt-1">
                               <div className="flex flex-wrap items-center gap-2">
                                 <p className="text-base font-bold tracking-tight text-slate-900">
                                   {staff.name} {staff.surname}
                                 </p>
                                 {staff.is_manager && (
-                                  <span className="inline-flex items-center gap-1.5 rounded-full bg-zinc-900 px-3 py-1 text-[11px] font-extrabold uppercase tracking-widest text-white shadow-md ring-2 ring-zinc-300">
-                                    <svg className="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 20 20" aria-hidden="true">
-                                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                                    </svg>
+                                  <span className="inline-flex items-center rounded-full bg-red-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-red-700 ring-1 ring-red-200/80">
                                     Müdür
                                   </span>
                                 )}
                                 {!staff.is_manager && staff.is_chef && (
-                                  <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-600 px-3 py-1 text-[11px] font-extrabold uppercase tracking-widest text-white shadow-md ring-2 ring-amber-200">
+                                  <span className="inline-flex items-center rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wider text-amber-800 ring-1 ring-amber-200/80">
                                     Şef
                                   </span>
                                 )}
@@ -1143,7 +1140,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                 </div>
               </section>
 
-              {/* Sağ sütun: QR üst + Ağ alt */}
+              {/* Sağ sütun: QR & bağlantı kontrolü */}
               <section className="flex min-h-[260px] flex-col lg:col-span-5 lg:min-h-0">
                 <div className="flex min-h-0 flex-1 flex-col divide-y divide-zinc-200/80 bg-gradient-to-b from-zinc-50/80 via-white to-zinc-100/60">
                   {/* Bağlantı & QR */}
@@ -1165,7 +1162,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                             <svg className="h-4 w-4 shrink-0 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
-                            Telefon ile kasa aynı yerel ağda olmalıdır.
+                            Personel QR ile mobil uygulamayı açar; kasa IP adresini uygulama içinde girer.
                           </p>
                         </>
                       ) : (
@@ -1269,86 +1266,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                     </div>
                   </div>
 
-                  {/* Ağ & sabit adres */}
-                  <div className="flex min-h-0 flex-1 flex-col border-t border-zinc-200/80 lg:min-h-0">
-                    <div className="shrink-0 border-b border-zinc-200/80 bg-gradient-to-r from-zinc-100 to-zinc-50/90 px-4 py-2.5">
-                      <span className="text-xs font-bold uppercase tracking-wider text-zinc-800">Ağ &amp; sabit adres</span>
-                    </div>
-                    <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3 sm:px-4">
-                      {computerHostname && window.electronAPI?.setMobilePreferredHost && (
-                        <div className="mb-3 rounded-xl border border-zinc-200 bg-gradient-to-br from-white to-zinc-50 p-3 shadow-sm">
-                          <p className="text-[10px] font-bold uppercase tracking-wide text-zinc-600">Bu kasa</p>
-                          <p className="mt-1 font-mono text-sm font-bold text-zinc-900">{computerHostname}</p>
-                          <button
-                            type="button"
-                            onClick={() => handleUseIpForQR(computerHostname)}
-                            className="mt-2 w-full rounded-xl bg-zinc-900 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-black"
-                          >
-                            QR&apos;da bu adı kullan
-                          </button>
-                        </div>
-                      )}
-                      {window.electronAPI?.scanNetwork && (
-                        <>
-                          <button
-                            type="button"
-                            onClick={handleScanNetwork}
-                            disabled={networkScanning}
-                            className="mb-3 flex w-full items-center justify-center gap-2 rounded-xl border border-zinc-300 bg-white py-2.5 text-xs font-bold text-zinc-900 shadow-sm transition hover:bg-zinc-50 disabled:opacity-60"
-                          >
-                            {networkScanning ? (
-                              <>
-                                <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-200 border-t-zinc-800" />
-                                Taranıyor…
-                              </>
-                            ) : (
-                              <>
-                                <svg className="h-4 w-4 text-zinc-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-                                </svg>
-                                Ağı tara
-                              </>
-                            )}
-                          </button>
-                          {mobilePreferredHost && (
-                            <div className="mb-3 rounded-xl border border-zinc-300 bg-zinc-100/80 px-3 py-2 text-[11px] text-zinc-800">
-                              <span className="font-semibold text-zinc-600">Sabit adres:</span>{' '}
-                              <span className="font-mono font-bold text-zinc-900">{mobilePreferredHost}</span>
-                              <button
-                                type="button"
-                                onClick={handleClearPreferredHost}
-                                className="ml-2 font-semibold text-zinc-800 underline decoration-zinc-400 underline-offset-2 hover:text-black"
-                              >
-                                Sıfırla
-                              </button>
-                            </div>
-                          )}
-                          {networkDevices.length > 0 && (
-                            <ul className="space-y-2">
-                              {networkDevices.map((d) => (
-                                <li
-                                  key={d.ip}
-                                  className="flex items-center justify-between gap-2 rounded-xl border border-zinc-200/90 bg-white px-3 py-2 text-[11px] shadow-sm"
-                                >
-                                  <div className="min-w-0">
-                                    <span className="font-mono font-bold text-zinc-900">{d.ip}</span>
-                                    {d.label && <span className="ml-1.5 text-zinc-500">{d.label}</span>}
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleUseIpForQR(d.ip)}
-                                    className="shrink-0 rounded-lg bg-zinc-900 px-3 py-1.5 text-[10px] font-bold text-white hover:bg-black"
-                                  >
-                                    Seç
-                                  </button>
-                                </li>
-                              ))}
-                            </ul>
-                          )}
-                        </>
-                      )}
-                    </div>
-                  </div>
                 </div>
               </section>
             </div>

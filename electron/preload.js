@@ -106,6 +106,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateStaffPassword: (staffId, newPassword) => ipcRenderer.invoke('update-staff-password', staffId, newPassword),
   deleteStaff: (staffId) => ipcRenderer.invoke('delete-staff', staffId),
   getStaff: () => ipcRenderer.invoke('get-staff'),
+  syncStaffToFirestore: () => ipcRenderer.invoke('sync-staff-to-firestore'),
   verifyStaffPin: (password) => ipcRenderer.invoke('verify-staff-pin', password),
   setStaffManager: (staffId, isManager, managerAuthPassword) =>
     ipcRenderer.invoke('set-staff-manager', staffId, isManager, managerAuthPassword),

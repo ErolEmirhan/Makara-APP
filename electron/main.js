@@ -261,13 +261,48 @@ function getSalesFirestore() {
   return salesFirestore || firestore;
 }
 
-/** Açık sipariş satırı iptali: Sultan'da tüm personel; Havzan (makara) müdür veya şef; Suriçi'de yalnız müdür */
+/** Açık sipariş satırı iptali: Sultan'da tüm personel; Havzan müdür/şef/admin/patron; Suriçi müdür/admin/patron */
 function staffHasTableOrderCancelRole(staff) {
   if (!staff) return false;
   if (activeBranchKey === 'sultansomati') return true;
-  if (staff.is_manager) return true;
-  if (activeBranchKey === 'makara' && staff.is_chef) return true;
+  if (staff.is_admin || staff.isAdmin) return true;
+  if (staff.is_boss || staff.isBoss) return true;
+  if (staff.is_manager || staff.isManager) return true;
+  if (activeBranchKey === 'makara' && (staff.is_chef || staff.isChef)) return true;
   return false;
+}
+
+async function resolveStaffForMobileCancel(staffId, pwaStaff = {}) {
+  if (staffId == null) return null;
+
+  let firestoreStaff = null;
+  if (firestore && firebaseGetDoc && firebaseDoc) {
+    try {
+      const snap = await firebaseGetDoc(firebaseDoc(firestore, 'staff', String(staffId)));
+      if (snap.exists()) {
+        const d = snap.data();
+        firestoreStaff = {
+          id: staffId,
+          is_manager: !!(d.is_manager || d.isManager),
+          is_chef: !!(d.is_chef || d.isChef),
+          is_admin: !!(d.is_admin || d.isAdmin),
+          is_boss: !!(d.is_boss || d.isBoss),
+        };
+      }
+    } catch (e) {
+      console.warn('Firestore personel rolü okunamadı:', e.message || e);
+    }
+  }
+
+  const local = findStaffById(staffId);
+  return {
+    ...(local || { id: staffId }),
+    ...(firestoreStaff || {}),
+    is_manager: !!(firestoreStaff?.is_manager || local?.is_manager || pwaStaff.is_manager),
+    is_chef: !!(firestoreStaff?.is_chef || local?.is_chef || pwaStaff.is_chef),
+    is_admin: !!(firestoreStaff?.is_admin || local?.is_admin || pwaStaff.is_admin),
+    is_boss: !!(firestoreStaff?.is_boss || local?.is_boss || pwaStaff.is_boss),
+  };
 }
 
 async function fetchFirestoreCancelsLastHours(branchKey, hours) {
@@ -2838,9 +2873,11 @@ async function cancelTableOrderItemInternal(
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
-  // Sultan: tümü; Havzan: müdür/şef; Suriçi: müdür
+  // Sultan: tümü; Havzan: müdür/şef/admin/patron; Suriçi: müdür/admin/patron
   if (staffId && activeBranchKey !== 'sultansomati') {
-    const staff = (db.staff || []).find((s) => s.id == staffId);
+    const staff = source === 'pwa'
+      ? await resolveStaffForMobileCancel(staffId, options.pwaStaff || {})
+      : findStaffById(staffId);
     if (!staffHasTableOrderCancelRole(staff)) {
       return { 
         success: false, 
@@ -3036,9 +3073,9 @@ ipcMain.handle('cancel-table-order-items-bulk', async (event, itemsToCancel, can
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
 
-  // Sultan: tümü; Havzan: müdür/şef; Suriçi: müdür
+  // Sultan: tümü; Havzan: müdür/şef/admin/patron; Suriçi: müdür/admin/patron
   if (staffId && activeBranchKey !== 'sultansomati') {
-    const staff = (db.staff || []).find(s => s.id === staffId);
+    const staff = findStaffById(staffId);
     if (!staffHasTableOrderCancelRole(staff)) {
       return { 
         success: false, 
@@ -19746,7 +19783,15 @@ async function processMobileActionPayload(data) {
         data.cancelQuantity || data.quantity,
         data.cancelReason || data.reason || '',
         data.staffId,
-        { source: 'pwa' }
+        {
+          source: 'pwa',
+          pwaStaff: {
+            is_manager: !!(data.staffIsManager || data.is_manager),
+            is_chef: !!(data.staffIsChef || data.is_chef),
+            is_admin: !!(data.staffIsAdmin || data.is_admin),
+            is_boss: !!(data.staffIsBoss || data.is_boss),
+          },
+        }
       );
       if (result.requiresReason) {
         return { requiresReason: true, message: result.error || 'İptal açıklaması gerekli' };

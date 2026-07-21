@@ -18626,6 +18626,15 @@ self.addEventListener('fetch', (event) => {
 
   // Vite PWA mobil personel arayüzü (mobile-pwa/dist)
   const mobilePwaDist = path.join(__dirname, '..', 'mobile-pwa', 'dist');
+
+  // Sultan Somatı kendine özel yerel mobil personel arayüzünü kullanır.
+  // Bu rota Vite PWA static middleware'inden önce olmalı; aksi halde
+  // paketlenmiş mobile-pwa/dist Sultan ekranını da ezerek Makara PWA'yı açar.
+  appExpress.get('/mobile', (req, res, next) => {
+    if (activeBranchKey !== 'sultansomati') return next();
+    return res.send(generateMobileHTML(serverURL, activeBranchKey));
+  });
+
   if (fs.existsSync(mobilePwaDist)) {
     appExpress.use('/mobile', express.static(mobilePwaDist, { index: 'index.html' }));
     appExpress.get('/mobile{*path}', (req, res) => {
@@ -19358,7 +19367,30 @@ function isIpAddress(host) {
 
 ipcMain.handle('generate-qr-code', async () => {
   try {
-    const serverURL = MOBILE_STAFF_PWA_URL;
+    let serverURL = MOBILE_STAFF_PWA_URL;
+    const usesLocalServer = activeBranchKey === 'sultansomati';
+
+    if (usesLocalServer) {
+      const preferred = db.settings && db.settings.mobilePreferredHost;
+      if (preferred) {
+        const host = isIpAddress(preferred) ? preferred : `${preferred}.local`;
+        serverURL = `http://${host}:${serverPort}/mobile`;
+      } else {
+        const interfaces = os.networkInterfaces();
+        let localIP = 'localhost';
+        for (const name of Object.keys(interfaces)) {
+          for (const iface of interfaces[name]) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+              localIP = iface.address;
+              break;
+            }
+          }
+          if (localIP !== 'localhost') break;
+        }
+        serverURL = `http://${localIP}:${serverPort}/mobile`;
+      }
+    }
+
     const qrCodeDataURL = await QRCode.toDataURL(serverURL, {
       width: 400,
       margin: 2,
@@ -19367,7 +19399,7 @@ ipcMain.handle('generate-qr-code', async () => {
         light: '#FFFFFF'
       }
     });
-    return { success: true, qrCode: qrCodeDataURL, url: serverURL };
+    return { success: true, qrCode: qrCodeDataURL, url: serverURL, usesLocalServer };
   } catch (error) {
     console.error('QR kod oluşturma hatası:', error);
     return { success: false, error: error.message };

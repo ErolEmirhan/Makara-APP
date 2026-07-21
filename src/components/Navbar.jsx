@@ -21,6 +21,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const mobileSplashTimerRef = useRef(null);
   const [qrCode, setQrCode] = useState(null);
   const [serverURL, setServerURL] = useState('');
+  const [qrUsesLocalServer, setQrUsesLocalServer] = useState(false);
   const [staffList, setStaffList] = useState([]);
   const [staffLoading, setStaffLoading] = useState(false);
   const [staffSyncing, setStaffSyncing] = useState(false);
@@ -162,6 +163,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       if (result && result.success) {
         setQrCode(result.qrCode);
         setServerURL(result.url);
+        setQrUsesLocalServer(!!result.usesLocalServer);
       } else {
         showToast('QR kod oluşturulamadı: ' + (result?.error || 'Bilinmeyen hata'), 'error');
       }
@@ -481,7 +483,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           >
             {systemTitle}
           </h1>
-          <p className="text-[11px] text-[#86868b] dark:text-[#a1a1a6] font-medium tabular-nums">v45.0</p>
+          <p className="text-[11px] text-[#86868b] dark:text-[#a1a1a6] font-medium tabular-nums">v120.0.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300 dark:border-slate-600 flex items-center gap-3">
           {typeof setThemeMode === 'function' && (
@@ -1162,7 +1164,9 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                             <svg className="h-4 w-4 shrink-0 text-zinc-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                             </svg>
-                            Personel QR ile mobil uygulamayı açar; kasa IP adresini uygulama içinde girer.
+                            {qrUsesLocalServer
+                              ? 'Sultan Somatı personel QR’ı bu kasanın açık yerel sunucusuna bağlanır.'
+                              : 'Makara personel QR’ı mobil web uygulamasını açar.'}
                           </p>
                         </>
                       ) : (

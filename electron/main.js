@@ -4639,7 +4639,7 @@ ipcMain.handle('create-product', (event, productData) => {
 });
 
 ipcMain.handle('update-product', async (event, productData) => {
-  const { id, name, category_id, price, image, description, gluten_free, per_person } = productData;
+  const { id, name, category_id, price, image, description, gluten_free, per_person, extraPrinters } = productData;
   
   const productIndex = db.products.findIndex(p => p.id === id);
   if (productIndex === -1) {
@@ -4669,6 +4669,11 @@ ipcMain.handle('update-product', async (event, productData) => {
   else delete next.gluten_free;
   if (per_person === true) next.per_person = true;
   else delete next.per_person;
+  
+  if (extraPrinters !== undefined) {
+    next.extraPrinters = extraPrinters;
+  }
+  
   db.products[productIndex] = next;
   
   saveDatabase();
@@ -5784,28 +5789,49 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
         return assignmentCategoryId === categoryIdNum;
       });
       
-      if (!assignment) {
-        console.warn(`   ⚠️ Kategori ID ${categoryId} için yazıcı ataması bulunamadı, atlanıyor`);
-        return; // Kategori ataması yoksa atla
-      }
-      
-      console.log(`   ✓ Yazıcı ataması bulundu: "${assignment.printerName}"`);
-      
-      // Yazıcı key'i oluştur (aynı yazıcıyı gruplamak için)
-      const printerKey = `${assignment.printerName}::${assignment.printerType}`;
-      
-      if (!printerGroupsMap.has(printerKey)) {
-        printerGroupsMap.set(printerKey, {
-          printerName: assignment.printerName,
-          printerType: assignment.printerType,
-          categories: []
+      categoryItems.forEach(item => {
+        const product = db.products.find(p => String(p.id) === String(item.id));
+        const extraPrinters = product?.extraPrinters || [];
+        
+        const printersForThisItem = [];
+        if (assignment) {
+          printersForThisItem.push({ printerName: assignment.printerName, printerType: assignment.printerType });
+        }
+        
+        extraPrinters.forEach(ep => {
+          if (!printersForThisItem.find(p => p.printerName === ep.printerName)) {
+            printersForThisItem.push({ printerName: ep.printerName, printerType: ep.printerType });
+          }
         });
-      }
-      
-      // Bu kategoriyi yazıcı grubuna ekle
-      printerGroupsMap.get(printerKey).categories.push({
-        categoryId,
-        items: categoryItems
+        
+        if (printersForThisItem.length === 0) {
+          console.warn(`   ⚠️ Item "${item.name}" (ID: ${item.id}) için yazıcı ataması yok, atlanıyor`);
+          return;
+        }
+        
+        printersForThisItem.forEach(pr => {
+          const printerKey = `${pr.printerName}::${pr.printerType}`;
+          
+          if (!printerGroupsMap.has(printerKey)) {
+            printerGroupsMap.set(printerKey, {
+              printerName: pr.printerName,
+              printerType: pr.printerType,
+              categories: []
+            });
+          }
+          
+          const group = printerGroupsMap.get(printerKey);
+          let catGroup = group.categories.find(c => c.categoryId === categoryId);
+          if (!catGroup) {
+            catGroup = {
+              categoryId,
+              items: []
+            };
+            group.categories.push(catGroup);
+          }
+          
+          catGroup.items.push(item);
+        });
       });
     });
     
@@ -7537,15 +7563,48 @@ function prepareAdisyonReceipts(items, adisyonData) {
       const cid = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
       return cid === categoryIdNum;
     });
-    if (!assignment) return;
-    const printerKey = `${assignment.printerName}::${assignment.printerType}`;
-    if (!printerGroupsMap.has(printerKey)) {
-      printerGroupsMap.set(printerKey, { printerName: assignment.printerName, printerType: assignment.printerType, categories: [] });
-    }
-    printerGroupsMap.get(printerKey).categories.push({
-      categoryId,
-      categoryName: categoryInfo.name,
-      items: categoryItems
+    
+    categoryItems.forEach(item => {
+      const product = db.products.find(p => String(p.id) === String(item.id));
+      const extraPrinters = product?.extraPrinters || [];
+      
+      const printersForThisItem = [];
+      if (assignment) {
+        printersForThisItem.push({ printerName: assignment.printerName, printerType: assignment.printerType });
+      }
+      
+      extraPrinters.forEach(ep => {
+        if (!printersForThisItem.find(p => p.printerName === ep.printerName)) {
+          printersForThisItem.push({ printerName: ep.printerName, printerType: ep.printerType });
+        }
+      });
+      
+      if (printersForThisItem.length === 0) return;
+      
+      printersForThisItem.forEach(pr => {
+        const printerKey = `${pr.printerName}::${pr.printerType}`;
+        
+        if (!printerGroupsMap.has(printerKey)) {
+          printerGroupsMap.set(printerKey, {
+            printerName: pr.printerName,
+            printerType: pr.printerType,
+            categories: []
+          });
+        }
+        
+        const group = printerGroupsMap.get(printerKey);
+        let catGroup = group.categories.find(c => c.categoryId === categoryId);
+        if (!catGroup) {
+          catGroup = {
+            categoryId,
+            categoryName: categoryInfo.name,
+            items: []
+          };
+          group.categories.push(catGroup);
+        }
+        
+        catGroup.items.push(item);
+      });
     });
   });
   printerGroupsMap.forEach((job) => {
@@ -7646,15 +7705,48 @@ function prepareAdisyonHtmlReceipts(items, adisyonData) {
       const cid = typeof a.category_id === 'string' ? parseInt(a.category_id) : a.category_id;
       return cid === categoryIdNum;
     });
-    if (!assignment) return;
-    const printerKey = `${assignment.printerName}::${assignment.printerType}`;
-    if (!printerGroupsMap.has(printerKey)) {
-      printerGroupsMap.set(printerKey, { printerName: assignment.printerName, printerType: assignment.printerType, categories: [] });
-    }
-    printerGroupsMap.get(printerKey).categories.push({
-      categoryId,
-      categoryName: categoryInfo.name,
-      items: categoryItems
+    
+    categoryItems.forEach(item => {
+      const product = db.products.find(p => String(p.id) === String(item.id));
+      const extraPrinters = product?.extraPrinters || [];
+      
+      const printersForThisItem = [];
+      if (assignment) {
+        printersForThisItem.push({ printerName: assignment.printerName, printerType: assignment.printerType });
+      }
+      
+      extraPrinters.forEach(ep => {
+        if (!printersForThisItem.find(p => p.printerName === ep.printerName)) {
+          printersForThisItem.push({ printerName: ep.printerName, printerType: ep.printerType });
+        }
+      });
+      
+      if (printersForThisItem.length === 0) return;
+      
+      printersForThisItem.forEach(pr => {
+        const printerKey = `${pr.printerName}::${pr.printerType}`;
+        
+        if (!printerGroupsMap.has(printerKey)) {
+          printerGroupsMap.set(printerKey, {
+            printerName: pr.printerName,
+            printerType: pr.printerType,
+            categories: []
+          });
+        }
+        
+        const group = printerGroupsMap.get(printerKey);
+        let catGroup = group.categories.find(c => c.categoryId === categoryId);
+        if (!catGroup) {
+          catGroup = {
+            categoryId,
+            categoryName: categoryInfo.name,
+            items: []
+          };
+          group.categories.push(catGroup);
+        }
+        
+        catGroup.items.push(item);
+      });
     });
   });
   printerGroupsMap.forEach((job) => {
@@ -7839,32 +7931,50 @@ async function printAdisyonByCategory(items, adisyonData) {
         
         let printerName, printerType;
         
-        if (assignment) {
-          printerName = assignment.printerName;
-          printerType = assignment.printerType;
-          console.log(`   ✓ Kategori "${categoryInfo.name}" (ID: ${categoryId}) için yazıcı bulundu: "${printerName}"`);
-        } else {
-          // Kategori ataması yoksa atla (kasa yazıcısına adisyon yazdırma)
-          console.warn(`   ⚠️ Kategori "${categoryInfo.name}" (ID: ${categoryId}) için yazıcı ataması yok, atlanıyor`);
-          return; // Kasa yazıcısına adisyon yazdırma
-        }
-        
-        // Yazıcı key'i oluştur (aynı yazıcıyı gruplamak için)
-        const printerKey = `${printerName}::${printerType}`;
-        
-        if (!printerGroupsMap.has(printerKey)) {
-          printerGroupsMap.set(printerKey, {
-            printerName,
-            printerType,
-            categories: []
+        categoryItems.forEach(item => {
+          const product = db.products.find(p => String(p.id) === String(item.id));
+          const extraPrinters = product?.extraPrinters || [];
+          
+          const printersForThisItem = [];
+          if (assignment) {
+            printersForThisItem.push({ printerName: assignment.printerName, printerType: assignment.printerType });
+          }
+          
+          extraPrinters.forEach(ep => {
+            if (!printersForThisItem.find(p => p.printerName === ep.printerName)) {
+              printersForThisItem.push({ printerName: ep.printerName, printerType: ep.printerType });
+            }
           });
-        }
-        
-        // Bu kategoriyi yazıcı grubuna ekle
-        printerGroupsMap.get(printerKey).categories.push({
-          categoryId,
-          categoryName: categoryInfo.name,
-          items: categoryItems
+          
+          if (printersForThisItem.length === 0) {
+            console.warn(`   ⚠️ Item "${item.name}" (ID: ${item.id}) için yazıcı ataması yok, atlanıyor`);
+            return;
+          }
+          
+          printersForThisItem.forEach(pr => {
+            const printerKey = `${pr.printerName}::${pr.printerType}`;
+            
+            if (!printerGroupsMap.has(printerKey)) {
+              printerGroupsMap.set(printerKey, {
+                printerName: pr.printerName,
+                printerType: pr.printerType,
+                categories: []
+              });
+            }
+            
+            const group = printerGroupsMap.get(printerKey);
+            let catGroup = group.categories.find(c => c.categoryId === categoryId);
+            if (!catGroup) {
+              catGroup = {
+                categoryId,
+                categoryName: categoryInfo.name,
+                items: []
+              };
+              group.categories.push(catGroup);
+            }
+            
+            catGroup.items.push(item);
+          });
         });
       });
       

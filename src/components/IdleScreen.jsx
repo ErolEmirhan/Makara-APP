@@ -102,7 +102,7 @@ const IdleScreen = ({
       </div>
 
       <div className="idle-stage">
-        <h1 className="idle-brand">MAKARA</h1>
+        <h1 className="idle-brand">{isSultanBranch ? 'SULTAN SOMATI' : 'MAKARA'}</h1>
 
         <time className="idle-clock" dateTime={now.toISOString()}>
           <span className="idle-clock__part">{h}</span>

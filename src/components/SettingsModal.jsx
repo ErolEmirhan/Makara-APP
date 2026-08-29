@@ -111,6 +111,11 @@ const SettingsModal = ({
   const [assigningCategory, setAssigningCategory] = useState(null);
   const [cashierPrinter, setCashierPrinter] = useState(null);
   const [selectedCategories, setSelectedCategories] = useState([]);
+  
+  // Product printer state
+  const [productPrinterModal, setProductPrinterModal] = useState(null); // { product, categoryPrinter, allPrinters }
+  const [selectedExtraPrinters, setSelectedExtraPrinters] = useState([]);
+  
   const [isOptimizingImages, setIsOptimizingImages] = useState(false);
   const [lastOptimizeResult, setLastOptimizeResult] = useState(null);
   const [showFirebaseImageModal, setShowFirebaseImageModal] = useState(false);
@@ -347,6 +352,65 @@ const SettingsModal = ({
     } catch (error) {
       console.error('Kasa yazıcısı ayarlama hatası:', error);
       showToast('Kasa yazıcısı ayarlanırken hata oluştu: ' + error.message, 'error');
+    }
+  };
+
+  const handleOpenProductPrinterModal = (product, categoryPrinter) => {
+    const allPrinters = [...printers.usb, ...printers.network].map(p => ({
+      name: p.name,
+      displayName: p.displayName,
+      type: printers.usb.some(u => u.name === p.name) ? 'usb' : 'network'
+    }));
+    setProductPrinterModal({ product, categoryPrinter, allPrinters });
+    
+    const currentExtras = product.extraPrinters || [];
+    setSelectedExtraPrinters(currentExtras.map(ep => `${ep.printerName}::${ep.printerType}`));
+  };
+
+  const handleCloseProductPrinterModal = () => {
+    setProductPrinterModal(null);
+    setSelectedExtraPrinters([]);
+  };
+
+  const toggleExtraPrinter = (printerKey) => {
+    setSelectedExtraPrinters(prev => 
+      prev.includes(printerKey) ? prev.filter(k => k !== printerKey) : [...prev, printerKey]
+    );
+  };
+
+  const saveProductPrinters = async () => {
+    if (!productPrinterModal) return;
+    const { product } = productPrinterModal;
+    
+    const extraPrinters = selectedExtraPrinters.map(key => {
+      const [name, type] = key.split('::');
+      return { printerName: name, printerType: type };
+    });
+    
+    try {
+      const result = await window.electronAPI.updateProduct({
+        id: product.id,
+        name: product.name,
+        category_id: product.category_id,
+        price: product.price,
+        image: product.image,
+        description: product.description,
+        gluten_free: product.gluten_free,
+        per_person: product.per_person,
+        extraPrinters
+      });
+      
+      if (result.success) {
+        showToast('Yazıcı atamaları kaydedildi', 'success');
+        await loadAllProducts(); // refresh product list
+        if (onProductsUpdated) onProductsUpdated();
+        handleCloseProductPrinterModal();
+      } else {
+        showToast('Hata: ' + result.error, 'error');
+      }
+    } catch (error) {
+      console.error('Ürün yazıcı ayarları güncellenirken hata:', error);
+      showToast('Bağlantı hatası', 'error');
     }
   };
 
@@ -2433,22 +2497,54 @@ const SettingsModal = ({
                             </div>
                             <p className="text-sm text-gray-500">{printer.description || 'Açıklama yok'}</p>
                             {assignedCategories.length > 0 ? (
-                              <div className="mt-1 flex flex-wrap gap-1">
-                                {assignedCategories.map(category => (
-                                  <span key={category.id} className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-pink-100 theme-sultan:bg-emerald-100 text-pink-800 theme-sultan:text-emerald-800 text-xs font-medium">
-                                    📋 {category.name}
-                                    <button
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        handleRemoveCategoryAssignment(category.id);
-                                      }}
-                                      className="hover:bg-pink-200 theme-sultan:hover:bg-pink-200 theme-sultan:bg-emerald-200 rounded px-1 transition-colors"
-                                      title="Kategori atamasını kaldır"
-                                    >
-                                      ✕
-                                    </button>
-                                </span>
-                                ))}
+                              <div className="mt-2 flex flex-col gap-2">
+                                {assignedCategories.map(category => {
+                                  const categoryProducts = products.filter(p => Number(p.category_id) === Number(category.id));
+                                  return (
+                                  <div key={category.id} className="w-full bg-pink-50 theme-sultan:bg-emerald-50 rounded-lg p-2 border border-pink-100 theme-sultan:border-emerald-100">
+                                    <div className="flex justify-between items-center mb-1">
+                                      <span className="inline-flex items-center gap-1 font-medium text-pink-800 theme-sultan:text-emerald-800">
+                                        📋 {category.name}
+                                      </span>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleRemoveCategoryAssignment(category.id);
+                                        }}
+                                        className="hover:bg-pink-200 theme-sultan:hover:bg-emerald-200 rounded px-1 text-pink-600 theme-sultan:text-emerald-600 transition-colors"
+                                        title="Kategori atamasını kaldır"
+                                      >
+                                        ✕
+                                      </button>
+                                    </div>
+                                    <div className="mt-1 space-y-1">
+                                      {categoryProducts.map(product => {
+                                        const extras = product.extraPrinters || [];
+                                        return (
+                                        <div key={product.id} className="flex justify-between items-center bg-white px-2 py-1.5 rounded border border-pink-100 theme-sultan:border-emerald-100 text-sm">
+                                          <span className="text-gray-700 font-medium">{product.name}</span>
+                                          <div className="flex items-center gap-2">
+                                            {extras.length > 0 && (
+                                              <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-md font-semibold">
+                                                +{extras.length} Yazıcı
+                                              </span>
+                                            )}
+                                            <button 
+                                              onClick={() => handleOpenProductPrinterModal(product, printer)} 
+                                              className="p-1 hover:bg-gray-100 rounded text-gray-500 transition-colors"
+                                              title="Birden fazla yazıcıya gönder"
+                                            >
+                                              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z" /></svg>
+                                            </button>
+                                          </div>
+                                        </div>
+                                      )})}
+                                      {categoryProducts.length === 0 && (
+                                        <div className="text-xs text-gray-500 italic px-1">Bu kategoride ürün yok</div>
+                                      )}
+                                    </div>
+                                  </div>
+                                )})}
                               </div>
                             ) : (
                               <p className="text-xs text-gray-400 mt-1">Kategori atanmamış</p>
@@ -2534,14 +2630,8 @@ const SettingsModal = ({
                 </label>
                 <div className="space-y-2 max-h-60 overflow-y-auto scrollbar-custom">
                   {categories.map(category => {
-                    // Tip uyumluluğu için number'a çevir
                     const categoryIdNum = Number(category.id);
-                    
-                    // Bu kategoriye zaten bir yazıcı atanmış mı kontrol et
-                    const existingAssignment = printerAssignments.find(a => {
-                      const assignmentCategoryId = Number(a.category_id);
-                      return assignmentCategoryId === categoryIdNum;
-                    });
+                    const existingAssignment = printerAssignments.find(a => Number(a.category_id) === categoryIdNum);
                     
                     const isAssignedToThisPrinter = existingAssignment && 
                       existingAssignment.printerName === selectedPrinter.name && 
@@ -2573,9 +2663,7 @@ const SettingsModal = ({
                               type="checkbox"
                               checked={isSelected}
                               onChange={() => {
-                                if (!isAssignedToOtherPrinter) {
-                                  toggleCategorySelection(categoryIdNum);
-                                }
+                                if (!isAssignedToOtherPrinter) toggleCategorySelection(categoryIdNum);
                               }}
                               disabled={isAssignedToOtherPrinter}
                               className="w-5 h-5 rounded border-2 border-gray-300 text-pink-600 theme-sultan:text-emerald-600 focus:ring-pink-600 theme-sultan:focus:ring-pink-600 theme-sultan:ring-emerald-600 focus:ring-2 cursor-pointer"
@@ -2614,14 +2702,117 @@ const SettingsModal = ({
                   className="flex-1 px-4 py-3 bg-gray-200 text-gray-700 rounded-xl hover:bg-gray-300 transition-all font-medium"
                 >
                   İptal
-                  </button>
-                    <button
+                </button>
+                <button
                   onClick={confirmCategoryAssignment}
                   disabled={assigningCategory}
                   className="flex-1 px-4 py-3 bg-pink-500 theme-sultan:bg-emerald-500 hover:bg-pink-600 theme-sultan:hover:bg-pink-600 theme-sultan:bg-emerald-600 text-white rounded-lg transition-all duration-200 font-medium shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {assigningCategory ? 'Atanıyor...' : 'Kategorileri Ata'}
-                    </button>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Product Extra Printers Modal */}
+      {productPrinterModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-md flex items-center justify-center z-[1000] animate-fade-in px-4">
+          <div className="bg-white rounded-2xl p-8 w-full max-w-md shadow-xl transform animate-scale-in relative overflow-hidden border border-gray-200">
+            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-indigo-500"></div>
+            
+            <button
+              onClick={handleCloseProductPrinterModal}
+              className="absolute top-6 right-6 w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center transition-all"
+            >
+              <svg className="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-br from-purple-500 to-indigo-500 rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm">
+                <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-1">Ürün Yazıcı Ayarları</h3>
+              <p className="text-lg font-semibold text-purple-600 mb-2">{productPrinterModal.product.name}</p>
+              <p className="text-sm text-gray-500">Bu ürünü ek yazıcılara da gönderebilirsiniz.</p>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Yazıcıları Seçin
+                </label>
+                <div className="space-y-2 max-h-60 overflow-y-auto scrollbar-custom">
+                  {productPrinterModal.allPrinters.map(p => {
+                    const isCategoryPrinter = p.name === productPrinterModal.categoryPrinter.name && p.type === printerSubTab;
+                    const printerKey = `${p.name}::${p.type}`;
+                    const isSelected = isCategoryPrinter || selectedExtraPrinters.includes(printerKey);
+                    
+                    return (
+                      <div
+                        key={printerKey}
+                        onClick={() => {
+                          if (!isCategoryPrinter) toggleExtraPrinter(printerKey);
+                        }}
+                        className={`w-full px-4 py-3 rounded-lg text-left transition-all cursor-pointer ${
+                          isCategoryPrinter 
+                            ? 'bg-gray-100 border-gray-300 text-gray-800 cursor-not-allowed opacity-80 border'
+                            : isSelected
+                            ? 'bg-purple-500 text-white border-purple-500 shadow-md'
+                            : 'bg-gray-50 hover:bg-purple-50 border border-gray-200 text-gray-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-3">
+                            <input
+                              type="checkbox"
+                              checked={isSelected}
+                              onChange={() => {
+                                if (!isCategoryPrinter) toggleExtraPrinter(printerKey);
+                              }}
+                              disabled={isCategoryPrinter}
+                              className={`w-5 h-5 rounded border-2 cursor-pointer ${
+                                isCategoryPrinter 
+                                  ? 'text-gray-500 border-gray-400' 
+                                  : 'text-purple-600 border-gray-300 focus:ring-purple-600'
+                              }`}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <div>
+                              <span className="font-medium block">{p.displayName || p.name}</span>
+                              <span className="text-xs opacity-75">{p.type === 'usb' ? 'USB' : 'Ethernet'}</span>
+                            </div>
+                          </div>
+                          {isCategoryPrinter && (
+                            <span className="text-[10px] bg-gray-500 text-white px-2 py-1 rounded-full uppercase tracking-wider font-bold">
+                              Kategori Yazıcısı
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+              
+              <div className="flex gap-3 pt-4 border-t border-gray-200">
+                <button
+                  onClick={handleCloseProductPrinterModal}
+                  className="flex-1 px-4 py-3 bg-gray-200 text-gray-700 rounded-xl hover:bg-gray-300 transition-all font-medium"
+                >
+                  İptal
+                </button>
+                <button
+                  onClick={saveProductPrinters}
+                  className="flex-1 px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-xl transition-all duration-200 font-medium shadow-sm hover:shadow-md"
+                >
+                  Kaydet
+                </button>
               </div>
             </div>
           </div>

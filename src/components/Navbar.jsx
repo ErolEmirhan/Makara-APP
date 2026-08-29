@@ -483,7 +483,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           >
             {systemTitle}
           </h1>
-          <p className="text-[11px] text-[#86868b] dark:text-[#a1a1a6] font-medium tabular-nums">v120.0.0</p>
+          <p className="text-[11px] text-[#86868b] dark:text-[#a1a1a6] font-medium tabular-nums">v500.0.0</p>
         </div>
         <div className="ml-4 pl-4 border-l border-gray-300 dark:border-slate-600 flex items-center gap-3">
           {typeof setThemeMode === 'function' && (

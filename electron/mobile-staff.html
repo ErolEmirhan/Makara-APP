@@ -4118,6 +4118,9 @@
         immClear.value = '';
       }
       selectedTable = null;
+      cart = [];
+      orderNote = '';
+      if (typeof updateCart === 'function') updateCart();
       document.getElementById('tableSelection').style.display = 'block';
       document.getElementById('tableTypeSelection').style.display = 'none';
       document.getElementById('orderSection').style.display = 'none';

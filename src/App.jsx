@@ -76,7 +76,7 @@ function App() {
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [receiptData, setReceiptData] = useState(null);
   const [selectedTable, setSelectedTable] = useState(null); // Masa seçimi
-  const [userType, setUserType] = useState('Personel'); // 'Admin' or 'Personel'
+  const [userType, setUserType] = useState('Admin'); // 'Admin' or 'Personel'
   const [activeRoleSplash, setActiveRoleSplash] = useState(null);
   const [saleSuccessInfo, setSaleSuccessInfo] = useState(null);
   const [printToast, setPrintToast] = useState(null); // { status: 'printing' | 'success' | 'error', message: string }

@@ -35,29 +35,21 @@ const CategoryPanel = ({ categories, selectedCategory, onSelectCategory, isSulta
       className="pos-catalog shrink-0 mb-3 w-full min-w-0 max-w-full"
       aria-label="Ürün kategorileri"
     >
-      <div className="flex items-baseline justify-between gap-3 mb-2.5 px-0.5 min-w-0">
-        <h2
-          className="font-semibold tracking-tight text-[var(--pos-text)] shrink-0"
-          style={{ fontSize: 'var(--pos-fs-input)' }}
-        >
+      <div className="mb-2 flex items-baseline justify-between gap-3 px-0.5">
+        <h2 className="shrink-0 text-[13px] font-semibold tracking-tight text-[var(--pos-text)]">
           Kategoriler
         </h2>
-        {selectedCategory?.name ? (
-          <p
-            className="truncate text-[var(--pos-text-secondary)] font-medium min-w-0 text-right"
-            style={{ fontSize: 'var(--pos-fs-meta)' }}
-          >
-            {selectedCategory.name}
-          </p>
-        ) : null}
+        <p className="truncate text-right text-[12px] font-medium text-[var(--pos-text-tertiary)]">
+          {visibleCategories.length} grup
+        </p>
       </div>
 
       <div className="pos-category-scroll-wrap">
         <div
           ref={railRef}
-          className="pos-category-rail flex gap-2 overflow-x-auto overflow-y-hidden pb-2 snap-x snap-mandatory touch-pan-x"
+          className="pos-category-rail flex touch-pan-x snap-x snap-mandatory gap-2 overflow-x-auto overflow-y-hidden pb-1"
           role="tablist"
-          aria-label="Kategori listesi — yatay kaydırın"
+          aria-label="Kategori listesi"
         >
           {visibleCategories.map((category) => {
             const isSelected = selectedCategory?.id === category.id;
@@ -70,33 +62,24 @@ const CategoryPanel = ({ categories, selectedCategory, onSelectCategory, isSulta
                 data-category-id={String(category.id)}
                 onClick={() => onSelectCategory(category)}
                 className={`
-                  snap-start shrink-0 flex-none min-h-[var(--pos-touch-min)] px-4 sm:px-5
-                  rounded-[var(--pos-radius-pill)] font-semibold
-                  transition-all duration-200 ease-out
-                  focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
-                  ${isSultanBranch ? 'focus-visible:ring-emerald-500' : 'focus-visible:ring-pink-500'}
+                  snap-start shrink-0 min-h-11 rounded-2xl border px-4 text-[13.5px] font-semibold
+                  transition duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2
+                  ${isSultanBranch ? 'focus-visible:ring-emerald-500' : 'focus-visible:ring-zinc-900'}
                   ${
                     isSelected
                       ? isSultanBranch
-                        ? 'bg-emerald-600 text-white shadow-[var(--pos-shadow-sm)]'
-                        : 'bg-[#1d1d1f] dark:bg-white text-white dark:text-[#1d1d1f] shadow-[var(--pos-shadow-sm)]'
-                      : 'bg-[var(--pos-surface-muted)] text-[var(--pos-text)] border border-[var(--pos-border)] hover:bg-[var(--pos-surface)] hover:border-[var(--pos-border-strong)]'
+                        ? 'border-emerald-700 bg-emerald-700 text-white shadow-[0_8px_20px_-12px_rgba(4,120,87,0.8)]'
+                        : 'border-zinc-900 bg-zinc-900 text-white shadow-[0_8px_20px_-12px_rgba(0,0,0,0.55)] dark:border-white dark:bg-white dark:text-zinc-900'
+                      : 'border-[var(--pos-border)] bg-[var(--pos-surface-elevated)] text-[var(--pos-text)] hover:border-[var(--pos-border-strong)]'
                   }
                 `}
-                style={{ fontSize: 'var(--pos-fs-category)', lineHeight: 1.25 }}
               >
-                <span className="whitespace-nowrap block">{category.name}</span>
+                <span className="block whitespace-nowrap">{category.name}</span>
               </button>
             );
           })}
         </div>
       </div>
-      <p
-        className="mt-1 text-[var(--pos-text-tertiary)] font-medium px-0.5 sm:hidden"
-        style={{ fontSize: 'var(--pos-fs-overline)' }}
-      >
-        Daha fazla kategori için sola-sağa kaydırın
-      </p>
     </section>
   );
 };

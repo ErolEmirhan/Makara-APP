@@ -95,7 +95,16 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   const [showAdisyonModal, setShowAdisyonModal] = useState(false);
   const [recentSales, setRecentSales] = useState([]);
   const [loadingRecentSales, setLoadingRecentSales] = useState(false);
+  const [loadingMoreAdisyon, setLoadingMoreAdisyon] = useState(false);
+  const [adisyonHasMore, setAdisyonHasMore] = useState(false);
+  const adisyonCursorRef = useRef(null);
+  const adisyonLoadingRef = useRef(false);
+  const adisyonHasMoreRef = useRef(false);
+  const adisyonListRef = useRef(null);
   const [selectedSaleForAdisyon, setSelectedSaleForAdisyon] = useState(null);
+  const [expandedAdisyonId, setExpandedAdisyonId] = useState(null);
+  const [selectedAdisyonIds, setSelectedAdisyonIds] = useState(() => new Set());
+  const [printingHistory, setPrintingHistory] = useState(false);
   const [expandedOrderIds, setExpandedOrderIds] = useState(() => new Set());
   const [adisyonLoadingOrderId, setAdisyonLoadingOrderId] = useState(null);
   const [prepareLoadingOrderId, setPrepareLoadingOrderId] = useState(null);
@@ -126,156 +135,6 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     }, 3000);
   };
 
-  const parseDateTime = useCallback((dateStr, timeStr) => {
-    if (!dateStr || !timeStr) return null;
-    try {
-      const [day, month, year] = dateStr.split('.');
-      const [hour, minute, second] = timeStr.split(':');
-      return new Date(year, month - 1, day, hour || 0, minute || 0, second || 0);
-    } catch (e) {
-      return null;
-    }
-  }, []);
-
-  /**
-   * Satışları MASA OTURUMUNA göre grupla.
-   *
-   * Gerçek çözüm: her `tableOrder` tam olarak **bir oturum**'u temsil eder
-   * (masa boştan doluya → doludan boşa). `pay-table-order-item`,
-   * `pay-table-order-items-bulk`, `create-partial-payment-sale` ve
-   * `complete-table-order` sale kayıtlarını `table_order_id` ile etiketler.
-   * Burada sadece `table_order_id` bazında grupluyoruz:
-   *  - Aynı `table_order_id` → tek adisyon
-   *  - Farklı oturum (masa kapandıktan sonra tekrar dolmuş) → farklı adisyon
-   *  - İptal edilen ürünler hiçbir sale'e yazılmaz → adisyona yansımaz
-   *
-   * Eski sale kayıtlarında (henüz `table_order_id` yoksa) güvenli geri dönüş:
-   * her bir satışı standalone göster (karışık session heuristik'i kaldırıldı;
-   * yanlış birleştirme, ciro açığı/fazlası yapmayacak).
-   */
-  const groupPartialPayments = useCallback((sales) => {
-    const sessionGroups = {};
-    const standalone = [];
-
-    const sortedSales = [...sales].sort((a, b) => {
-      const dtA = parseDateTime(a.sale_date, a.sale_time)?.getTime() ?? 0;
-      const dtB = parseDateTime(b.sale_date, b.sale_time)?.getTime() ?? 0;
-      return dtA - dtB; // eskiden yeniye
-    });
-
-    sortedSales.forEach((sale) => {
-      const tableOrderId = sale.table_order_id;
-      let key = null;
-      if (tableOrderId != null && tableOrderId !== '') {
-        // Birincil: gerçek oturum ID'si
-        key = `to_${tableOrderId}`;
-      } else if (sale.table_name && sale.sale_date && sale.sale_time) {
-        // İkincil (eski/legacy veriler için): aynı masa + birebir aynı
-        // tarih/saat → aynı kapanış/toplu ödeme anı → tek adisyon
-        key = `ts_${sale.table_name}|${sale.table_type || ''}|${sale.sale_date}|${sale.sale_time}`;
-      } else {
-        standalone.push(sale);
-        return;
-      }
-      if (!sessionGroups[key]) {
-        sessionGroups[key] = {
-          table_order_id: tableOrderId,
-          table_name: sale.table_name || null,
-          table_type: sale.table_type || null,
-          first_sale_date: sale.sale_date,
-          first_sale_time: sale.sale_time,
-          last_sale_date: sale.sale_date,
-          last_sale_time: sale.sale_time,
-          first_id: sale.id,
-          payment_methods: new Set(),
-          total_amount: 0,
-          items_array: [],
-          items_strings: [],
-          staff_names: new Set(),
-          original_sales: []
-        };
-      }
-      const g = sessionGroups[key];
-      g.last_sale_date = sale.sale_date;
-      g.last_sale_time = sale.sale_time;
-      g.total_amount += parseFloat(sale.total_amount || 0);
-      if (sale.payment_method) g.payment_methods.add(sale.payment_method);
-      if (sale.staff_name) g.staff_names.add(sale.staff_name);
-      if (Array.isArray(sale.items_array) && sale.items_array.length > 0) {
-        g.items_array.push(...sale.items_array);
-      } else if (sale.items) {
-        g.items_strings.push(sale.items);
-      }
-      g.original_sales.push(sale);
-    });
-
-    const groupedSales = Object.values(sessionGroups).map((g) => {
-      // Aynı oturum içinde aynı ürünü birleştir (product_id + price bazında)
-      let itemsText = '';
-      let mergedItems = [];
-      if (g.items_array.length > 0) {
-        const itemMap = {};
-        g.items_array.forEach((item) => {
-          const itemKey = `${item.product_id || item.product_name}_${item.price}`;
-          if (!itemMap[itemKey]) {
-            itemMap[itemKey] = {
-              product_id: item.product_id,
-              product_name: item.product_name,
-              price: item.price,
-              quantity: 0,
-              isGift: item.isGift || false
-            };
-          }
-          itemMap[itemKey].quantity += (Number(item.quantity) || 0);
-          if (item.isGift) itemMap[itemKey].isGift = true;
-        });
-        mergedItems = Object.values(itemMap).filter((x) => (Number(x.quantity) || 0) > 0);
-        itemsText = mergedItems
-          .map((item) => `${item.product_name} x${item.quantity}${item.isGift ? ' (İKRAM)' : ''}`)
-          .join(', ');
-      } else if (g.items_strings.length > 0) {
-        itemsText = g.items_strings.join(', ');
-      }
-
-      const paymentMethods = Array.from(g.payment_methods);
-      const paymentMethodText = paymentMethods.length > 1
-        ? `${paymentMethods.join(' + ')} (Toplam)`
-        : paymentMethods[0] || 'Bilinmiyor';
-
-      return {
-        id: g.first_id,
-        table_order_id: g.table_order_id,
-        table_name: g.table_name,
-        table_type: g.table_type,
-        sale_date: g.first_sale_date,
-        sale_time: g.first_sale_time,
-        last_sale_date: g.last_sale_date,
-        last_sale_time: g.last_sale_time,
-        payment_method: paymentMethodText,
-        total_amount: Math.round(g.total_amount * 100) / 100,
-        items: itemsText,
-        items_array: mergedItems,
-        staff_name: Array.from(g.staff_names).join(', ') || null,
-        isGrouped: g.original_sales.length > 1,
-        original_sales: g.original_sales
-      };
-    });
-
-    // Sonlandırılma (son ödeme) tarihine göre sırala; yeni olan önce
-    const allSales = [...groupedSales, ...standalone].sort((a, b) => {
-      const dateStrA = a.isGrouped && a.last_sale_date && a.last_sale_time
-        ? [a.last_sale_date, a.last_sale_time]
-        : [a.sale_date, a.sale_time];
-      const dateStrB = b.isGrouped && b.last_sale_date && b.last_sale_time
-        ? [b.last_sale_date, b.last_sale_time]
-        : [b.sale_date, b.sale_time];
-      const timeA = parseDateTime(dateStrA[0], dateStrA[1])?.getTime() ?? 0;
-      const timeB = parseDateTime(dateStrB[0], dateStrB[1])?.getTime() ?? 0;
-      return timeB - timeA;
-    });
-
-    return allSales;
-  }, [parseDateTime]);
 
   const insideCount = isSuriciBranch ? 20 : (isSultanBranch ? 20 : MAKARA_HAVZAN_MAIN_TABLE_COUNT);
   const insideTables = useMemo(() => Array.from({ length: insideCount }, (_, i) => ({
@@ -1136,9 +995,15 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   };
 
   // Kısmi ödeme modal'ını aç
-  const handlePartialPayment = () => {
-    setShowModal(false);
-    setShowPartialPaymentModal(true);
+  const handlePartialPayment = async () => {
+    if (selectedOrder && window.electronAPI?.getTableOrderItems) {
+      try {
+        const updatedItems = await window.electronAPI.getTableOrderItems(selectedOrder.id);
+        setOrderItems(updatedItems || []);
+      } catch (error) {
+        console.error('Kısmi ödeme kalemleri yenilenemedi:', error);
+      }
+    }
   };
 
   // Adisyon yazdır
@@ -1799,114 +1664,243 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   };
 
 
+  const loadAdisyonPage = useCallback(async (reset) => {
+    if (adisyonLoadingRef.current) return;
+    if (!reset && !adisyonHasMoreRef.current) return;
+    adisyonLoadingRef.current = true;
+    if (reset) setLoadingRecentSales(true);
+    else setLoadingMoreAdisyon(true);
+    try {
+      const page = await window.electronAPI.getAdisyonHistory(
+        reset ? null : adisyonCursorRef.current,
+        10
+      );
+      const items = page?.items || [];
+      adisyonHasMoreRef.current = !!page?.hasMore;
+      adisyonCursorRef.current = page?.nextCursor || null;
+      setAdisyonHasMore(!!page?.hasMore);
+      setRecentSales((prev) => (reset ? items : [...prev, ...items]));
+    } catch (error) {
+      console.error('Geçmiş adisyonlar yüklenemedi:', error);
+      showToast('Geçmiş adisyonlar yüklenemedi', 'error');
+    } finally {
+      adisyonLoadingRef.current = false;
+      setLoadingRecentSales(false);
+      setLoadingMoreAdisyon(false);
+    }
+  }, []);
+
+  const paymentTone = (label) => {
+    const text = String(label || '').toLocaleLowerCase('tr-TR');
+    if (text.includes('tutar')) return { chip: 'bg-violet-100 text-violet-700', wash: 'bg-violet-50', ink: 'text-violet-800', line: 'border-violet-200' };
+    if (text.includes('böl') || text.includes('bol')) return { chip: 'bg-sky-100 text-sky-700', wash: 'bg-sky-50', ink: 'text-sky-800', line: 'border-sky-200' };
+    if (text.includes('kapan')) return { chip: 'bg-amber-100 text-amber-800', wash: 'bg-amber-50', ink: 'text-amber-900', line: 'border-amber-200' };
+    if (text.includes('kıs') || text.includes('kis')) return { chip: 'bg-slate-100 text-slate-700', wash: 'bg-slate-50', ink: 'text-slate-900', line: 'border-slate-200' };
+    return { chip: 'bg-slate-100 text-slate-600', wash: 'bg-slate-50', ink: 'text-slate-900', line: 'border-slate-200' };
+  };
+
+  const methodTone = (method) => {
+    const text = String(method || '').toLocaleLowerCase('tr-TR');
+    if (text.includes('nakit')) return 'bg-emerald-100 text-emerald-700';
+    if (text.includes('kart')) return 'bg-sky-100 text-sky-700';
+    return 'bg-slate-100 text-slate-600';
+  };
+
+  const historyPaymentsOf = (sale) => {
+    if (Array.isArray(sale?.payments) && sale.payments.length) return sale.payments;
+    return [{
+      index: 1,
+      label: 'Ödeme',
+      method: sale?.payment_method || '',
+      amount: Number(sale?.total_amount) || 0,
+      items: (sale?.items_array || []).map((item) => ({
+        name: item.product_name,
+        quantity: item.quantity,
+        price: item.price,
+        isGift: !!item.isGift
+      }))
+    }];
+  };
+
+  const printHistoryAdisyon = async (sale, { quiet = false } = {}) => {
+    if (!sale) {
+      if (!quiet) showToast('Lütfen bir adisyon açın', 'warning');
+      return { success: false, error: 'Adisyon yok' };
+    }
+    if (!window.electronAPI?.printAdisyon) {
+      if (!quiet) showToast('Adisyon yazdırma özelliği kullanılamıyor', 'error');
+      return { success: false, error: 'Yazdırma kullanılamıyor' };
+    }
+    const payments = historyPaymentsOf(sale);
+    try {
+      if (!quiet) showToast('Adisyon yazdırılıyor...', 'info');
+      const result = await window.electronAPI.printAdisyon({
+        items: [],
+        paymentGroups: payments,
+        tableName: sale.table_name || null,
+        tableType: sale.table_type || null,
+        sale_date: sale.sale_date,
+        sale_time: sale.sale_time,
+        staff_name: sale.staff_name || null,
+        cashierOnly: true,
+        finalTotal: payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0)
+      });
+      if (!quiet) {
+        if (result.success) showToast('Adisyon yazdırıldı', 'success');
+        else showToast(result.error || 'Adisyon yazdırılamadı', 'error');
+      }
+      return result;
+    } catch (error) {
+      console.error('Adisyon yazdırılırken hata:', error);
+      if (!quiet) showToast('Adisyon yazdırılamadı: ' + error.message, 'error');
+      return { success: false, error: error.message };
+    }
+  };
+
+  const toggleAdisyonSelected = (saleId) => {
+    setSelectedAdisyonIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(saleId)) next.delete(saleId);
+      else next.add(saleId);
+      return next;
+    });
+  };
+
+  const printSelectedHistory = async () => {
+    const chosen = recentSales.filter((sale) => selectedAdisyonIds.has(sale.id));
+    if (!chosen.length) {
+      showToast('Yazdırmak için adisyon seçin', 'warning');
+      return;
+    }
+    setPrintingHistory(true);
+    showToast(`${chosen.length} adisyon art arda yazdırılıyor...`, 'info');
+    let ok = 0;
+    let firstError = '';
+    for (const sale of chosen) {
+      const result = await printHistoryAdisyon(sale, { quiet: true });
+      if (result?.success) ok += 1;
+      else if (!firstError) firstError = result?.error || 'Yazdırılamadı';
+    }
+    setPrintingHistory(false);
+    if (ok === chosen.length) showToast(`${ok} adisyon yazdırıldı`, 'success');
+    else showToast(`${ok}/${chosen.length} yazdırıldı: ${firstError}`, 'error');
+  };
+
+  const onAdisyonListScroll = (event) => {
+    const el = event.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 96) {
+      loadAdisyonPage(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showAdisyonModal || !adisyonHasMore || loadingRecentSales || loadingMoreAdisyon) return;
+    const el = adisyonListRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 96) {
+      loadAdisyonPage(false);
+    }
+  }, [showAdisyonModal, recentSales.length, adisyonHasMore, loadingRecentSales, loadingMoreAdisyon, loadAdisyonPage]);
+
   return (
     <div className="mb-4 max-w-[1600px] mx-auto">
-      {selectedType !== 'online' && !isSultanBranch && (
-        <TablesFloorHeader
-          title={pluralLabel}
-          subtitle={
-            isSuriciBranch
-              ? 'Üstte dolu kayıtlar, altta tüm müşteriler'
-              : 'Üstte dolu masalar, altta salon planı'
-          }
-          stats={
-            isSuriciBranch
-              ? [{ label: 'Toplam', filled: suriciFloorStats.all.filled, total: suriciFloorStats.all.total }]
-              : [
-                  { label: 'İç salon', filled: havzanFloorStats.inside.filled, total: havzanFloorStats.inside.total },
-                  ...(outsideTables.length > 0
-                    ? [{ label: 'Dış', filled: havzanFloorStats.outside.filled, total: havzanFloorStats.outside.total }]
-                    : []),
-                  { label: 'Paket', filled: havzanFloorStats.package.filled, total: havzanFloorStats.package.total },
-                ]
-          }
-        />
-      )}
-      <div className="flex flex-wrap justify-end gap-2 sm:gap-3 mb-5">
-        <div className="flex flex-wrap items-center justify-end gap-2 sm:gap-3">
+      <div className="mx-auto mb-6 flex w-fit max-w-full flex-wrap items-center justify-center rounded-full bg-white p-1.5 shadow-[0_10px_30px_-16px_rgba(15,23,42,0.35)] ring-1 ring-slate-200/80">
           {isSultanBranch && (
+            <>
             <button
               onClick={() => setShowReservationsModal(true)}
-              className="px-4 sm:px-5 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold rounded-xl transition-all duration-200 hover:shadow-md active:scale-[0.98] flex items-center gap-2 text-sm"
+              className="inline-flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-              </svg>
-              <span>Rezervasyonlar</span>
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500 text-white">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </span>
+              Rezervasyonlar
             </button>
+            <span className="flex h-8 w-5 shrink-0 items-center justify-center" aria-hidden>
+              <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-slate-300 to-transparent" />
+            </span>
+            </>
           )}
           <button
-            onClick={async () => {
+            onClick={() => {
               setShowAdisyonModal(true);
-              setLoadingRecentSales(true);
-              try {
-                const recent = await window.electronAPI.getRecentSales(12);
-                setRecentSales(groupPartialPayments(recent || []));
-              } catch (error) {
-                console.error('Son satışlar yüklenemedi:', error);
-                showToast('Son satışlar yüklenemedi', 'error');
-              } finally {
-                setLoadingRecentSales(false);
-              }
+              loadAdisyonPage(true);
             }}
-            className="px-4 sm:px-5 py-2.5 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-700 theme-sultan:hover:from-emerald-700 hover:to-pink-700 theme-sultan:hover:to-emerald-700 text-white font-bold rounded-xl transition-all duration-200 hover:shadow-md active:scale-[0.98] flex items-center gap-2 text-sm"
+            className="inline-flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <span>Geçmiş Adisyon</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-pink-500 text-white theme-sultan:bg-emerald-500">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </span>
+            Geçmiş Adisyon
           </button>
+          <span className="flex h-8 w-5 shrink-0 items-center justify-center" aria-hidden>
+            <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-slate-300 to-transparent" />
+          </span>
           <button
             onClick={() => setShowTransferModal(true)}
-            className="px-4 sm:px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl transition-all duration-200 hover:shadow-md active:scale-[0.98] flex items-center gap-2 text-sm"
+            className="inline-flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
-            </svg>
-            <span>{isSuriciBranch ? 'Müşteri Aktar' : 'Masa Aktar'}</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-900 text-white">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+              </svg>
+            </span>
+            {isSuriciBranch ? 'Müşteri Aktar' : 'Masa Aktar'}
           </button>
+          <span className="flex h-8 w-5 shrink-0 items-center justify-center" aria-hidden>
+            <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-slate-300 to-transparent" />
+          </span>
           <button
             onClick={() => setShowMergeModal(true)}
-            className="px-4 sm:px-5 py-2.5 bg-white border-2 border-slate-200 text-slate-800 hover:border-pink-400 theme-sultan:hover:border-emerald-400 hover:bg-pink-50/50 theme-sultan:hover:bg-emerald-50/50 font-bold rounded-xl transition-all duration-200 active:scale-[0.98] flex items-center gap-2 text-sm shadow-sm"
+            className="inline-flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
-            </svg>
-            <span>{isSuriciBranch ? 'Müşteri Birleştir' : 'Masa Birleştir'}</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-slate-800">
+              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+              </svg>
+            </span>
+            {isSuriciBranch ? 'Müşteri Birleştir' : 'Masa Birleştir'}
           </button>
-        </div>
       </div>
 
       {/* Masa Tipi Seçimi: Masalar / Online — Sultan Somatı'nda yalnızca masalar (online yok) */}
       {!isSultanBranch && (
-        <div className="flex justify-center gap-3 mb-6 p-1.5 rounded-2xl bg-slate-100/80 border border-slate-200/80 w-fit mx-auto">
+        <div className="mx-auto mb-6 flex w-fit items-center rounded-full bg-slate-100 p-1">
           <button
+            type="button"
             onClick={() => setSelectedType('inside')}
-            className={`relative px-6 sm:px-8 py-3 rounded-xl text-base font-semibold transition-all duration-200 flex items-center gap-3 ${
+            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${
               selectedType === 'inside'
-                ? 'bg-white text-slate-900 shadow-md ring-1 ring-slate-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-500 hover:text-slate-900'
             }`}
           >
-            <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5h7v7H4V5zm9 0h7v7h-7V5zM4 14h7v5H4v-5zm9 0h7v5h-7v-5z" />
             </svg>
             <span>{pluralLabel}</span>
           </button>
           <button
+            type="button"
             onClick={() => setSelectedType('online')}
-            className={`relative px-6 sm:px-8 py-3 rounded-xl text-base font-semibold transition-all duration-200 flex items-center gap-3 ${
+            className={`inline-flex items-center gap-2 rounded-full px-5 py-2 text-sm font-semibold transition ${
               selectedType === 'online'
-                ? 'bg-white text-slate-900 shadow-md ring-1 ring-slate-200/80'
-                : 'text-slate-600 hover:text-slate-900'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-500 hover:text-slate-900'
             }`}
           >
-            <svg className="w-7 h-7 opacity-90" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
             </svg>
             <span>Online</span>
             {unseenOnlineOrdersCount > 0 && (
-              <span className="absolute -top-2 -right-2 min-w-[26px] h-[26px] px-1.5 bg-red-600 text-white text-sm font-medium rounded-full flex items-center justify-center">
+              <span className={`inline-flex min-w-[1.25rem] items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-bold tabular-nums ${
+                selectedType === 'online' ? 'bg-white text-slate-900' : 'bg-red-600 text-white'
+              }`}>
                 {unseenOnlineOrdersCount > 99 ? '99+' : unseenOnlineOrdersCount}
               </span>
             )}
@@ -2345,11 +2339,13 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         </div>
       ) : (
         <>
-          <OccupiedTablesPanel
-            groups={occupiedTableGroups}
-            onTableClick={handleTableClick}
-            title={isSuriciBranch ? 'Dolu müşteriler' : 'Dolu masalar'}
-          />
+          {(isSultanBranch || isSuriciBranch) && (
+            <OccupiedTablesPanel
+              groups={occupiedTableGroups}
+              onTableClick={handleTableClick}
+              title={isSuriciBranch ? 'Dolu müşteriler' : 'Dolu masalar'}
+            />
+          )}
 
           {isSultanBranch ? (
             <div className="space-y-6 mb-6">
@@ -2428,83 +2424,94 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
               </div>
             </TablesSectionBlock>
           ) : (
-            <>
-              <TablesSectionBlock
-                title="İç salon"
-                filled={havzanFloorStats.inside.filled}
-                total={havzanFloorStats.inside.total}
-                icon={
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
-                  </svg>
-                }
-              >
-                <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2 md:gap-2.5">
-                  {insideTables.map((table) => (
-                    <TableGridCard
-                      key={table.id}
-                      table={table}
-                      order={getTableOrder(table.id)}
-                      variant="compact"
-                      onClick={() => handleTableClick(table)}
-                    />
-                  ))}
-                </div>
-              </TablesSectionBlock>
+            <div className="ml-[calc(50%-50vw)] w-screen max-w-[100vw] px-6">
+              <OccupiedTablesPanel
+                groups={occupiedTableGroups}
+                onTableClick={handleTableClick}
+                title="Dolu masalar"
+                centered
+              />
+              <div className="flex items-start justify-between gap-8">
+              <div className="shrink-0">
+                <TablesSectionBlock
+                  title="İç salon"
+                  filled={havzanFloorStats.inside.filled}
+                  total={havzanFloorStats.inside.total}
+                  icon={
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" />
+                    </svg>
+                  }
+                >
+                  <div className="grid w-max grid-cols-[repeat(10,8.75rem)] gap-3">
+                    {insideTables.map((table) => (
+                      <TableGridCard
+                        key={table.id}
+                        table={table}
+                        order={getTableOrder(table.id)}
+                        variant="compact"
+                        onClick={() => handleTableClick(table)}
+                      />
+                    ))}
+                  </div>
+                </TablesSectionBlock>
 
-              {outsideTables.length > 0 && (
-                <>
-                  <TablesFloorDivider />
-                  <TablesSectionBlock
-                    title="Dış salon"
-                    filled={havzanFloorStats.outside.filled}
-                    total={havzanFloorStats.outside.total}
-                    icon={
-                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-                      </svg>
-                    }
-                  >
-                    <div className="grid grid-cols-5 sm:grid-cols-8 md:grid-cols-10 gap-2 md:gap-2.5">
-                      {outsideTables.map((table) => (
-                        <TableGridCard
-                          key={table.id}
-                          table={table}
-                          order={getTableOrder(table.id)}
-                          variant="compact"
-                          onClick={() => handleTableClick(table)}
-                        />
-                      ))}
-                    </div>
-                  </TablesSectionBlock>
-                </>
-              )}
+                {outsideTables.length > 0 && (
+                  <>
+                    <TablesFloorDivider />
+                    <TablesSectionBlock
+                      title="Dış salon"
+                      filled={havzanFloorStats.outside.filled}
+                      total={havzanFloorStats.outside.total}
+                      icon={
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
+                        </svg>
+                      }
+                    >
+                      <div className="grid w-max grid-cols-[repeat(10,8.75rem)] gap-3">
+                        {outsideTables.map((table) => (
+                          <TableGridCard
+                            key={table.id}
+                            table={table}
+                            order={getTableOrder(table.id)}
+                            variant="compact"
+                            onClick={() => handleTableClick(table)}
+                          />
+                        ))}
+                      </div>
+                    </TablesSectionBlock>
+                  </>
+                )}
+              </div>
 
-              <TablesSectionBlock
-                title="Paket masaları"
-                filled={havzanFloorStats.package.filled}
-                total={havzanFloorStats.package.total}
-                className="mt-2"
-                icon={
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
-                  </svg>
-                }
-              >
-                <div className="grid grid-cols-3 sm:grid-cols-5 gap-2.5 md:gap-3 max-w-3xl mx-auto">
-                  {packageTables.map((table) => (
-                    <TableGridCard
-                      key={table.id}
-                      table={table}
-                      order={getTableOrder(table.id)}
-                      variant="large"
-                      showPackageIcon
-                      onClick={() => handleTableClick(table)}
-                    />
-                  ))}
-                </div>
-              </TablesSectionBlock>
-            </>
+              <aside className="ml-auto w-max shrink-0 sticky top-3 self-start max-h-[calc(100vh-7.5rem)] overflow-y-auto">
+                <TablesSectionBlock
+                  title="Paket masaları"
+                  filled={havzanFloorStats.package.filled}
+                  total={havzanFloorStats.package.total}
+                  className="mb-0"
+                  icon={
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                    </svg>
+                  }
+                >
+                  <div className="grid grid-cols-[repeat(2,8.75rem)] gap-3">
+                    {packageTables.map((table) => (
+                      <TableGridCard
+                        key={table.id}
+                        table={table}
+                        order={getTableOrder(table.id)}
+                        variant="compact"
+                        onClick={() => handleTableClick(table)}
+                      />
+                    ))}
+                  </div>
+                </TablesSectionBlock>
+              </aside>
+              </div>
+            </div>
           )}
         </>
       )}
@@ -2542,6 +2549,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
           }}
           onCompleteTable={handleCompleteTable}
           onPartialPayment={handlePartialPayment}
+          onPartialComplete={handleCompletePartialPayment}
           onItemCancelled={async () => {
             // Ürün iptal edildiğinde sipariş detaylarını yenile
             if (selectedOrder && window.electronAPI && window.electronAPI.getTableOrderItems) {
@@ -2620,174 +2628,159 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
 
       {/* Geçmiş Adisyon Modal */}
       {showAdisyonModal && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in">
-          <div className="bg-white backdrop-blur-xl border border-pink-200 theme-sultan:border-emerald-200 rounded-3xl p-8 max-w-4xl w-full mx-4 shadow-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-3xl font-bold gradient-text">Geçmiş Adisyon İste</h2>
-              <button
-                onClick={() => {
-                  setShowAdisyonModal(false);
-                  setSelectedSaleForAdisyon(null);
-                  setRecentSales([]);
-                }}
-                className="text-gray-500 hover:text-gray-700 transition-colors p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4 animate-fade-in">
+          <div className="flex max-h-[min(92vh,880px)] w-full max-w-3xl flex-col overflow-hidden rounded-[28px] bg-[#f6f7f9] shadow-[0_30px_80px_-24px_rgba(15,23,42,0.45)]">
+            <div className="flex items-center justify-between border-b border-slate-200/80 bg-white px-6 py-5">
+              <div className="flex items-center gap-3">
+                <span className="h-9 w-1.5 rounded-full bg-slate-900" />
+                <div>
+                  <h2 className="text-2xl font-black tracking-tight text-slate-900">Geçmiş adisyon</h2>
+                  <p className="mt-0.5 text-sm text-slate-500">Oku açınca fiş gibi, ödeme ödeme dökülür.</p>
+                </div>
+              </div>
+              <div className="flex items-center">
+                <button
+                  onClick={() => {
+                    setShowAdisyonModal(false);
+                    setSelectedSaleForAdisyon(null);
+                    setExpandedAdisyonId(null);
+                    setSelectedAdisyonIds(new Set());
+                    setRecentSales([]);
+                  }}
+                  className="flex h-10 w-10 items-center justify-center rounded-2xl text-slate-500 transition hover:bg-slate-100"
+                  aria-label="Kapat"
+                >
+                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              </div>
             </div>
-            <p className="text-gray-600 mb-6">Son 12 saatin satış geçmişi:</p>
-            {loadingRecentSales ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="w-12 h-12 border-4 border-pink-600 theme-sultan:border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+            {loadingRecentSales && recentSales.length === 0 ? (
+              <div className="flex flex-1 items-center justify-center py-16">
+                <div className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-slate-900"></div>
               </div>
             ) : recentSales.length === 0 ? (
-              <div className="text-center py-12">
-                <p className="text-gray-600">Son 12 saatte satış bulunamadı.</p>
-              </div>
+              <div className="flex flex-1 items-center justify-center py-16 text-sm text-slate-500">Kayıtlı adisyon yok.</div>
             ) : (
-              <>
-                <div className="space-y-3 max-h-96 overflow-y-auto mb-6">
-                  {recentSales.map((sale) => (
-                    <div
-                      key={sale.id}
-                      className={`p-4 rounded-xl border-2 transition-all cursor-pointer ${
-                        selectedSaleForAdisyon?.id === sale.id
-                          ? 'bg-gradient-to-r from-pink-50 theme-sultan:from-emerald-50 to-pink-50 theme-sultan:to-emerald-50 border-pink-500 theme-sultan:border-emerald-500'
-                          : 'bg-gray-50 border-gray-200 hover:border-pink-400 theme-sultan:hover:border-pink-400 theme-sultan:border-emerald-400'
-                      }`}
-                      onClick={() => setSelectedSaleForAdisyon(sale)}
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                          <div className="flex items-center space-x-3 mb-2">
-                            <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                              sale.payment_method && sale.payment_method.includes('Nakit')
-                                ? 'bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500'
-                                : sale.payment_method && sale.payment_method.includes('Kredi Kartı')
-                                ? 'bg-gradient-to-r from-blue-500 to-cyan-500'
-                                : sale.isGrouped
-                                ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500'
-                                : 'bg-gradient-to-r from-gray-500 to-gray-600'
-                            }`}>
-                              {sale.payment_method && sale.payment_method.includes('Nakit') ? (
-                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                                </svg>
-                              ) : sale.payment_method && sale.payment_method.includes('Kredi Kartı') ? (
-                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                                </svg>
-                              ) : sale.isGrouped ? (
-                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                                </svg>
-                              ) : (
-                                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                                </svg>
-                              )}
+              <div ref={adisyonListRef} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4" onScroll={onAdisyonListScroll}>
+                {recentSales.map((sale) => {
+                  const open = expandedAdisyonId === sale.id;
+                  const picked = selectedAdisyonIds.has(sale.id);
+                  const payments = historyPaymentsOf(sale);
+                  const sessionTotal = payments.reduce((sum, payment) => sum + (Number(payment.amount) || 0), 0);
+                  const when = sale.isGrouped && sale.last_sale_date && sale.last_sale_time
+                    ? `${sale.sale_date} ${sale.sale_time} – ${sale.last_sale_date} ${sale.last_sale_time}`
+                    : `${sale.sale_date} ${sale.sale_time}`;
+                  return (
+                    <article key={sale.id} className={`overflow-hidden rounded-2xl border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.04)] ${picked ? 'border-slate-900' : 'border-slate-200/90'}`}>
+                      <div className="flex items-center gap-3 px-4 py-3">
+                        <button
+                          type="button"
+                          aria-pressed={picked}
+                          aria-label={picked ? 'Seçimi kaldır' : 'Adisyonu seç'}
+                          onClick={() => toggleAdisyonSelected(sale.id)}
+                          className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full border-2 transition ${picked ? 'border-slate-900 bg-slate-900 text-white' : 'border-slate-300 bg-white hover:border-slate-500'}`}
+                        >
+                          {picked && (
+                            <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                            </svg>
+                          )}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="truncate text-base font-black tracking-tight text-slate-900">{sale.table_name || 'Hızlı satış'}</p>
+                            {payments.length > 1 && (
+                              <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-bold text-slate-600">{payments.length} ödeme</span>
+                            )}
+                          </div>
+                          <p className="mt-0.5 truncate text-xs text-slate-500">
+                            {when}
+                            {sale.staff_name ? ` · ${sale.staff_name}` : ''}
+                          </p>
+                        </div>
+                        <p className="shrink-0 text-lg font-black tabular-nums tracking-tight text-slate-900">₺{sessionTotal.toFixed(2)}</p>
+                        <button
+                          type="button"
+                          aria-label={open ? 'Adisyonu kapat' : 'Adisyonu aç'}
+                          onClick={() => {
+                            setExpandedAdisyonId(open ? null : sale.id);
+                            setSelectedSaleForAdisyon(open ? null : sale);
+                          }}
+                          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition ${open ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                        >
+                          <svg className={`h-5 w-5 transition ${open ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M19 9l-7 7-7-7" />
+                          </svg>
+                        </button>
+                      </div>
+                      {open && (
+                        <div className="border-t border-slate-100 bg-slate-50/80 px-4 py-4">
+                          <div className="mx-auto max-w-md overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
+                            <div className="border-b border-dashed border-slate-200 px-4 py-3 text-center">
+                              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Adisyon</p>
+                              <p className="mt-0.5 text-lg font-black text-slate-900">{sale.table_name || 'Hızlı satış'}</p>
                             </div>
-                            <div className="flex-1">
-                              <p className="font-bold text-gray-800">
-                                {sale.table_name ? sale.table_name : 'Hızlı Satış'}
-                                {sale.isGrouped && (
-                                  <span className="ml-2 text-xs font-normal text-pink-600 theme-sultan:text-emerald-600 bg-pink-100 theme-sultan:bg-emerald-100 px-2 py-0.5 rounded">(Kısmi Ödemeler)</span>
-                                )}
-                              </p>
-                              <p className="text-sm text-gray-600">
-                                {sale.isGrouped && sale.last_sale_date && sale.last_sale_time
-                                  ? `${sale.sale_date} ${sale.sale_time} - ${sale.last_sale_date} ${sale.last_sale_time}`
-                                  : `${sale.sale_date} ${sale.sale_time}`}
-                                {sale.staff_name && ` • ${sale.staff_name}`}
-                              </p>
+                            <div className="px-4 py-4">
+                            {(payments.length ? payments : []).map((payment) => {
+                              const tone = paymentTone(payment.label);
+                              return (
+                              <div key={payment.index} className="mb-3 rounded-xl border border-slate-200 bg-white px-3 py-2.5">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-black ${tone.chip}`}>{payment.index}. ödeme</span>
+                                  {payment.label && <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${tone.chip}`}>{payment.label}</span>}
+                                  {payment.method && <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${methodTone(payment.method)}`}>{payment.method}</span>}
+                                </div>
+                                {(payment.items || []).map((item, itemIndex) => {
+                                  const line = item.isGift ? 0 : (Number(item.price) || 0) * (Number(item.quantity) || 0);
+                                  return (
+                                    <div key={`${payment.index}-${itemIndex}`} className="mt-1.5 flex items-baseline justify-between gap-3 text-sm text-slate-800">
+                                      <span className="min-w-0">{item.quantity}× {item.name}{item.isGift ? ' · ikram' : ''}</span>
+                                      <span className="shrink-0 font-semibold tabular-nums">₺{line.toFixed(2)}</span>
+                                    </div>
+                                  );
+                                })}
+                                <div className="mt-2 flex items-baseline justify-between gap-3 border-t border-slate-200 pt-1.5 text-lg font-black tracking-tight text-slate-900">
+                                  <span>Ödeme {payment.index}</span>
+                                  <span className="tabular-nums">₺{Number(payment.amount || 0).toFixed(2)}</span>
+                                </div>
+                              </div>
+                              );
+                            })}
+                            <div className="mt-1 flex items-baseline justify-between rounded-xl bg-slate-900 px-3 py-2.5 text-white">
+                              <span className="text-sm font-black uppercase tracking-wide">Toplam</span>
+                              <span className="text-lg font-black tabular-nums">₺{sessionTotal.toFixed(2)}</span>
+                            </div>
                             </div>
                           </div>
-                          <p className="text-sm text-gray-500 mt-2">{sale.items || 'Ürün bulunamadı'}</p>
                         </div>
-                        <div className="text-right ml-4">
-                          <p className="text-2xl font-bold text-pink-600 theme-sultan:text-emerald-600">₺{sale.total_amount?.toFixed(2) || '0.00'}</p>
-                          <p className="text-xs text-gray-500 mt-1">{sale.payment_method}</p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                <div className="flex items-center justify-end space-x-4">
-                  <button
-                    onClick={() => {
-                      setShowAdisyonModal(false);
-                      setSelectedSaleForAdisyon(null);
-                      setRecentSales([]);
-                    }}
-                    className="px-6 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold rounded-xl transition-all"
-                  >
-                    İptal
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (!selectedSaleForAdisyon) {
-                        showToast('Lütfen bir satış seçin', 'warning');
-                        return;
-                      }
-                      if (!window.electronAPI?.printAdisyon) {
-                        showToast('Adisyon yazdırma özelliği kullanılamıyor', 'error');
-                        return;
-                      }
-                      try {
-                        showToast('Adisyon yazdırılıyor...', 'info');
-                        const adisyonItems = (selectedSaleForAdisyon.items_array || []).map(item => ({
-                          id: item.product_id,
-                          name: item.product_name,
-                          quantity: item.quantity,
-                          price: item.price,
-                          isGift: item.isGift || false,
-                          staff_name: item.staff_name || null
-                        }));
-                        const saleDate = selectedSaleForAdisyon.isGrouped && selectedSaleForAdisyon.last_sale_date
-                          ? selectedSaleForAdisyon.last_sale_date
-                          : selectedSaleForAdisyon.sale_date;
-                        const saleTime = selectedSaleForAdisyon.isGrouped && selectedSaleForAdisyon.last_sale_time
-                          ? selectedSaleForAdisyon.last_sale_time
-                          : selectedSaleForAdisyon.sale_time;
-                        const adisyonData = {
-                          items: adisyonItems,
-                          tableName: selectedSaleForAdisyon.table_name || null,
-                          tableType: selectedSaleForAdisyon.table_type || null,
-                          orderNote: selectedSaleForAdisyon.isGrouped
-                            ? `Kısmi Ödemeler (${selectedSaleForAdisyon.original_sales?.length || 0} ödeme)`
-                            : null,
-                          sale_date: saleDate,
-                          sale_time: saleTime,
-                          staff_name: selectedSaleForAdisyon.staff_name || null,
-                          cashierOnly: true
-                        };
-                        const result = await window.electronAPI.printAdisyon(adisyonData);
-                        if (result.success) {
-                          showToast('Adisyon yazdırıldı', 'success');
-                          setShowAdisyonModal(false);
-                          setSelectedSaleForAdisyon(null);
-                          setRecentSales([]);
-                        } else {
-                          showToast(result.error || 'Adisyon yazdırılamadı', 'error');
-                        }
-                      } catch (error) {
-                        console.error('Adisyon yazdırılırken hata:', error);
-                        showToast('Adisyon yazdırılamadı: ' + error.message, 'error');
-                      }
-                    }}
-                    disabled={!selectedSaleForAdisyon}
-                    className={`px-6 py-3 rounded-xl font-bold text-white transition-all ${
-                      selectedSaleForAdisyon
-                        ? 'bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 shadow-lg hover:shadow-xl'
-                        : 'bg-gray-300 cursor-not-allowed'
-                    }`}
-                  >
-                    Adisyon Yazdır
-                  </button>
-                </div>
-              </>
+                      )}
+                    </article>
+                  );
+                })}
+                {loadingMoreAdisyon && (
+                  <div className="flex items-center justify-center py-3">
+                    <div className="h-6 w-6 animate-spin rounded-full border-2 border-slate-200 border-t-slate-900"></div>
+                  </div>
+                )}
+                {!adisyonHasMore && recentSales.length > 0 && (
+                  <p className="py-2 text-center text-xs text-slate-400">Tüm adisyonlar yüklendi</p>
+                )}
+              </div>
+            )}
+            {recentSales.length > 0 && (
+              <div className="flex items-center justify-between gap-3 border-t border-slate-200 bg-white px-5 py-4">
+                <span className="text-sm font-semibold text-slate-500">{selectedAdisyonIds.size} seçili</span>
+                <button
+                  type="button"
+                  onClick={printSelectedHistory}
+                  disabled={selectedAdisyonIds.size === 0 || printingHistory}
+                  className="rounded-xl bg-slate-900 px-6 py-3 text-sm font-black text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {printingHistory ? 'Yazdırılıyor...' : 'Yazdır'}
+                </button>
+              </div>
             )}
           </div>
         </div>

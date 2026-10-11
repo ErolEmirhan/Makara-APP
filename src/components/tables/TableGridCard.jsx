@@ -22,10 +22,10 @@ const TableGridCard = ({
   };
 
   const numberSize = {
-    compact: 'text-lg md:text-xl',
-    default: 'text-xl md:text-2xl',
-    large: 'text-2xl md:text-3xl',
-    surici: 'text-xl md:text-2xl',
+    compact: 'text-3xl md:text-4xl',
+    default: 'text-4xl md:text-5xl',
+    large: 'text-5xl md:text-6xl',
+    surici: 'text-3xl md:text-4xl',
   };
 
   const baseBtn =
@@ -58,7 +58,7 @@ const TableGridCard = ({
       )}
 
       {variant === 'surici' && isOccupied ? (
-        <span className="text-xs md:text-sm font-bold text-center leading-tight line-clamp-3 px-0.5 break-words w-full">
+        <span className="w-full break-words px-0.5 text-center text-lg font-black leading-tight line-clamp-3 md:text-xl">
           {displayName}
         </span>
       ) : (
@@ -82,7 +82,7 @@ const TableGridCard = ({
           <span
             className={`font-black tabular-nums leading-none tracking-tight ${
               numberSize[variant] || numberSize.default
-            } ${isOccupied ? 'text-white' : 'text-slate-600'}`}
+            } ${isOccupied ? 'text-white' : 'text-slate-900'}`}
           >
             {table.number}
           </span>

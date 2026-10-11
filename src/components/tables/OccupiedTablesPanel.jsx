@@ -8,6 +8,7 @@ const OccupiedTablesPanel = ({
   groups = [],
   onTableClick,
   title = 'Dolu masalar',
+  centered = false,
 }) => {
   const totalCount = groups.reduce((sum, g) => sum + (g.items?.length || 0), 0);
 
@@ -49,17 +50,22 @@ const OccupiedTablesPanel = ({
                 </div>
                 <div
                   className={
-                    group.gridClass ||
-                    'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2 md:gap-2.5'
+                    centered
+                      ? 'grid w-full justify-start gap-3'
+                      : (group.gridClass ||
+                        'grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-2 md:gap-2.5')
                   }
+                  style={centered ? {
+                    gridTemplateColumns: 'repeat(auto-fill, 8.75rem)',
+                  } : undefined}
                 >
                   {group.items.map(({ table, order }) => (
                     <TableGridCard
                       key={table.id}
                       table={table}
                       order={order}
-                      variant={group.variant || 'default'}
-                      showPackageIcon={group.showPackageIcon}
+                      variant={centered ? 'compact' : (group.variant || 'default')}
+                      showPackageIcon={centered ? false : group.showPackageIcon}
                       onClick={() => onTableClick(table)}
                     />
                   ))}

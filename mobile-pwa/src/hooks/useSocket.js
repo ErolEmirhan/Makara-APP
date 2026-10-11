@@ -52,6 +52,7 @@ export function useSocket(branchKey) {
     });
 
     socket.on('staff-deleted', (data) => {
+      if (!staff || String(staff.id) !== String(data && data.staffId)) return;
       forceLogout(data.message || 'Hesabınız silindi.');
       showToast('error', 'Hesap Silindi', data.message || 'Hesabınız silindi.');
     });

@@ -11,7 +11,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <link rel="manifest" href="/manifest.json?v=45.0.0">
+  <link rel="manifest" href="/manifest.json?v=550.0.0">
   <link rel="icon" type="image/png" href="/patron.png">
   <link rel="apple-touch-icon" href="/patron.png">
   <title>MAKARA - Admin Dashboard</title>
@@ -23,7 +23,7 @@
   <script>
     // Cache ve Service Worker Temizleme - Her deploy'da güncel versiyonu yükle
     (function() {
-      const APP_VERSION = '45.0.0';
+      const APP_VERSION = '550.0.0';
       const STORAGE_KEY = 'makara_admin_version';
       const MANIFEST_CHECK_INTERVAL = 60000; // Her 1 dakikada bir kontrol et
       
@@ -298,6 +298,7 @@
     let categoryViewDate = null; // Kategori ciro: günlük görünüm için seçili tarih (dd.mm.yyyy)
     let lastReportSales = null; // moveCategoryDate ile sadece içerik yenilenirken kullanılır
     let saleToDeleteId = null; // Silme onayı için seçilen satış id
+    let saleToDeleteIds = [];
     let saleToDeleteLabel = ''; // Silme onayı modalında gösterilecek etiket
     let salesShowDiscountedOnly = false; // Satış geçmişinde sadece indirimli satışları göster
 
@@ -831,6 +832,10 @@
             staff_name: data.staff_name || null,
             table_name: data.table_name || null,
             table_type: data.table_type || null,
+            table_order_id: data.table_order_id != null ? data.table_order_id : null,
+            is_amount_payment: data.is_amount_payment === true || data.is_amount_payment === 'true',
+            payment_kind: data.payment_kind || null,
+            payment_batch: data.payment_batch || null,
             items: items,
             items_array: itemsArray, // Gerçek Firebase verileri
             itemsText: data.items || 'Ürün bulunamadı',
@@ -1098,6 +1103,10 @@
             staff_name: data.staff_name || null,
             table_name: data.table_name || null,
             table_type: data.table_type || null,
+            table_order_id: data.table_order_id != null ? data.table_order_id : null,
+            is_amount_payment: data.is_amount_payment === true || data.is_amount_payment === 'true',
+            payment_kind: data.payment_kind || null,
+            payment_batch: data.payment_batch || null,
             items: items,
             items_array: itemsArray, // Gerçek Firebase verileri
             itemsText: data.items || 'Ürün bulunamadı',
@@ -1321,42 +1330,76 @@
       }, cluster.sales[0]);
     }
 
-    /** Aynı sepet metnine sahip veya aynı oturumda ürün bazlı ardışık tahsilatları tek kartta birleştirir. */
+    function tableSessionKey(sale) {
+      if (!sale || !sale.table_name) return null;
+      if (sale.isExpense || sale.payment_method === 'Masraf') return null;
+      if (sale.payment_method && String(sale.payment_method).includes('Online Satış')) return null;
+      if (sale.table_order_id != null && String(sale.table_order_id) !== '') return `ord|${sale.table_order_id}`;
+      return `tbl|${sale.table_name}|${sale.sale_date || ''}`;
+    }
+
+    function salePaymentKind(sale) {
+      const raw = String(sale.payment_kind || '').toLowerCase();
+      if (raw === 'tutarli' || raw === 'tutarlı') return 'tutarli';
+      if (raw === 'bolmeli' || raw === 'bölmeli') return 'bolmeli';
+      if (raw === 'kismi' || raw === 'kısmi') return 'kismi';
+      if (raw === 'kapanis' || raw === 'kapanış') return 'kapanis';
+      if (sale.is_amount_payment === true) return 'tutarli';
+      const lines = (sale.items_array && sale.items_array.length) || (sale.items && sale.items.length) || 0;
+      if (lines <= 1) return 'kismi';
+      return 'kapanis';
+    }
+
+    function escSaleHtml(value) {
+      return String(value ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    function saleLineRows(sale) {
+      const source = (sale.items_array && sale.items_array.length) ? sale.items_array : (sale.items || []);
+      if (!source.length) {
+        const text = sale.itemsText && sale.itemsText !== 'Ürün bulunamadı' ? sale.itemsText : 'Kalem';
+        return [{ name: text, qty: null, amount: parseFloat(sale.total_amount || 0) }];
+      }
+      return source.map((item) => {
+        const qty = Number(item.quantity) || 0;
+        const unit = item.price != null ? Number(item.price) : null;
+        const amount = item.is_amount_share ? unit : (unit != null && qty ? unit * qty : null);
+        return {
+          name: `${item.product_name || 'Kalem'}${item.isGift ? ' (İkram)' : ''}`,
+          qty: qty || null,
+          amount
+        };
+      });
+    }
+
+    /** Aynı masa oturumundaki tahsilatları tek kartta toplar. */
     function buildSalesDisplayClusters(sales) {
-      const used = new Set();
+      const buckets = new Map();
+      const loose = [];
+      sales.forEach((sale) => {
+        const key = tableSessionKey(sale);
+        if (!key) {
+          loose.push(sale);
+          return;
+        }
+        if (!buckets.has(key)) buckets.set(key, []);
+        buckets.get(key).push(sale);
+      });
+
       const clusters = [];
-
-      const mapA = new Map();
-      sales.forEach((s) => {
-        const k = partialClusterKeySameCart(s);
-        if (!k) return;
-        if (!mapA.has(k)) mapA.set(k, []);
-        mapA.get(k).push(s);
+      buckets.forEach((group) => {
+        const sorted = [...group].sort((a, b) => {
+          const ta = a.created_at ? a.created_at.getTime() : 0;
+          const tb = b.created_at ? b.created_at.getTime() : 0;
+          return ta - tb;
+        });
+        if (sorted.length < 2) {
+          loose.push(sorted[0]);
+          return;
+        }
+        clusters.push({ kind: 'tableSession', sales: sorted });
       });
-      mapA.forEach((group) => {
-        if (group.length < 2) return;
-        group.forEach((s) => used.add(s.id));
-        clusters.push({ kind: 'partialSameCart', sales: [...group].sort(clusterNewestFirst) });
-      });
-
-      const mapB = new Map();
-      sales.forEach((s) => {
-        if (used.has(s.id)) return;
-        const k = partialClusterKeyPerItemSession(s);
-        if (!k) return;
-        if (!mapB.has(k)) mapB.set(k, []);
-        mapB.get(k).push(s);
-      });
-      mapB.forEach((group) => {
-        if (group.length < 2) return;
-        group.forEach((s) => used.add(s.id));
-        clusters.push({ kind: 'partialPerItem', sales: [...group].sort(clusterNewestFirst) });
-      });
-
-      sales.forEach((s) => {
-        if (used.has(s.id)) return;
-        clusters.push({ kind: 'single', sales: [s] });
-      });
+      loose.forEach((sale) => clusters.push({ kind: 'single', sales: [sale] }));
 
       clusters.sort((a, b) => {
         const ta = Math.max(...a.sales.map((s) => (s.created_at ? s.created_at.getTime() : 0)));
@@ -1364,6 +1407,103 @@
         return tb - ta;
       });
       return clusters;
+    }
+
+    function renderTableSessionHtml(cluster) {
+      const sales = cluster.sales.slice().sort((a, b) => {
+        const ta = a.created_at ? a.created_at.getTime() : 0;
+        const tb = b.created_at ? b.created_at.getTime() : 0;
+        return ta - tb;
+      });
+      const rep = clusterRepresentativeSale(cluster);
+      const sumTotal = sales.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
+      const times = sales.map((sale) => sale.sale_time).filter(Boolean);
+      const timeLabel = times.length ? `${times[0]}${times[times.length - 1] !== times[0] ? ` – ${times[times.length - 1]}` : ''}` : '';
+      const kindLabel = { tutarli: 'Tutarlı ödeme', kismi: 'Kısmi ödeme', bolmeli: 'Bölmeli ödeme', kapanis: 'Kapanış' };
+      const events = [];
+      sales.forEach((sale) => {
+        const kind = salePaymentKind(sale);
+        const batch = sale.payment_batch ? String(sale.payment_batch) : '';
+        const at = sale.created_at ? sale.created_at.getTime() : 0;
+        const last = events[events.length - 1];
+        const sameBatch = batch && last && last.batch === batch;
+        const sameClick = !batch && last && !last.batch && last.kind === 'kismi' && kind === 'kismi'
+          && last.method === (sale.payment_method || '')
+          && at && last.at && Math.abs(at - last.at) <= 15000;
+        if (sameBatch || sameClick) {
+          last.sales.push(sale);
+          last.at = at || last.at;
+          return;
+        }
+        events.push({
+          kind,
+          batch,
+          method: sale.payment_method || '',
+          at,
+          sales: [sale]
+        });
+      });
+
+      const groupsHtml = events.map((event) => {
+        const label = kindLabel[event.kind] || 'Ödeme';
+        const groupTotal = event.sales.reduce((sum, sale) => sum + parseFloat(sale.total_amount || 0), 0);
+        const when = event.sales.map((sale) => sale.sale_time).find(Boolean) || '';
+        const isCash = event.method === 'Nakit';
+        const merged = new Map();
+        event.sales.forEach((sale) => {
+          const rows = saleLineRows(sale);
+          if (rows.length <= 1) {
+            const line = rows[0] || { name: 'Kalem', qty: 1 };
+            const prev = merged.get(line.name) || { name: line.name, qty: 0, amount: 0 };
+            prev.qty += Number(line.qty) || 1;
+            prev.amount += parseFloat(sale.total_amount || 0);
+            merged.set(line.name, prev);
+            return;
+          }
+          rows.forEach((line) => {
+            const prev = merged.get(line.name) || { name: line.name, qty: 0, amount: 0 };
+            prev.qty += Number(line.qty) || 0;
+            prev.amount += line.amount != null ? Number(line.amount) : 0;
+            merged.set(line.name, prev);
+          });
+        });
+        const lines = [...merged.values()].map((line) => `
+          <div class="session-line">
+            <span class="session-line-name">${escSaleHtml(line.name)}</span>
+            ${line.qty ? `<span class="session-line-qty">x${line.qty}</span>` : ''}
+            <span class="session-line-amount">₺${line.amount.toFixed(2)}</span>
+          </div>`).join('');
+        const deleteIds = event.sales.map((sale) => String(sale.id)).join(',');
+        const deleteLabel = `${rep.table_name || 'Masa'} · ${label} · ₺${groupTotal.toFixed(2)}`.replace(/'/g, '');
+        return `
+          <section class="session-group session-group-${event.kind}">
+            <div class="session-group-head">
+              <span class="session-tag">${label}</span>
+              <span class="session-pay-time">${escSaleHtml(when)}</span>
+              <span class="badge badge-${isCash ? 'cash' : 'card'}">${isCash ? 'Nakit' : escSaleHtml(event.method || 'Kart')}</span>
+              <span class="session-group-total">₺${groupTotal.toFixed(2)}</span>
+              <button type="button" class="sale-delete-btn sale-delete-btn-sm" onclick="openDeleteSaleGroup('${deleteIds}', '${deleteLabel}'); event.stopPropagation();">Sil</button>
+            </div>
+            <div class="session-lines">${lines}</div>
+          </section>`;
+      }).join('');
+
+      return `
+        <div class="sale-card sale-session">
+          <div class="sale-header">
+            <div class="sale-info">
+              <p class="session-kicker">Masa oturumu</p>
+              <h3 class="sale-id">${escSaleHtml(rep.table_name || 'Masa')}</h3>
+              <p class="sale-time">${escSaleHtml(timeLabel)}${rep.sale_date ? ` · ${escSaleHtml(rep.sale_date)}` : ''} · ${events.length} tahsilat</p>
+              ${rep.staff_name ? `<span class="badge badge-staff">👤 ${escSaleHtml(rep.staff_name)}</span>` : ''}
+            </div>
+            <div class="sale-total">
+              <p class="total-label">TOPLAM</p>
+              <p class="total-amount">₺${sumTotal.toFixed(2)}</p>
+            </div>
+          </div>
+          <div class="session-groups">${groupsHtml}</div>
+        </div>`;
     }
 
     function classifySameCartAmountTags(sales) {
@@ -1400,6 +1540,7 @@
     }
 
     function renderSaleClusterHtml(cluster) {
+      if (cluster.kind === 'tableSession') return renderTableSessionHtml(cluster);
       const sales = cluster.sales;
       const first = sales[0];
 
@@ -1788,34 +1929,48 @@
     }
 
     function openDeleteSaleConfirm(saleId, label) {
-      saleToDeleteId = saleId;
+      saleToDeleteIds = saleId ? [String(saleId)] : [];
+      saleToDeleteId = saleToDeleteIds[0] || null;
       saleToDeleteLabel = label || '';
       const modal = document.getElementById('deleteSaleModal');
       const labelEl = document.getElementById('deleteSaleModalLabel');
       if (labelEl) labelEl.textContent = label || saleId;
-      if (modal) {
-        modal.style.display = 'flex';
-      }
+      if (modal) modal.style.display = 'flex';
+    }
+
+    function openDeleteSaleGroup(idList, label) {
+      const ids = String(idList || '').split(',').map((id) => id.trim()).filter(Boolean);
+      saleToDeleteIds = ids;
+      saleToDeleteId = ids[0] || null;
+      saleToDeleteLabel = label || '';
+      const modal = document.getElementById('deleteSaleModal');
+      const labelEl = document.getElementById('deleteSaleModalLabel');
+      const countNote = ids.length > 1 ? ` (${ids.length} kayıt)` : '';
+      if (labelEl) labelEl.textContent = `${label || 'Satış'}${countNote}`;
+      if (modal) modal.style.display = 'flex';
     }
 
     function closeDeleteSaleModal() {
       saleToDeleteId = null;
+      saleToDeleteIds = [];
       saleToDeleteLabel = '';
       const modal = document.getElementById('deleteSaleModal');
       if (modal) modal.style.display = 'none';
     }
 
     async function confirmDeleteSale() {
-      if (!saleToDeleteId || !db) return;
+      const ids = saleToDeleteIds.length ? saleToDeleteIds.slice() : (saleToDeleteId ? [saleToDeleteId] : []);
+      if (!ids.length || !db) return;
       const btn = document.getElementById('confirmDeleteSaleBtn');
       if (btn) { btn.disabled = true; btn.textContent = 'Siliniyor...'; }
       try {
-        await db.collection('sales').doc(saleToDeleteId).delete();
+        await Promise.all(ids.map((id) => db.collection('sales').doc(id).delete()));
         closeDeleteSaleModal();
-        allSales = allSales.filter(s => s.id !== saleToDeleteId);
+        const idSet = new Set(ids);
+        allSales = allSales.filter((s) => !idSet.has(s.id));
         renderSales(allSales, true);
         if (typeof updateStats === 'function') updateStats(allSales);
-        if (typeof showToast === 'function') showToast('success', 'Silindi', 'Satış kalıcı olarak silindi.');
+        if (typeof showToast === 'function') showToast('success', 'Silindi', ids.length > 1 ? `${ids.length} satış kalıcı olarak silindi.` : 'Satış kalıcı olarak silindi.');
       } catch (err) {
         console.error('Satış silinirken hata:', err);
         if (typeof showToast === 'function') showToast('error', 'Hata', err.message || 'Satış silinemedi.');
@@ -2502,12 +2657,12 @@
       const activeTablesRevenue = calculateActiveTablesRevenue();
       onlineTotal += activeTablesRevenue.online || 0;
       
-      // Nakit / Kart / Online kartlarda gösterilen tutarlar (aktif masalar dahil, online ayrı)
-      const totalCash = Math.max(0, Math.round((cashTotal + activeTablesRevenue.cash) / 5) * 5);
-      const totalCard = Math.max(0, Math.round((cardTotal + activeTablesRevenue.card) / 5) * 5);
+      // Nakit / Kart / Online: tahsil edilen tutar (5 TL'ye yuvarlama yok; personel toplamıyla aynı kuruş)
+      const totalCash = Math.max(0, cashTotal + activeTablesRevenue.cash);
+      const totalCard = Math.max(0, cardTotal + activeTablesRevenue.card);
       
       // Günlük ciro = Nakit + Kart + Online toplamı (üç kutuyla bire bir aynı)
-      const todayRevenue = Math.max(0, totalCash + totalCard + Math.round(onlineTotal));
+      const todayRevenue = Math.max(0, totalCash + totalCard + onlineTotal);
       
       // Günlük ciro 50.000 TL'yi geçtiyse push notification gönder
       checkRevenueNotification(todayRevenue);
@@ -3151,6 +3306,14 @@
             return null;
           }).filter(Boolean);
         }
+
+        const paidForScale = parseFloat(sale.total_amount || 0);
+        let itemWeight = 0;
+        itemsArray.forEach((item) => {
+          if (!item || item.isGift || item.isExpense) return;
+          itemWeight += parseFloat(item.price || 0) * (Number(item.quantity) || 0);
+        });
+        const revenueFactor = itemWeight > 0 ? paidForScale / itemWeight : 1;
         
         itemsArray.forEach(item => {
           if (!item || !item.product_name || item.isExpense) return;
@@ -3161,7 +3324,7 @@
           
           let itemRevenue = 0;
           if (!isGift && item.price) {
-            itemRevenue = item.price * quantity;
+            itemRevenue = item.price * quantity * revenueFactor;
           } else if (!isGift && !item.price && sale.total_amount) {
             const saleTotal = parseFloat(sale.total_amount);
             const nonGiftItems = itemsArray.filter(i => !i.isGift);
@@ -6446,7 +6609,20 @@
     // Personel detayları için zaman filtresi
     let staffDateFilter = 'day'; // 'all', 'yesterday', 'week', 'month', 'custom', 'day'
     let staffCustomDateRange = { start: null, end: null };
-    let staffSelectedDate = new Date(); // Seçilen gün (varsayılan: bugün)
+    // İş günü etiketi: gece 03:00'ten önceki saat bir önceki takvim gününün vardiyasıdır
+    function currentBusinessCalendarDate() {
+      const n = new Date();
+      if (n.getHours() < 3) n.setDate(n.getDate() - 1);
+      return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+    }
+    function businessWindowForCalendarDate(dayDate) {
+      const start = new Date(dayDate.getFullYear(), dayDate.getMonth(), dayDate.getDate(), 3, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      return { start, end };
+    }
+
+    let staffSelectedDate = currentBusinessCalendarDate(); // Seçilen iş günü (03:00–03:00)
     
     // Personel detayları sekmesine ilk girildiğinde bugün için veri yükle
     let isStaffDetailsInitialized = false;
@@ -6456,7 +6632,7 @@
       
       // Eğer "yesterday", "week", "month" seçildiyse, tarih navigasyonunu güncelle
       if (filter === 'yesterday') {
-        const yesterday = new Date();
+        const yesterday = currentBusinessCalendarDate();
         yesterday.setDate(yesterday.getDate() - 1);
         staffSelectedDate = yesterday;
         
@@ -6504,7 +6680,7 @@
     
     // Bugün'e git
     function setStaffDateToToday() {
-      staffSelectedDate = new Date();
+      staffSelectedDate = currentBusinessCalendarDate();
       staffDateFilter = 'day';
       
       const datePicker = document.getElementById('staffDatePicker');
@@ -6732,7 +6908,12 @@
             saleTime = createdAt.toLocaleTimeString('tr-TR');
           }
           
-          if (selectedDatesParsed && selectedDatesParsed.length > 0) {
+          const useBusinessDay = staffDateFilter === 'day' || staffDateFilter === 'yesterday';
+          if (useBusinessDay) {
+            const windowRange = businessWindowForCalendarDate(staffSelectedDate);
+            const saleAt = parseSaleDateTime(saleDate, saleTime) || createdAt;
+            if (!saleAt || saleAt < windowRange.start || saleAt >= windowRange.end) return;
+          } else if (selectedDatesParsed && selectedDatesParsed.length > 0) {
             const saleDay = parseTRDateStr(saleDate) || (createdAt ? new Date(createdAt.getFullYear(), createdAt.getMonth(), createdAt.getDate()) : null);
             if (!saleDay || !selectedDatesParsed.some(sd => isSameDay(saleDay, sd))) return;
           }
@@ -6864,36 +7045,62 @@
         const reportSales = staffSales.filter(sale => !sale.isExpense);
         const staffStats = {};
 
+        const addStaffRevenue = (name, amount) => {
+          if (!amount) return;
+          const key = name || 'Atanmamış';
+          if (!staffStats[key]) staffStats[key] = { name: key, totalRevenue: 0 };
+          staffStats[key].totalRevenue += amount;
+        };
+        const splitStaffNames = (raw) => String(raw || '').split(',').map(n => n.trim()).filter(Boolean);
+
+        // Her fişin personel payı, ürün listesinin toplamı değil tahsil edilen tutardır.
+        // Bölünmüş ödemede aynı ürünler her fişte durur; pay tahsilata oranlanır, ciroyla örtüşür.
         reportSales.forEach(sale => {
-          if (sale.items_array && Array.isArray(sale.items_array) && sale.items_array.length > 0) {
-            sale.items_array.forEach(item => {
-              if (item.isGift) return;
-              const staffName = (item.staff_name || sale.staff_name || '').toString().trim();
-              if (!staffName) return;
-              const names = staffName.split(',').map(n => n.trim()).filter(n => n.length > 0);
-              const quantity = item.quantity || 0;
-              const price = parseFloat(item.price || 0);
-              const revenue = price * quantity;
-              const revenuePerStaff = names.length > 1 ? revenue / names.length : revenue;
-              names.forEach(name => {
-                if (!staffStats[name]) staffStats[name] = { name, totalRevenue: 0 };
-                staffStats[name].totalRevenue += revenuePerStaff;
-              });
-            });
-          } else {
-            const staffName = (sale.staff_name || '').toString().trim();
-            if (!staffName) return;
-            const names = staffName.split(',').map(n => n.trim()).filter(n => n.length > 0);
-            const amount = parseFloat(sale.total_amount || 0);
-            const perStaff = names.length > 1 ? amount / names.length : amount;
-            names.forEach(name => {
-              if (!staffStats[name]) staffStats[name] = { name, totalRevenue: 0 };
-              staffStats[name].totalRevenue += perStaff;
-            });
+          const paid = parseFloat(sale.total_amount || 0);
+          if (!paid) return;
+          const items = Array.isArray(sale.items_array) ? sale.items_array : [];
+          const weighted = [];
+          items.forEach(item => {
+            if (item.isGift) return;
+            const value = parseFloat(item.price || 0) * (Number(item.quantity) || 0);
+            if (value <= 0) return;
+            weighted.push({ value, names: splitStaffNames(item.staff_name || sale.staff_name) });
+          });
+          const weightSum = weighted.reduce((sum, row) => sum + row.value, 0);
+          if (weightSum <= 0) {
+            const names = splitStaffNames(sale.staff_name);
+            const targets = names.length ? names : ['Atanmamış'];
+            const per = paid / targets.length;
+            targets.forEach(name => addStaffRevenue(name, per));
+            return;
           }
+          weighted.forEach(row => {
+            const share = paid * (row.value / weightSum);
+            const targets = row.names.length ? row.names : ['Atanmamış'];
+            const per = share / targets.length;
+            targets.forEach(name => addStaffRevenue(name, per));
+          });
         });
 
-        const sortedStaff = Object.values(staffStats).sort((a, b) => b.totalRevenue - a.totalRevenue);
+        const liveWindow = businessWindowForCalendarDate(staffSelectedDate);
+        const nowLive = new Date();
+        const viewingLiveDay = (staffDateFilter === 'day' || staffDateFilter === 'yesterday')
+          && nowLive >= liveWindow.start && nowLive < liveWindow.end;
+        let openTablesRevenue = 0;
+        if (viewingLiveDay && typeof calculateActiveTablesRevenue === 'function') {
+          openTablesRevenue = calculateActiveTablesRevenue().total || 0;
+          if (openTablesRevenue > 0) addStaffRevenue('Açık masalar', openTablesRevenue);
+        }
+
+        const pinnedLast = new Set(['Atanmamış', 'Açık masalar']);
+        const sortedStaff = Object.values(staffStats).sort((a, b) => {
+          const ap = pinnedLast.has(a.name) ? 1 : 0;
+          const bp = pinnedLast.has(b.name) ? 1 : 0;
+          if (ap !== bp) return ap - bp;
+          return b.totalRevenue - a.totalRevenue;
+        });
+        const staffGrandTotal = sortedStaff.reduce((sum, row) => sum + row.totalRevenue, 0);
+        const formatStaffMoney = (n) => '₺' + (Math.round(n * 100) / 100).toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
       
       const selectedDateStr = staffDateFilter === 'day' 
         ? staffSelectedDate.toLocaleDateString('tr-TR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
@@ -6908,7 +7115,7 @@
         <div class="staff-container staff-modern">
           <header class="staff-elite-header">
             <h2 class="staff-title">Personel Detayları</h2>
-            <p class="staff-subtitle">Günlük ve dönemsel ciro özeti</p>
+            <p class="staff-subtitle">Toplam, günlük ciro ile aynı tahsilattır. Garsonu boş fişler Atanmamış satırında durur.</p>
           </header>
           <div class="staff-date-modal">
             <div class="staff-mode-toggle">
@@ -6957,10 +7164,19 @@
                     <tr>
                       <td class="staff-td-num">${i + 1}</td>
                       <td class="staff-td-name">${staff.name}</td>
-                      <td class="staff-td-amount">₺${Math.round(staff.totalRevenue).toLocaleString('tr-TR')}</td>
+                      <td class="staff-td-amount">${formatStaffMoney(staff.totalRevenue)}</td>
                     </tr>
                   `).join('')}
                 </tbody>
+                ${sortedStaff.length ? `
+                <tfoot>
+                  <tr>
+                    <td class="staff-td-num"></td>
+                    <td class="staff-td-name">Toplam</td>
+                    <td class="staff-td-amount">${formatStaffMoney(staffGrandTotal)}</td>
+                  </tr>
+                </tfoot>
+                ` : ''}
               </table>
             </div>
           </div>
@@ -10806,6 +11022,105 @@
       border-radius: 999px;
       letter-spacing: 0.02em;
     }
+
+    .sale-session {
+      border: 1px solid #e2e8f0;
+      background: #fff;
+      box-shadow: 0 16px 40px -28px rgba(15, 23, 42, 0.45);
+    }
+
+    .session-kicker {
+      margin: 0 0 4px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #94a3b8;
+    }
+
+    .session-groups {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-top: 4px;
+    }
+
+    .session-group {
+      border-radius: 16px;
+      padding: 12px;
+      background: #f8fafc;
+    }
+
+    .session-group-tutarli { background: #eef2ff; }
+    .session-group-kismi { background: #fff7ed; }
+    .session-group-bolmeli { background: #f5f3ff; }
+    .session-group-kapanis { background: #f8fafc; }
+
+    .session-group-head {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .session-tag {
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #0f172a;
+    }
+
+    .session-group-total {
+      margin-left: auto;
+      font-size: 16px;
+      font-weight: 800;
+      color: #0f172a;
+    }
+
+    .session-pay {
+      background: #fff;
+      border-radius: 14px;
+      padding: 10px 12px;
+      margin-top: 8px;
+    }
+
+    .session-pay-top {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .session-pay-time {
+      font-size: 12px;
+      font-weight: 700;
+      color: #64748b;
+    }
+
+    .session-pay-amount {
+      margin-left: auto;
+      font-size: 16px;
+      color: #0f172a;
+    }
+
+    .session-lines {
+      margin-top: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .session-line {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 13px;
+      color: #334155;
+    }
+
+    .session-line-name { flex: 1; min-width: 0; }
+    .session-line-qty { color: #94a3b8; font-weight: 700; }
+    .session-line-amount { font-weight: 700; color: #0f172a; }
 
     .sale-card-group.sale-card-partial {
       border-left: 4px solid #8b5cf6;
@@ -16148,6 +16463,13 @@
       font-weight: 700;
       color: #059669;
       font-size: 15px;
+    }
+
+    .staff-table tfoot td {
+      border-top: 2px solid #e2e8f0;
+      border-bottom: none;
+      background: #f8fafc;
+      font-weight: 800;
     }
 
     .staff-empty-state {

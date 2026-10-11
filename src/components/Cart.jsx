@@ -1,5 +1,34 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
+import { getCachedProductImageUrl, resolveRegisteredProductImage } from '../utils/productImageCache';
+
+function CartThumb({ item }) {
+  const [src, setSrc] = useState(() => item.imageSrc || getCachedProductImageUrl(item.id));
+
+  useEffect(() => {
+    let cancelled = false;
+    const immediate = item.imageSrc || getCachedProductImageUrl(item.id);
+    if (immediate) setSrc(immediate);
+    resolveRegisteredProductImage(item.id).then((url) => {
+      if (!cancelled && url) setSrc(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [item.id, item.imageSrc]);
+
+  return (
+    <div className="h-12 w-12 shrink-0 overflow-hidden rounded-xl bg-[var(--pos-surface-muted)]">
+      {src ? (
+        <img src={src} alt="" draggable={false} className={`h-full w-full object-cover ${item.isGift ? 'grayscale' : ''}`} />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-[10px] font-bold text-[var(--pos-text-tertiary)]">
+          {(item.name || '?').slice(0, 1).toLocaleUpperCase('tr-TR')}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const Cart = ({
   cart,
@@ -51,7 +80,7 @@ const Cart = ({
             className="text-[#86868b] dark:text-[#a1a1a6] font-medium mt-0.5"
             style={{ fontSize: 'var(--pos-fs-meta)' }}
           >
-            {cart.length > 0 ? `${itemCount} adet · ${cart.length} kalem` : 'Ürün ekleyin'}
+            {cart.length > 0 ? `${itemCount} adet seçildi` : 'Henüz ürün seçilmedi'}
           </p>
         </div>
         {selectedTable && (
@@ -102,37 +131,39 @@ const Cart = ({
                 }`}
                 style={{ boxShadow: isGift ? undefined : 'var(--pos-shadow-sm)' }}
               >
-                <div className="p-3.5">
-                  <div className="flex items-start justify-between gap-2 mb-2.5">
-                    <div className="min-w-0 flex-1">
-                      <h4
-                        className={`font-semibold leading-snug break-words ${
-                          isGift
-                            ? 'text-[var(--pos-text-secondary)] line-through'
-                            : 'text-[var(--pos-text)]'
-                        }`}
-                        style={{ fontSize: 'var(--pos-fs-product)' }}
-                      >
-                        {item.name}
-                      </h4>
-                      {isGift && (
-                        <span
-                          className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold uppercase tracking-wide"
-                          style={{ fontSize: 'var(--pos-fs-overline)' }}
+                <div className="flex items-start gap-3 p-3">
+                  <CartThumb item={item} />
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-2 flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <h4
+                          className={`break-words font-semibold leading-snug ${
+                            isGift
+                              ? 'text-[var(--pos-text-secondary)] line-through'
+                              : 'text-[var(--pos-text)]'
+                          }`}
+                          style={{ fontSize: 'var(--pos-fs-product)' }}
                         >
-                          İkram
-                        </span>
-                      )}
+                          {item.name}
+                        </h4>
+                        {isGift ? (
+                          <span
+                            className="mt-1 inline-flex items-center rounded-md bg-emerald-500/10 px-2 py-0.5 font-bold uppercase tracking-wide text-emerald-700 dark:text-emerald-300"
+                            style={{ fontSize: 'var(--pos-fs-overline)' }}
+                          >
+                            İkram
+                          </span>
+                        ) : null}
+                      </div>
+                      <span
+                        className={`shrink-0 font-bold tabular-nums tracking-tight ${
+                          isGift ? 'text-[var(--pos-text-tertiary)] line-through' : 'pos-price-gradient'
+                        }`}
+                        style={{ fontSize: 'var(--pos-fs-price)' }}
+                      >
+                        ₺{lineTotal.toFixed(2)}
+                      </span>
                     </div>
-                    <span
-                      className={`shrink-0 font-bold tabular-nums tracking-tight ${
-                        isGift ? 'text-[var(--pos-text-tertiary)] line-through' : 'pos-price-gradient'
-                      }`}
-                      style={{ fontSize: 'var(--pos-fs-price)' }}
-                    >
-                      ₺{lineTotal.toFixed(2)}
-                    </span>
-                  </div>
 
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1 p-0.5 rounded-xl bg-[var(--pos-surface-muted)] border border-[var(--pos-border)]">
@@ -201,6 +232,7 @@ const Cart = ({
                       Birim ₺{item.price.toFixed(2)}
                     </p>
                   )}
+                  </div>
                 </div>
               </article>
             );

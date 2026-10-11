@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import Toast from './Toast';
+import { getCachedProductImageUrl, registerProductImage, resolveProductImage } from '../utils/productImageCache';
 import {
   MAKARA_HAVZAN_MAIN_TABLE_COUNT,
   MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS,
@@ -9,7 +10,7 @@ import { buildSultanTablesFlat } from '../constants/sultanTables';
 
 const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
 
-const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = false, branchKey = 'makara', onClose, onCompleteTable, onPartialPayment, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems, onGiftApplied }) => {
+const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = false, branchKey = 'makara', onClose, onCompleteTable, onPartialPayment, onPartialComplete, onRequestAdisyon, onAddItems, onItemCancelled, onCancelEntireTable, onTransferItems, onGiftApplied }) => {
   const [sessionDuration, setSessionDuration] = useState('');
   const [selectedItemDetail, setSelectedItemDetail] = useState(null);
   const [cancellingItemId, setCancellingItemId] = useState(null);
@@ -38,6 +39,11 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
   /** @type {Record<string, number>} grup anahtarı → ikram adedi (0 = atla) */
   const [giftQtyByGroupKey, setGiftQtyByGroupKey] = useState({});
   const [applyingGift, setApplyingGift] = useState(false);
+  const [imageByProductId, setImageByProductId] = useState({});
+  const [showPartialPay, setShowPartialPay] = useState(false);
+  const [partialKeys, setPartialKeys] = useState(() => new Set());
+  const [partialMethodOpen, setPartialMethodOpen] = useState(false);
+  const [partialProcessing, setPartialProcessing] = useState(false);
 
   const showToast = (message, type = 'info') => {
     setToast({ message, type, show: true });
@@ -91,11 +97,142 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
 
   const groupRowKey = (g) => `${g.product_id}_${g.isGift || false}`;
 
+  const groupUnits = (item) => {
+    const rows = item.originalItems?.length ? item.originalItems : [item];
+    const units = [];
+    rows.forEach((row) => {
+      if (!row || row.isGift) return;
+      const qty = Number(row.quantity) || 0;
+      const paidQty = Math.max(0, Math.min(qty, Number(row.paid_quantity) || 0));
+      const price = Number(row.price) || 0;
+      let cover = Math.max(0, Number(row.amount_settled) || 0);
+      const method = String(row.payment_method || '');
+      const closedByAmount = /tutarl/i.test(method) && !/nakit|kredi|kart/i.test(method);
+      for (let i = 0; i < qty; i += 1) {
+        const base = { key: `${row.id}__${i}`, itemId: row.id, price };
+        if (i < paidQty) {
+          units.push({ ...base, paid: true, status: closedByAmount ? 'tutarli' : 'paid', due: 0, covered: price });
+          continue;
+        }
+        if (price > 0 && cover >= price - 0.009) {
+          cover = roundMoney(cover - price);
+          units.push({ ...base, paid: true, status: 'tutarli', due: 0, covered: price });
+          continue;
+        }
+        if (cover > 0.009) {
+          const due = roundMoney(Math.max(0, price - cover));
+          const covered = roundMoney(Math.max(0, price - due));
+          cover = 0;
+          units.push({ ...base, paid: false, status: 'partial', due, covered });
+          continue;
+        }
+        units.push({ ...base, paid: false, status: 'open', due: price, covered: 0 });
+      }
+    });
+    return units;
+  };
+
+  const exitPartialPay = () => {
+    setShowPartialPay(false);
+    setPartialKeys(new Set());
+    setPartialMethodOpen(false);
+  };
+
+  const selectPartialPrefix = (units, index) => {
+    const keys = units.map((unit) => unit.key);
+    const prefix = keys.slice(0, index + 1);
+    setPartialKeys((prev) => {
+      const next = new Set(prev);
+      const exact = prefix.every((key) => next.has(key)) && keys.slice(index + 1).every((key) => !next.has(key));
+      keys.forEach((key) => next.delete(key));
+      if (!exact) prefix.forEach((key) => next.add(key));
+      return next;
+    });
+  };
+
+  const selectedPartialAmount = roundMoney(
+    groupedItems.reduce((sum, item) => (
+      sum + groupUnits(item).reduce((part, unit) => part + (partialKeys.has(unit.key) ? unit.due : 0), 0)
+    ), 0)
+  );
+
+  const confirmPartialPay = async (paymentMethod) => {
+    const byItem = new Map();
+    groupedItems.forEach((item) => {
+      groupUnits(item).forEach((unit) => {
+        if (unit.paid || !partialKeys.has(unit.key) || unit.due <= 0.009) return;
+        const prev = byItem.get(unit.itemId) || { itemId: unit.itemId, quantity: 0, amount: 0 };
+        prev.quantity += 1;
+        prev.amount = roundMoney(prev.amount + unit.due);
+        byItem.set(unit.itemId, prev);
+      });
+    });
+    const payments = Array.from(byItem.values());
+    if (!payments.length) return;
+    if (!window.electronAPI?.payTableOrderItemsBulk) {
+      showToast('Ödeme işlemi şu anda kullanılamıyor', 'error');
+      return;
+    }
+    setPartialProcessing(true);
+    try {
+      const result = await window.electronAPI.payTableOrderItemsBulk({ payments, paymentMethod });
+      if (!result?.success) {
+        showToast(result?.error || 'Ödeme alınamadı', 'error');
+        return;
+      }
+      setPartialMethodOpen(false);
+      setPartialKeys(new Set());
+      setShowPartialPay(false);
+      showToast('Kısmi ödeme alındı', 'success');
+      if (onPartialComplete) await onPartialComplete(result.results || []);
+    } catch (error) {
+      showToast(error?.message || 'Ödeme alınamadı', 'error');
+    } finally {
+      setPartialProcessing(false);
+    }
+  };
+
+  useEffect(() => {
+    let alive = true;
+    const ids = [...new Set((items || []).map((item) => item.product_id).filter((id) => id != null))];
+    const known = {};
+    ids.forEach((id) => {
+      const cached = getCachedProductImageUrl(id);
+      if (cached) known[String(id)] = cached;
+    });
+    if (Object.keys(known).length) setImageByProductId((prev) => ({ ...prev, ...known }));
+    const missing = ids.filter((id) => !getCachedProductImageUrl(id));
+    if (!missing.length || !window.electronAPI?.getProducts) {
+      return () => { alive = false; };
+    }
+    window.electronAPI.getProducts(null).then(async (products) => {
+      if (!alive || !Array.isArray(products)) return;
+      const pairs = await Promise.all(missing.map(async (id) => {
+        const product = products.find((p) => String(p.id) === String(id));
+        if (!product?.image) return null;
+        registerProductImage(id, product.image);
+        const url = await resolveProductImage(id, product.image);
+        return url ? [String(id), url] : null;
+      }));
+      if (!alive) return;
+      const next = {};
+      pairs.forEach((pair) => {
+        if (pair) next[pair[0]] = pair[1];
+      });
+      if (Object.keys(next).length) setImageByProductId((prev) => ({ ...prev, ...next }));
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [items]);
+
   const giftEligibleGroups = useMemo(
     () =>
-      groupedItems.filter(
-        (g) => !g.isGift && !g.is_paid && !(Number(g.paid_quantity) > 0)
-      ),
+      groupedItems
+        .map((g) => {
+          if (g.isGift) return { ...g, giftableQty: 0 };
+          const giftableQty = groupUnits(g).filter((unit) => !unit.paid && unit.due > 0.009).length;
+          return { ...g, giftableQty };
+        })
+        .filter((g) => g.giftableQty > 0),
     [groupedItems]
   );
 
@@ -119,7 +256,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
         const k = groupRowKey(g);
         const q = Math.min(
           Math.max(0, Number(giftQtyByGroupKey[k]) || 0),
-          Number(g.quantity) || 0
+          Number(g.giftableQty) || 0
         );
         return q > 0;
       }),
@@ -130,7 +267,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
     const allocations = giftEligibleGroups
       .map((g) => {
         const k = groupRowKey(g);
-        const maxQ = Number(g.quantity) || 0;
+        const maxQ = Number(g.giftableQty) || 0;
         const raw = Number(giftQtyByGroupKey[k]) || 0;
         const q = Math.min(Math.max(0, Math.floor(raw)), maxQ);
         return q > 0 ? { groupKey: k, giftQuantity: q } : null;
@@ -285,10 +422,11 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
         totalAmount: payAmount,
         paymentMethod,
         tableName: order.table_name || '',
-        tableType: order.table_type || 'inside'
+        tableType: order.table_type || 'inside',
+        paymentKind: 'tutarli'
       });
       if (!saleResult?.success) {
-        showToast('Satış kaydı oluşturulamadı', 'error');
+        showToast(saleResult?.error || 'Satış kaydı oluşturulamadı', 'error');
         return;
       }
       const amountResult = await window.electronAPI.updateTableOrderAmount(order.id, payAmount);
@@ -373,10 +511,11 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
         totalAmount: payAmount,
         paymentMethod,
         tableName: order.table_name || '',
-        tableType: order.table_type || 'inside'
+        tableType: order.table_type || 'inside',
+        paymentKind: 'bolmeli'
       });
       if (!saleResult?.success) {
-        showToast('Satış kaydı oluşturulamadı', 'error');
+        showToast(saleResult?.error || 'Satış kaydı oluşturulamadı', 'error');
         return;
       }
       const amountResult = await window.electronAPI.updateTableOrderAmount(order.id, payAmount);
@@ -600,145 +739,154 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
     }
   };
 
+  const tableTypeLabel = (() => {
+    const type = order.table_type;
+    if (type === 'inside') return 'İç';
+    if (type === 'outside') return 'Dış';
+    if (type === 'package' || type === 'paket') return 'Paket';
+    if (type === 'online') return 'Online';
+    return type || singularLabel;
+  })();
+  const dueAmount = (hasPartialPayment || partialPaymentPaid > 0.01 || paidAmount > 0.01)
+    ? splitPaymentRemainingAmount
+    : originalTotalAmount;
+
+  const lockVeil = () => (
+    showPartialPay ? (
+      <span className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-black/75">
+        <svg className="h-8 w-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+        </svg>
+      </span>
+    ) : null
+  );
+
   return createPortal(
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 animate-fade-in">
-      <div className="bg-white border border-gray-200 rounded-xl p-8 max-w-7xl w-full mx-6 shadow-[0_20px_60px_-12px_rgba(0,0,0,0.25)] max-h-[95vh] overflow-y-auto">
-        {/* Header Section - Corporate Design */}
-        <div className="mb-8 pb-6 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-4">
-              <div className="w-12 h-12 bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg flex items-center justify-center shadow-sm">
-                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-              </div>
-              <div>
-                <h2 className="text-2xl font-bold text-gray-900 tracking-tight">
-                  Sipariş Detayları
-                </h2>
-                <div className="mt-2">
-                  <p
-                    className="text-3xl md:text-4xl font-black tracking-tight"
-                    style={{
-                      background: 'linear-gradient(135deg, #ec4899 0%, #a855f7 50%, #6366f1 100%)',
-                      WebkitBackgroundClip: 'text',
-                      WebkitTextFillColor: 'transparent',
-                      textShadow: '0 8px 28px rgba(168,85,247,0.28)'
-                    }}
-                  >
-                    {order.table_name}
-                  </p>
-                </div>
-              </div>
-            </div>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-6 animate-fade-in"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="flex h-[min(92vh,900px)] w-full max-w-6xl flex-col overflow-hidden rounded-[28px] bg-white shadow-[0_30px_80px_-24px_rgba(15,23,42,0.45)]"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="relative shrink-0 bg-gradient-to-r from-fuchsia-600 via-violet-600 to-indigo-600 px-5 py-6 text-white theme-sultan:from-emerald-600 theme-sultan:via-teal-600 theme-sultan:to-cyan-700 sm:px-8">
+          <div className="absolute right-4 top-4 flex items-center gap-2 sm:right-5">
+            {showPartialPay && (
+              <button
+                type="button"
+                onClick={exitPartialPay}
+                className="rounded-2xl bg-white/15 px-3 py-2 text-sm font-semibold text-white transition hover:bg-white/25"
+              >
+                Siparişe dön
+              </button>
+            )}
             <button
+              type="button"
               onClick={onClose}
-              className="w-10 h-10 bg-gray-50 hover:bg-gray-100 border border-gray-200 hover:border-gray-300 text-gray-500 hover:text-gray-700 transition-all duration-200 p-2 rounded-lg flex items-center justify-center"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-white transition hover:bg-white/25"
+              aria-label="Kapat"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
-        </div>
-
-        <div className="space-y-6">
-          {/* Bilgiler - Corporate Card */}
-          <div className="bg-gray-50/50 rounded-lg p-5 border border-gray-200">
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-5">
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">{singularLabel}</p>
-                <p className="text-base font-bold text-gray-900">{order.table_name}</p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tip</p>
-                <p className="text-base font-bold text-gray-900">
-                  {singularLabel}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Tarih</p>
-                <p className="text-sm font-semibold text-gray-800">{order.order_date}</p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Saat</p>
-                <p className="text-sm font-semibold text-gray-800">{order.order_time}</p>
-              </div>
-              <div>
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Süre</p>
-                <p className="text-sm font-bold text-gray-900">{sessionDuration}</p>
-              </div>
-              {order.staff_name && (
-                <div>
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Garson</p>
-                  <p className="text-sm font-semibold text-gray-800">{order.staff_name}</p>
-                </div>
-              )}
-            </div>
+          <div className="mx-auto max-w-3xl px-12 text-center">
+            <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-white/70">{showPartialPay ? 'Kısmi ödeme' : 'Sipariş detayı'}</p>
+            <h2 className="mt-2 text-4xl font-semibold tracking-tight text-white sm:text-5xl">{order.table_name}</h2>
           </div>
-
-          {order.status === 'pending' && giftEligibleGroups.length > 0 && (
-            <div className="flex justify-center px-2 -mt-2 mb-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setGiftQtyByGroupKey({});
-                  setShowGiftSelectModal(true);
-                }}
-                className="group relative inline-flex items-center justify-center gap-3 px-12 py-4 rounded-2xl font-bold text-base text-white shadow-xl hover:shadow-2xl transition-all duration-300 bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 theme-sultan:from-emerald-600 theme-sultan:via-teal-600 theme-sultan:to-cyan-600 hover:scale-[1.02] active:scale-[0.99] ring-2 ring-amber-200/80 theme-sultan:ring-emerald-200/80 border border-white/25 overflow-hidden"
-              >
-                <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/10 to-transparent" />
-                <span className="pointer-events-none absolute -left-1/4 top-0 h-full w-1/2 skew-x-12 bg-white/15 opacity-0 group-hover:opacity-100 group-hover:translate-x-full transition-all duration-700" />
-                <svg
-                  className="w-7 h-7 relative drop-shadow-md"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  aria-hidden
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M4.318 6.318a4.5 4.5 0 016.364 0L12 7.636l1.318-1.318a4.5 4.5 0 116.364 6.364L12 20.364l-7.682-7.682a4.5 4.5 0 010-6.364z"
-                  />
-                </svg>
-                <span className="relative tracking-wide text-lg">İkram Seç</span>
-              </button>
-            </div>
-          )}
-
-          {/* Ürünler - Corporate Grid Layout */}
-          <div>
-            <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-200">
-              <div className="flex items-center space-x-2">
-                <h3 className="text-lg font-bold text-gray-900">Sipariş Ürünleri</h3>
-                <span className="px-2.5 py-0.5 bg-gray-100 text-gray-600 text-xs font-semibold rounded-full">
-                  {groupedItems.length}
-                </span>
+          <div className="mx-auto mt-5 flex max-w-4xl flex-wrap items-center justify-center gap-x-4 gap-y-3 rounded-[28px] bg-white/15 px-5 py-3.5 backdrop-blur-md">
+            {[
+              ['Tip', tableTypeLabel],
+              ['Tarih', order.order_date],
+              ['Saat', order.order_time],
+              ['Süre', sessionDuration || '—'],
+              ...(order.staff_name ? [['Garson', order.staff_name]] : []),
+            ].map(([label, value], index, list) => (
+              <div key={label} className="flex items-center gap-4">
+                <div className="min-w-[4.5rem] text-center">
+                  <p className="text-[10px] font-medium uppercase tracking-[0.16em] text-white/60">{label}</p>
+                  <p className="mt-0.5 text-sm font-semibold text-white">{value}</p>
+                </div>
+                {index < list.length - 1 && <span className="hidden h-7 w-px bg-white/25 sm:block" />}
               </div>
-              {order.status === 'pending' && groupedItems.length > 0 && (
+            ))}
+          </div>
+          {order.status === 'pending' && (
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {groupedItems.length > 0 && (
                 <button
                   type="button"
                   onClick={() => { setTransferStep(1); setTransferQuantities({}); setSelectedTargetTableId(null); setShowTransferItemsModal(true); }}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm bg-gradient-to-r from-pink-700 theme-sultan:from-emerald-700 to-blue-600 text-white hover:from-pink-800 theme-sultan:hover:from-emerald-800 hover:to-blue-700 shadow-sm transition-all"
+                  disabled={showPartialPay}
+                  className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/25 disabled:cursor-not-allowed"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
                   </svg>
                   Ürün aktar
+                  {lockVeil()}
                 </button>
               )}
+              <button
+                type="button"
+                onClick={onAddItems}
+                disabled={showPartialPay}
+                className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/25 disabled:cursor-not-allowed"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+                Sipariş ekle
+                {lockVeil()}
+              </button>
+              {giftEligibleGroups.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setGiftQtyByGroupKey({});
+                    setShowGiftSelectModal(true);
+                  }}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/25"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />
+                  </svg>
+                  İkram seç
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowCancelEntireTableModal(true)}
+                disabled={showPartialPay}
+                className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl bg-rose-300/30 px-4 py-2.5 text-sm font-semibold text-rose-50 ring-1 ring-rose-200/40 transition hover:bg-rose-300/45 disabled:cursor-not-allowed"
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                {customerMode ? 'Tüm müşteriyi iptal et' : 'Tüm masayı iptal et'}
+                {lockVeil()}
+              </button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 max-h-[450px] overflow-y-auto pr-2">
+          )}
+        </div>
+
+        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
+          <section className="flex min-h-0 flex-col border-b border-slate-100 lg:border-b-0 lg:border-r">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4 sm:px-5">
               {itemsLoading ? (
-                <div className="col-span-full flex flex-col items-center justify-center py-16 text-gray-500">
-                  <svg className="w-10 h-10 animate-spin text-pink-600 theme-sultan:text-emerald-600 mb-3" fill="none" viewBox="0 0 24 24">
+                <div className="flex flex-col items-center justify-center py-16 text-slate-500">
+                  <svg className="mb-3 h-8 w-8 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                   </svg>
-                  <p className="text-sm font-medium">Ürünler yükleniyor…</p>
+                  <p className="text-sm font-medium">Ürünler yükleniyor</p>
                 </div>
+              ) : groupedItems.length === 0 ? (
+                <p className="py-16 text-center text-sm text-slate-400">Bu masada ürün yok</p>
               ) : groupedItems.map((item) => {
                 const isGift = item.isGift || false;
                 const isPaid = item.is_paid || false;
@@ -746,208 +894,257 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                 const remainingQuantity = item.quantity - paidQuantity;
                 const paymentMethod = item.payment_method || null;
                 const displayTotal = isGift ? 0 : (item.price * item.quantity);
-                const paidTotal = isGift ? 0 : (item.price * paidQuantity);
-                const originalTotal = item.price * item.quantity;
-                
+                const units = groupUnits(item);
+                const rowKey = groupRowKey(item);
+                const imageSrc = imageByProductId[String(item.product_id)] || '';
+                const selectedUnits = units.filter((unit) => partialKeys.has(unit.key));
+                const selectedCount = selectedUnits.length;
+                const selectedSum = roundMoney(selectedUnits.reduce((sum, unit) => sum + unit.due, 0));
+                const lineRemaining = roundMoney(units.reduce((sum, unit) => sum + unit.due, 0));
+                const tutarliCount = units.filter((unit) => unit.status === 'tutarli').length;
+                const partialUnit = units.find((unit) => unit.status === 'partial');
+                const selectableUnits = units.filter((unit) => !unit.paid && unit.due > 0.009);
+                const methodMentionsAmount = /tutarl/i.test(paymentMethod || '');
+                const showBrokenPrice = !!partialUnit && tutarliCount === 0 && selectableUnits.length <= 1;
+                const qtyWas = Number(item.quantity) || 0;
+                const qtyLeft = isGift ? qtyWas : units.filter((unit) => !unit.paid && unit.due > 0.009).length;
+                const qtyChanged = !isGift && qtyLeft < qtyWas;
+                const splitCard = showPartialPay && units.length > 0;
+                const renderParcel = (unit, index, edge) => {
+                  const settled = unit.paid || unit.due <= 0.009;
+                  const picked = !settled && partialKeys.has(unit.key);
+                  const selectableIndex = selectableUnits.findIndex((entry) => entry.key === unit.key);
+                  return (
+                    <button
+                      key={unit.key}
+                      type="button"
+                      disabled={partialProcessing || settled}
+                      onClick={() => {
+                        if (settled || selectableIndex < 0) return;
+                        selectPartialPrefix(selectableUnits, selectableIndex);
+                      }}
+                      title={settled ? 'Ödendi' : `₺${unit.due.toFixed(2)}`}
+                      className={`flex min-w-0 items-center justify-center text-sm font-black leading-none ${
+                        edge === 'row' ? 'h-12' : 'flex-1'
+                      } ${edge === 'row' && index % 10 !== 0 ? 'border-l' : ''} ${
+                        edge !== 'row' ? 'border-l' : ''
+                      } ${
+                        settled
+                          ? 'cursor-default border-red-700/30 bg-red-600 text-white'
+                          : picked
+                          ? 'border-emerald-600/25 bg-emerald-500 text-white'
+                          : 'border-slate-200/90 text-slate-400 hover:bg-emerald-50 hover:text-emerald-700'
+                      }`}
+                    >
+                      {settled ? (
+                        <span className="flex flex-col items-center gap-0.5">
+                          <span className="text-[10px] leading-none line-through">{index + 1}</span>
+                          <span className="text-[8px] font-black uppercase leading-none tracking-tight">Ödendi</span>
+                        </span>
+                      ) : (
+                        index + 1
+                      )}
+                    </button>
+                  );
+                };
                 return (
-                <div
-                  key={`${item.product_id}_${item.isGift || false}`}
-                  className={`bg-white rounded-lg border p-4 transition-all shadow-sm hover:shadow-md ${
-                    isPaid
-                      ? 'bg-fuchsia-50 theme-sultan:bg-green-50/50 border-fuchsia-200 theme-sultan:border-green-200'
-                      : isGift
-                      ? 'bg-amber-50/50 border-amber-200'
-                      : 'border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0 pr-3">
-                      <div className="flex items-center space-x-2.5 mb-3">
-                        {isPaid && (
-                          <div className="w-6 h-6 rounded-full bg-fuchsia-600 theme-sultan:bg-green-600 flex items-center justify-center flex-shrink-0 shadow-sm">
-                            <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                            </svg>
-                          </div>
-                        )}
-                        {paidQuantity > 0 && !isPaid && (
-                          <div className="w-7 h-7 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 shadow-sm">
-                            <span className="text-white text-xs font-bold">{paidQuantity}/{item.quantity}</span>
-                          </div>
-                        )}
-                        <p className={`text-base font-semibold leading-snug text-gray-900 ${
-                          isPaid ? 'line-through text-fuchsia-700 theme-sultan:text-green-700' : isGift ? 'line-through text-gray-500' : ''
-                        }`}>
+                  <div
+                    key={rowKey}
+                    className={`flex flex-col overflow-hidden rounded-2xl border ${
+                      isPaid
+                        ? 'border-emerald-100 bg-emerald-50/60'
+                        : isGift
+                        ? 'border-amber-100 bg-amber-50/70'
+                        : 'border-slate-200/80 bg-white'
+                    } ${showPartialPay && isGift ? 'brightness-[0.45]' : ''}`}
+                  >
+                    <div className="flex min-w-0">
+                    <div className={`flex min-w-0 items-center gap-3 px-3 py-2.5 ${splitCard ? 'w-[52%] shrink-0' : 'flex-1'}`}>
+                    <div className="flex w-[4.5rem] shrink-0 flex-col items-center justify-center leading-none">
+                      {qtyLeft > 0 ? (
+                        <>
+                          {qtyChanged && (
+                            <span className="mb-1 text-sm font-medium tracking-tight text-slate-300 line-through">{qtyWas}x</span>
+                          )}
+                          <span className="text-4xl font-black tracking-tight text-slate-900">{qtyLeft}x</span>
+                        </>
+                      ) : (
+                        <span className="text-2xl font-black tracking-tight text-slate-300 line-through">{qtyWas}x</span>
+                      )}
+                    </div>
+                    <div className="h-14 w-14 shrink-0 overflow-hidden rounded-xl bg-slate-100">
+                      {imageSrc ? (
+                        <img src={imageSrc} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-slate-400">
+                          {(item.product_name || '?').slice(0, 1)}
+                        </div>
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className={`truncate text-[15px] font-semibold text-slate-900 ${isPaid || isGift ? 'line-through text-slate-400' : ''}`}>
                           {item.product_name}
                         </p>
                         {isGift && (
-                          <span className="text-[10px] font-bold text-white bg-amber-600 px-2 py-0.5 rounded uppercase tracking-wide">
-                            İKRAM
-                          </span>
+                          <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">İkram</span>
                         )}
                       </div>
-                      <div className="flex items-baseline space-x-2 mb-2">
-                        <p className="text-lg font-bold text-gray-900">
-                          {item.quantity}
-                        </p>
-                        <p className="text-sm text-gray-500 font-medium">adet</p>
-                        <p className="text-sm text-gray-400">×</p>
+                      <p className="mt-0.5 text-sm text-slate-500">
                         {isGift ? (
+                          <span className="line-through">₺{item.price.toFixed(2)}</span>
+                        ) : showBrokenPrice ? (
                           <>
-                            <span className="line-through text-gray-400 text-sm font-medium">₺{item.price.toFixed(2)}</span>
-                            <span className="text-fuchsia-700 theme-sultan:text-green-700 font-bold text-base ml-1">₺0.00</span>
+                            <span className="text-slate-400 line-through">₺{partialUnit.price.toFixed(2)}</span>
+                            <span className="ml-1.5 font-semibold text-slate-900">₺{partialUnit.due.toFixed(2)}</span>
                           </>
                         ) : (
-                          <p className="text-base font-semibold text-gray-800">₺{item.price.toFixed(2)}</p>
+                          `₺${item.price.toFixed(2)}`
                         )}
-                      </div>
+                      </p>
+                      {showBrokenPrice && (
+                        <p className="mt-0.5 text-[10px] leading-none text-slate-400">tutarlı ödemeden dolayı</p>
+                      )}
+                      {tutarliCount > 0 && !methodMentionsAmount && (
+                        <p className="mt-1 text-xs text-slate-500">{tutarliCount} adet tutarlı ödeme</p>
+                      )}
                       {paidQuantity > 0 && paymentMethod && (
-                        <p className={`text-xs font-medium mt-1.5 px-2 py-1 rounded ${
-                          isPaid ? 'text-fuchsia-800 theme-sultan:text-green-800 bg-fuchsia-100 theme-sultan:bg-green-100' : 'text-blue-800 bg-blue-100'
-                        }`}>
-                          {paidQuantity} adet {paymentMethod} ile ödendi
-                          {!isPaid && ` • ${remainingQuantity} adet kaldı`}
+                        <p className="mt-1 text-xs text-slate-500">
+                          {paidQuantity} adet {paymentMethod}
+                          {!isPaid && ` · ${remainingQuantity} kaldı`}
                         </p>
                       )}
                     </div>
-                    <div className="flex flex-col items-end space-y-3 flex-shrink-0">
+                    {!splitCard && (
+                    <div className="flex shrink-0 items-center gap-2 pr-2">
                       <div className="text-right">
-                        {isGift ? (
-                          <p className="font-bold text-lg text-fuchsia-700 theme-sultan:text-green-700">₺0.00</p>
-                        ) : isPaid ? (
-                          <p className="font-bold text-lg text-fuchsia-700 theme-sultan:text-green-700 line-through">₺{displayTotal.toFixed(2)}</p>
-                        ) : paidQuantity > 0 ? (
-                          <div>
-                            <p className="font-bold text-lg text-blue-700">₺{paidTotal.toFixed(2)}</p>
-                            <p className="text-xs text-gray-400 line-through font-medium">₺{displayTotal.toFixed(2)}</p>
-                          </div>
-                        ) : (
-                          <p className="font-bold text-lg text-gray-900">₺{displayTotal.toFixed(2)}</p>
+                        {selectedCount > 0 && (
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-orange-500">Seçilen</p>
+                        )}
+                        <p className={`text-base font-semibold leading-none ${isGift || isPaid ? 'text-slate-400 line-through' : selectedCount > 0 ? 'text-orange-600' : 'text-slate-900'}`}>
+                          {selectedCount > 0
+                            ? `₺${selectedSum.toFixed(2)}`
+                            : !isGift && lineRemaining + 0.009 < displayTotal
+                            ? `₺${lineRemaining.toFixed(2)}`
+                            : `₺${displayTotal.toFixed(2)}`}
+                        </p>
+                        {selectedCount === 0 && !isGift && lineRemaining + 0.009 < displayTotal && (
+                          <p className="mt-1 text-xs text-slate-400 line-through">₺{displayTotal.toFixed(2)}</p>
                         )}
                       </div>
-                      <div className="flex items-center space-x-1.5">
+                      <>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedItemDetail(item)}
+                        className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                        title="Detay"
+                      >
+                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                        </svg>
+                      </button>
+                      {order.status === 'pending' && (
                         <button
-                          onClick={() => setSelectedItemDetail(item)}
-                          className="w-8 h-8 bg-gray-50 hover:bg-gray-100 border border-gray-200 hover:border-gray-300 rounded-lg text-gray-600 hover:text-gray-800 transition-all p-1.5 flex items-center justify-center"
-                          title="Detay"
+                          type="button"
+                          onClick={() => handleCancelItem(item)}
+                          disabled={cancellingItemId === item.id}
+                          className="flex h-8 w-8 items-center justify-center rounded-xl text-slate-400 transition hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                          title="İptal"
                         >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                           </svg>
                         </button>
-                        {order.status === 'pending' && (
-                          <button
-                            onClick={() => handleCancelItem(item)}
-                            disabled={cancellingItemId === item.id}
-                            className="w-8 h-8 bg-red-50 hover:bg-red-100 border border-red-200 hover:border-red-300 rounded-lg text-red-600 hover:text-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all p-1.5 flex items-center justify-center"
-                            title="İptal"
-                          >
-                            {cancellingItemId === item.id ? (
-                              <svg className="w-4 h-4 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                              </svg>
-                            ) : (
-                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                              </svg>
-                            )}
-                          </button>
-                        )}
-                      </div>
+                      )}
+                      </>
                     </div>
+                    )}
+                    </div>
+                    {splitCard && (
+                      <div className="flex min-w-0 flex-1">
+                        {units.slice(0, 10).map((unit, index) => renderParcel(unit, index, 'side'))}
+                      </div>
+                    )}
+                    </div>
+                    {splitCard && units.slice(10).reduce((rows, unit, offset) => {
+                      const rowIndex = Math.floor(offset / 10);
+                      if (!rows[rowIndex]) rows[rowIndex] = [];
+                      rows[rowIndex].push({ unit, index: offset + 10 });
+                      return rows;
+                    }, []).map((row) => (
+                      <div key={row[0].index} className="grid grid-cols-10 border-t border-slate-200">
+                        {row.map(({ unit, index }) => renderParcel(unit, index, 'row'))}
+                      </div>
+                    ))}
                   </div>
-                </div>
-              )})}
+                );
+              })}
             </div>
-          </div>
+          </section>
 
-          {/* Toplam ve Kısmi Ödeme Bilgileri - Corporate */}
-          <div className="bg-gray-50/50 rounded-lg p-6 border border-gray-200 space-y-4">
-            <div className="flex justify-between items-center py-2">
-              <span className="text-base font-semibold text-gray-700 uppercase tracking-wide">Toplam Tutar</span>
-              <span className={`text-2xl font-bold ${
-                (paidAmount > 0.01 || partialPaymentPaid > 0.01) ? 'text-gray-400 line-through' : 'text-gray-900'
-              }`}>
-                ₺{originalTotalAmount.toFixed(2)}
-              </span>
+          <aside className="flex min-h-0 flex-col gap-2 bg-slate-50/80 p-3">
+            <div className="shrink-0 rounded-2xl bg-white px-4 py-3 text-center">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Kalan</p>
+              <p className="mt-0.5 text-3xl font-black tracking-tight text-slate-900">₺{Number(dueAmount).toFixed(2)}</p>
+              {originalTotalAmount - dueAmount > 0.01 && (
+                <p className="text-xs text-slate-400 line-through">₺{originalTotalAmount.toFixed(2)}</p>
+              )}
             </div>
-            
-            {/* Tutar bazlı kısmi ödeme sonrası kalan (parçalı ödeme etiketi gösterilmez) */}
-            {(hasPartialPayment || partialPaymentPaid > 0.01) && (
-              <div className="flex justify-between items-center bg-gray-50 rounded-lg p-4 border border-gray-200">
-                <span className="text-sm font-semibold text-gray-700">Kalan tutar</span>
-                <span className={`text-lg font-bold ${splitPaymentRemainingAmount > 0.01 ? 'text-orange-600' : 'text-fuchsia-600 theme-sultan:text-green-600'}`}>
-                  ₺{splitPaymentRemainingAmount.toFixed(2)}
-                </span>
-              </div>
-            )}
-            
-            {/* Kalem Bazlı Ödenen Tutar (eğer varsa) */}
-            {paidAmount > 0.01 && !hasPartialPayment && (
-              <div className="flex justify-between items-center bg-fuchsia-50 theme-sultan:bg-green-50/50 rounded-lg p-4 border border-fuchsia-200 theme-sultan:border-green-200">
-                <span className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Ödenen Tutar</span>
-                <span className="text-lg font-bold text-fuchsia-700 theme-sultan:text-green-700">₺{paidAmount.toFixed(2)}</span>
-              </div>
-            )}
-            
-            {/* Kalan Tutar (kalem bazlı ödeme varsa) */}
-            {paidAmount > 0.01 && !hasPartialPayment && (
-              <div className="flex justify-between items-center pt-3 border-t border-gray-300">
-                <span className="text-base font-semibold text-orange-700 uppercase tracking-wide">Kalan Tutar</span>
-                <span className="text-2xl font-bold text-orange-700">₺{remainingAmount.toFixed(2)}</span>
-              </div>
-            )}
-            
-            {/* Hem parçalı hem kalem bazlı ödeme varsa */}
-            {paidAmount > 0.01 && partialPaymentPaid > 0.01 && (
-              <div className="flex justify-between items-center pt-3 border-t border-gray-300">
-                <span className="text-base font-semibold text-orange-700 uppercase tracking-wide">Toplam Kalan Tutar</span>
-                <span className="text-2xl font-bold text-orange-700">₺{splitPaymentRemainingAmount.toFixed(2)}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Masayı Sonlandır ve Kısmi Ödeme Butonları - Corporate */}
-          {order.status === 'pending' && (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-                <button
-                  onClick={onRequestAdisyon}
-                  className="px-5 py-3.5 bg-amber-600 hover:bg-amber-700 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                  </svg>
-                  <span>Adisyon Yazdır</span>
+            {order.status === 'pending' ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                <button type="button" onClick={onRequestAdisyon} disabled={showPartialPay} className={`relative flex items-stretch overflow-hidden rounded-2xl bg-amber-500 text-white shadow-sm transition hover:bg-amber-600 disabled:cursor-not-allowed ${showPartialPay ? 'h-[4.5rem] shrink-0' : 'min-h-0 flex-1'}`}>
+                  <span className="relative flex aspect-[1/2] shrink-0 items-center justify-center self-stretch">
+                    <span className="absolute inset-0 rounded-r-full bg-amber-950/45 shadow-[inset_-10px_0_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]" />
+                    <svg className="relative z-10 h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                  </span>
+                  <span className="flex flex-1 items-center justify-center whitespace-nowrap px-1 text-center text-[28px] font-black leading-none tracking-tight [text-shadow:0_1px_1px_rgba(0,0,0,0.45),0_0_10px_rgba(0,0,0,0.35)]">Adisyon yazdır</span>
+                  {lockVeil()}
                 </button>
                 <button
-                  onClick={onPartialPayment}
-                  className="px-5 py-3.5 bg-orange-600 hover:bg-orange-700 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
+                  type="button"
+                  disabled={partialProcessing}
+                  onClick={async () => {
+                    if (!showPartialPay) {
+                      if (onPartialPayment) await onPartialPayment();
+                      setPartialKeys(new Set());
+                      setShowPartialPay(true);
+                      return;
+                    }
+                    if (selectedPartialAmount <= 0.009) {
+                      exitPartialPay();
+                      return;
+                    }
+                    setPartialMethodOpen(true);
+                  }}
+                  className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-2xl bg-emerald-500 text-white shadow-sm transition hover:bg-emerald-600 disabled:opacity-40"
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span>Kısmi Ödeme</span>
-                </button>
-                <button
-                  onClick={onAddItems}
-                  className="px-5 py-3.5 bg-fuchsia-600 theme-sultan:bg-green-600 hover:bg-fuchsia-700 theme-sultan:hover:bg-fuchsia-700 theme-sultan:bg-green-700 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                  </svg>
-                  <span>Sipariş Ekle</span>
+                  {showPartialPay ? (
+                    <span className="flex flex-col items-center px-3">
+                      <span className="text-sm font-medium text-white/85 [text-shadow:0_1px_2px_rgba(0,0,0,0.4)]">Seçilen tutar</span>
+                      <span className="mt-2 text-6xl font-black leading-none tracking-tight [text-shadow:0_2px_8px_rgba(0,0,0,0.35)]">₺{selectedPartialAmount.toFixed(2)}</span>
+                    </span>
+                  ) : (
+                    <>
+                      <span className="relative flex aspect-[1/2] shrink-0 items-center justify-center self-stretch">
+                        <span className="absolute inset-0 rounded-r-full bg-emerald-950/40 shadow-[inset_-10px_0_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]" />
+                        <svg className="relative z-10 h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      </span>
+                      <span className="flex flex-1 items-center justify-center whitespace-nowrap px-1 text-center text-[28px] font-black leading-none tracking-tight [text-shadow:0_1px_1px_rgba(0,0,0,0.45),0_0_10px_rgba(0,0,0,0.35)]">Kısmi ödeme</span>
+                    </>
+                  )}
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowSplitFractionPanel(!showSplitFractionPanel)}
-                  disabled={splitPaymentRemainingAmount <= 0.01 || processingSplitPayment}
-                  className="px-5 py-3.5 bg-gradient-to-r from-violet-600 to-pink-600 theme-sultan:to-emerald-600 hover:from-violet-700 hover:to-pink-800 theme-sultan:hover:to-pink-800 theme-sultan:to-emerald-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
+                  disabled={showPartialPay || splitPaymentRemainingAmount <= 0.01 || processingSplitPayment}
+                  className={`relative flex items-stretch overflow-hidden rounded-2xl bg-gradient-to-r from-violet-600 to-pink-600 text-white shadow-sm transition hover:from-violet-700 hover:to-pink-700 disabled:cursor-not-allowed theme-sultan:to-emerald-600 theme-sultan:hover:to-emerald-700 ${showPartialPay ? 'h-[4.5rem] shrink-0' : 'min-h-0 flex-1'}`}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
-                  </svg>
-                  <span>Bölmeli Öde</span>
+                  <span className="relative flex aspect-[1/2] shrink-0 items-center justify-center self-stretch">
+                    <span className="absolute inset-0 rounded-r-full bg-violet-950/40 shadow-[inset_-10px_0_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)] theme-sultan:bg-emerald-950/40" />
+                    <svg className="relative z-10 h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z" /></svg>
+                  </span>
+                  <span className="flex flex-1 items-center justify-center whitespace-nowrap px-1 text-center text-[28px] font-black leading-none tracking-tight [text-shadow:0_1px_1px_rgba(0,0,0,0.45),0_0_10px_rgba(0,0,0,0.35)]">Bölmeli öde</span>
+                  {lockVeil()}
                 </button>
                 <button
                   type="button"
@@ -955,53 +1152,71 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                     setShowAmountPaymentModal(true);
                     setAmountPaymentValue('');
                   }}
-                  disabled={splitPaymentRemainingAmount <= 0.01 || processingSplitPayment}
-                  className="px-5 py-3.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
+                  disabled={showPartialPay || splitPaymentRemainingAmount <= 0.01 || processingSplitPayment}
+                  className={`relative flex items-stretch overflow-hidden rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-sm transition hover:from-blue-700 hover:to-indigo-700 disabled:cursor-not-allowed ${showPartialPay ? 'h-[4.5rem] shrink-0' : 'min-h-0 flex-1'}`}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span>Tutarlı Öde</span>
+                  <span className="relative flex aspect-[1/2] shrink-0 items-center justify-center self-stretch">
+                    <span className="absolute inset-0 rounded-r-full bg-blue-950/40 shadow-[inset_-10px_0_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]" />
+                    <svg className="relative z-10 h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                  </span>
+                  <span className="flex flex-1 items-center justify-center whitespace-nowrap px-1 text-center text-[28px] font-black leading-none tracking-tight [text-shadow:0_1px_1px_rgba(0,0,0,0.45),0_0_10px_rgba(0,0,0,0.35)]">Tutarlı öde</span>
+                  {lockVeil()}
                 </button>
-                <button
-                  onClick={onCompleteTable}
-                  className="px-5 py-3.5 bg-red-600 hover:bg-red-700 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span>Sonlandır</span>
+                <button type="button" onClick={onCompleteTable} disabled={showPartialPay} className={`relative flex items-stretch overflow-hidden rounded-2xl bg-red-600 text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed ${showPartialPay ? 'h-[4.5rem] shrink-0' : 'min-h-0 flex-1'}`}>
+                  <span className="relative flex aspect-[1/2] shrink-0 items-center justify-center self-stretch">
+                    <span className="absolute inset-0 rounded-r-full bg-red-950/45 shadow-[inset_-10px_0_16px_rgba(0,0,0,0.22),inset_0_1px_0_rgba(255,255,255,0.2)]" />
+                    <svg className="relative z-10 h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M5 13l4 4L19 7" /></svg>
+                  </span>
+                  <span className="flex flex-1 items-center justify-center whitespace-nowrap px-1 text-center text-[28px] font-black leading-none tracking-tight [text-shadow:0_1px_1px_rgba(0,0,0,0.45),0_0_10px_rgba(0,0,0,0.35)]">Sonlandır</span>
+                  {lockVeil()}
                 </button>
               </div>
-              {/* Tüm Masayı İptal Et Butonu */}
-              <button
-                onClick={() => setShowCancelEntireTableModal(true)}
-                className="w-full px-5 py-3.5 bg-gray-800 hover:bg-gray-900 text-white font-semibold text-sm rounded-lg transition-all duration-200 flex items-center justify-center space-x-2 shadow-sm hover:shadow-md border border-gray-700"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                <span>{customerMode ? 'Tüm Müşteriyi İptal Et' : 'Tüm Masayı İptal Et'}</span>
-              </button>
-            </div>
-          )}
-
-          {/* Durum - Corporate Badge */}
-          {order.status !== 'pending' && (
-            <div className="flex items-center justify-center pt-2">
-              <span className={`px-5 py-2.5 rounded-lg font-semibold text-sm uppercase tracking-wide border ${
-                order.status === 'completed'
-                  ? 'bg-fuchsia-50 theme-sultan:bg-green-50 text-fuchsia-800 theme-sultan:text-green-800 border-fuchsia-200 theme-sultan:border-green-200'
-                  : 'bg-red-50 text-red-800 border-red-200'
-              }`}>
-                {order.status === 'completed' ? '✓ Tamamlandı' : '✗ İptal Edildi'}
-              </span>
-            </div>
-          )}
+            ) : (
+              <div className="flex flex-1 items-center justify-center rounded-2xl bg-white text-sm font-semibold text-slate-600">
+                {order.status === 'completed' ? 'Tamamlandı' : 'İptal edildi'}
+              </div>
+            )}
+          </aside>
         </div>
       </div>
 
+      {partialMethodOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/70 p-4 backdrop-blur-sm"
+          onClick={() => { if (!partialProcessing) setPartialMethodOpen(false); }}
+        >
+          <div className="w-full max-w-xl overflow-hidden rounded-[28px] bg-white shadow-[0_40px_90px_-24px_rgba(0,0,0,0.55)]" onClick={(event) => event.stopPropagation()}>
+            <div className="bg-gradient-to-r from-orange-500 via-amber-500 to-orange-600 px-8 py-7 text-white">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/80">Kısmi ödeme</p>
+              <p className="mt-2 text-5xl font-black leading-none tracking-tight">₺{selectedPartialAmount.toFixed(2)}</p>
+            </div>
+            <div className="grid grid-cols-2 gap-4 p-6">
+              <button
+                type="button"
+                disabled={partialProcessing}
+                onClick={() => confirmPartialPay('Nakit')}
+                className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-gradient-to-br from-fuchsia-500 to-pink-600 py-12 text-xl font-bold text-white shadow-lg transition hover:scale-[1.02] hover:shadow-xl disabled:opacity-40 theme-sultan:from-emerald-500 theme-sultan:to-emerald-700"
+              >
+                <svg className="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                Nakit
+              </button>
+              <button
+                type="button"
+                disabled={partialProcessing}
+                onClick={() => confirmPartialPay('Kredi Kartı')}
+                className="flex flex-col items-center justify-center gap-3 rounded-3xl bg-gradient-to-br from-blue-500 to-cyan-500 py-12 text-xl font-bold text-white shadow-lg transition hover:scale-[1.02] hover:shadow-xl disabled:opacity-40"
+              >
+                <svg className="h-10 w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" /></svg>
+                Kredi Kartı
+              </button>
+            </div>
+            <button type="button" disabled={partialProcessing} onClick={() => setPartialMethodOpen(false)} className="mx-6 mb-6 w-[calc(100%-3rem)] rounded-2xl bg-slate-100 py-4 text-base font-semibold text-slate-700 transition hover:bg-slate-200">Vazgeç</button>
+          </div>
+        </div>
+      )}
+
       {/* İptal Onay Modal */}
+
       {cancelConfirmItem && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-[60] animate-fade-in">
           <div className="bg-white backdrop-blur-xl border border-red-200 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl">
@@ -1773,7 +1988,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                 <tbody className="divide-y divide-gray-100">
                   {giftEligibleGroups.map((g) => {
                     const k = groupRowKey(g);
-                    const maxQ = Number(g.quantity) || 0;
+                    const maxQ = Number(g.giftableQty) || 0;
                     const val = Math.min(
                       Math.max(0, Number(giftQtyByGroupKey[k]) || 0),
                       maxQ

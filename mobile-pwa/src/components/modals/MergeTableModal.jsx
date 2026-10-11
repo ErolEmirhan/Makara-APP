@@ -46,6 +46,8 @@ export function MergeTableModal({ open, onClose }) {
         targetTableId: String(targetId),
         staffId: staff.id,
         staffName: `${staff.name} ${staff.surname}`,
+        staffIsManager: !!staff.is_manager,
+        staffIsChef: !!staff.is_chef,
       });
       if (res.success) {
         showToast('success', 'Başarılı', 'Masalar birleştirildi');

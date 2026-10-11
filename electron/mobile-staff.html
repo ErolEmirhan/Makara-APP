@@ -3225,7 +3225,7 @@
       document.getElementById('drawerPanel').classList.add('open');
       document.body.style.overflow = 'hidden';
       var mgrOpsBtn = document.getElementById('drawerManagerOpsBtn');
-      if (mgrOpsBtn) mgrOpsBtn.style.display = hasManagerPermission() ? 'flex' : 'none';
+      if (mgrOpsBtn) mgrOpsBtn.style.display = 'none';
     }
 
     function closeDrawer() {
@@ -3256,7 +3256,7 @@
         const mergeBtn = document.getElementById('drawerMergeBtn');
         if (mergeBtn) mergeBtn.style.display = (isSultanMobile || staff.is_manager) ? 'flex' : 'none';
         const mgrOpsBtn = document.getElementById('drawerManagerOpsBtn');
-        if (mgrOpsBtn) mgrOpsBtn.style.display = (isSultanMobile || staff.is_manager) ? 'flex' : 'none';
+        if (mgrOpsBtn) mgrOpsBtn.style.display = 'none';
       }
     }
 
@@ -3567,9 +3567,10 @@
           }, 200);
         });
         socket.on('staff-deleted', (data) => {
+          if (!currentStaff || String(currentStaff.id) !== String(data && data.staffId)) return;
           console.log('⚠️ Personel silindi:', data);
-          // Otomatik çıkış yap
           localStorage.removeItem('staffSession');
+          currentStaff = null;
           // Ana ekranı gizle, giriş ekranını göster
           document.getElementById('mainSection').style.display = 'none';
           document.getElementById('pinSection').style.display = 'block';

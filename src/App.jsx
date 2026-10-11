@@ -6,6 +6,7 @@ import Navbar from './components/Navbar';
 import CategoryPanel from './components/CategoryPanel';
 import TablePanel from './components/TablePanel';
 import ProductGrid from './components/ProductGrid';
+import { displayProductImage, getCachedProductImageUrl } from './utils/productImageCache';
 import Cart from './components/Cart';
 import SalesHistory from './components/SalesHistory';
 import PaymentModal from './components/PaymentModal';
@@ -22,10 +23,6 @@ import ExpenseModal from './components/ExpenseModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
 import SettingsModal from './components/SettingsModal';
-import IdleScreen from './components/IdleScreen';
-import { useIdleTimer } from './hooks/useIdleTimer';
-
-const IDLE_TIMEOUT_MS = 30000;
 
 const BRANCH_ONBOARDING_KEY = 'makara_pos_branch_onboarded';
 /** Son seçilen şube — localStorage anahtarı */
@@ -145,6 +142,7 @@ function App() {
     return 'Makara Havzan Satış Sistemi';
   }, [activeBranch, selectedBranchKey]);
   const isSuriciBranch = (activeBranch?.key || selectedBranchKey) === 'makarasur';
+  const isHavzanBranch = Boolean(isBranchReady && activeBranch?.key === 'makara');
   const isSultanBranch = useMemo(
     () => Boolean(isBranchReady && activeBranch?.key === 'sultansomati'),
     [isBranchReady, activeBranch]
@@ -154,10 +152,6 @@ function App() {
     document.body.classList.toggle('body-theme-sultan', isSultanBranch);
     return () => document.body.classList.remove('body-theme-sultan');
   }, [isSultanBranch]);
-
-  const idleTimerEnabled =
-    launcherPassed && isBranchReady && !showExitSplash;
-  const isIdle = useIdleTimer(IDLE_TIMEOUT_MS, idleTimerEnabled);
 
   /** Launcher bittiğinde tam ekran + kiosk’u yeniden aç (şeffaf masaüstü sadece launcher için) */
   useEffect(() => {
@@ -590,16 +584,22 @@ function App() {
 
   // PERFORMANS: useCallback ile memoize et
   const addToCart = useCallback((product) => {
+    const cached = getCachedProductImageUrl(product.id);
+    const direct = displayProductImage(product.image);
+    const thumb = (cached && !String(cached).startsWith('data:'))
+      ? cached
+      : (direct && !direct.startsWith('data:') ? direct : null);
     setCart(prevCart => {
       const existingItem = prevCart.find(item => item.id === product.id);
       if (existingItem) {
         return prevCart.map(item =>
           item.id === product.id
-            ? { ...item, quantity: item.quantity + 1 }
+            ? { ...item, quantity: item.quantity + 1, imageSrc: item.imageSrc || thumb }
             : item
         );
       }
-      return [...prevCart, { ...product, quantity: 1 }];
+      const { image: _productImage, imageSrc: _incoming, ...sellable } = product;
+      return [...prevCart, { ...sellable, imageSrc: thumb, quantity: 1 }];
     });
   }, []);
 
@@ -1330,12 +1330,6 @@ function App() {
 
   return (
     <>
-      {isIdle && (
-        <IdleScreen
-          isSultanBranch={isSultanBranch}
-          isSuriciBranch={isSuriciBranch}
-        />
-      )}
       <CatalogSyncProgressBar progress={catalogSyncProgress} />
 
       {showExitSplash && (
@@ -1378,7 +1372,7 @@ function App() {
           />
         </div>
       ) : currentView === 'tables' ? (
-        <div className="p-4 sm:p-6 min-h-[calc(100vh-80px)] overflow-y-auto scrollbar-custom">
+        <div className="p-4 sm:p-6 min-h-[calc(100vh-80px)] overflow-x-hidden overflow-y-auto scrollbar-custom">
           <TablePanel 
             onSelectTable={handleTableSelect}
             branchKey={activeBranch?.key || selectedBranchKey}
@@ -1455,8 +1449,8 @@ function App() {
               )}
             </div>
 
-            <div className="mb-3 flex flex-col sm:flex-row gap-2 shrink-0">
-              <div className="flex-1 relative min-w-0">
+            <div className="mb-3 flex shrink-0 flex-col gap-2 sm:flex-row">
+              <div className="relative min-w-0 flex-1">
                 <input
                   ref={searchInputRef}
                   type="search"
@@ -1464,8 +1458,7 @@ function App() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="Ürün ara"
                   autoComplete="off"
-                  className="w-full min-h-[var(--pos-touch-min)] pl-11 pr-10 bg-[var(--pos-surface-muted)] border border-transparent rounded-[var(--pos-radius-pill)] text-[var(--pos-text)] font-medium placeholder:text-[var(--pos-text-tertiary)] transition-all focus:outline-none focus:bg-[var(--pos-surface-elevated)] focus:border-[var(--pos-border-strong)] focus:shadow-[var(--pos-shadow-sm)] theme-sultan:focus:ring-2 theme-sultan:focus:ring-emerald-500/25 focus:ring-2 focus:ring-pink-500/20"
-                  style={{ fontSize: 'var(--pos-fs-input)' }}
+                  className="w-full min-h-12 rounded-2xl border border-[var(--pos-border)] bg-[var(--pos-surface-elevated)] pl-11 pr-28 text-[15px] font-medium text-[var(--pos-text)] shadow-[0_1px_2px_rgba(0,0,0,0.04)] placeholder:text-[var(--pos-text-tertiary)] transition focus:border-[var(--pos-border-strong)] focus:outline-none focus:shadow-[0_8px_24px_-16px_rgba(0,0,0,0.35)]"
                 />
                 <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--pos-text-tertiary)]">
                   <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden strokeWidth={2}>
@@ -1479,7 +1472,7 @@ function App() {
                       setSearchQuery('');
                       searchInputRef.current?.focus();
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 min-h-9 min-w-9 flex items-center justify-center rounded-full text-[var(--pos-text-secondary)] hover:bg-[var(--pos-border)] hover:text-[var(--pos-text)] transition-colors"
+                    className="absolute right-[5.5rem] top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full text-[var(--pos-text-secondary)] transition hover:bg-[var(--pos-surface-muted)] hover:text-[var(--pos-text)]"
                     aria-label="Aramayı temizle"
                   >
                     <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -1487,6 +1480,9 @@ function App() {
                     </svg>
                   </button>
                 ) : null}
+                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 rounded-lg bg-[var(--pos-surface-muted)] px-2 py-1 text-[11px] font-semibold tabular-nums text-[var(--pos-text-secondary)]">
+                  {searchQuery.trim() ? `${filteredProducts.length} sonuç` : `${filteredProducts.length} ürün`}
+                </span>
               </div>
               {userType === 'Admin' && (
                 <button
@@ -1502,22 +1498,16 @@ function App() {
                 </button>
               )}
             </div>
-            {searchQuery ? (
-              <p
-                className="mb-2 text-[var(--pos-text-secondary)] font-medium shrink-0 px-0.5"
-                style={{ fontSize: 'var(--pos-fs-meta)' }}
-              >
-                {filteredProducts.length > 0
-                  ? `${filteredProducts.length} sonuç`
-                  : 'Sonuç bulunamadı'}
-              </p>
-            ) : null}
-
             <ProductGrid
               products={filteredProducts}
               onAddToCart={addToCart}
               isSearchMode={Boolean(searchQuery.trim())}
               categoryName={selectedCategory?.name || ''}
+              visual={isHavzanBranch}
+              groupByCategory={
+                isHavzanBranch && selectedCategory?.id === ALL_PRODUCTS_CATEGORY_ID
+              }
+              categories={categories}
             />
           </div>
 

@@ -11,10 +11,12 @@ import { OrderScreen } from '../components/order/OrderScreen';
 import { ToastContainer } from '../components/ui/Toast';
 import { BroadcastModal } from '../components/modals/BroadcastModal';
 import { useAndroidBackNavigation, useBackHandler } from '../hooks/useBackButton';
+import { useSocket } from '../hooks/useSocket';
 
 export function MainScreen() {
   const { theme, branchKey } = useBranch();
   const { staff } = useAuth();
+  useSocket(branchKey);
   const { screen, loadData, toasts } = useApp();
   const [broadcast, setBroadcast] = useState(null);
 

@@ -31,11 +31,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [editingStaff, setEditingStaff] = useState(null);
   const [newPassword, setNewPassword] = useState('');
-  const [managerOpsConfigured, setManagerOpsConfigured] = useState(false);
-  const [managerOpsModalStaff, setManagerOpsModalStaff] = useState(null);
-  const [managerOpsPin, setManagerOpsPin] = useState('');
-  /** masaüstü müdür işlem şifresi modalı: müdür mü şef mi atanacak */
-  const [managerDesktopOpsMode, setManagerDesktopOpsMode] = useState('manager');
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
@@ -242,15 +237,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     };
   }, [mobileDiagSteps]);
 
-  const refreshManagerOpsConfig = async () => {
-    try {
-      const r = await window.electronAPI.getManagerOpsPasswordConfigured?.();
-      setManagerOpsConfigured(!!r?.configured);
-    } catch {
-      setManagerOpsConfigured(false);
-    }
-  };
-
   const loadStaff = async ({ preferCache = false, silent = false } = {}) => {
     if (preferCache && staffCacheRef.current?.length) {
       setStaffList(staffCacheRef.current);
@@ -260,7 +246,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       const staff = await window.electronAPI.getStaff();
       staffCacheRef.current = staff;
       setStaffList(staff);
-      await refreshManagerOpsConfig();
     } catch (error) {
       console.error('Personel yükleme hatası:', error);
       if (!staffCacheRef.current?.length) {
@@ -295,13 +280,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
   const isMakaraHavzanDesktop = !isSuriciBranch && !isSultanBranch;
 
-  const runSetStaffManager = async (staff, managerAuthPassword) => {
+  const runSetStaffManager = async (staff) => {
     try {
-      const result = await window.electronAPI.setStaffManager(staff.id, !staff.is_manager, managerAuthPassword);
+      const result = await window.electronAPI.setStaffManager(staff.id, !staff.is_manager);
       if (result.success) {
         await loadStaff();
-        setManagerOpsModalStaff(null);
-        setManagerOpsPin('');
         showToast(staff.is_manager ? 'Müdürlük kaldırıldı' : 'Müdür olarak atandı', 'success');
       } else {
         showToast('Hata: ' + (result.error || 'Bilinmeyen hata'), 'error');
@@ -312,17 +295,15 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     }
   };
 
-  const runSetStaffChef = async (staff, managerAuthPassword) => {
+  const runSetStaffChef = async (staff) => {
     try {
       if (!window.electronAPI?.setStaffChef) {
         showToast('Şef ataması bu sürümde yok', 'error');
         return;
       }
-      const result = await window.electronAPI.setStaffChef(staff.id, !staff.is_chef, managerAuthPassword);
+      const result = await window.electronAPI.setStaffChef(staff.id, !staff.is_chef);
       if (result.success) {
         await loadStaff();
-        setManagerOpsModalStaff(null);
-        setManagerOpsPin('');
         showToast(staff.is_chef ? 'Şeflik kaldırıldı' : 'Şef olarak atandı', 'success');
       } else {
         showToast('Hata: ' + (result.error || 'Bilinmeyen hata'), 'error');
@@ -334,24 +315,12 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
   };
 
   const onManagerToggleClick = (staff) => {
-    setManagerDesktopOpsMode('manager');
-    if (managerOpsConfigured) {
-      setManagerOpsModalStaff(staff);
-      setManagerOpsPin('');
-    } else {
-      runSetStaffManager(staff, undefined);
-    }
+    runSetStaffManager(staff);
   };
 
   const onChefToggleClick = (staff) => {
     if (!isMakaraHavzanDesktop) return;
-    setManagerDesktopOpsMode('chef');
-    if (managerOpsConfigured) {
-      setManagerOpsModalStaff(staff);
-      setManagerOpsPin('');
-    } else {
-      runSetStaffChef(staff, undefined);
-    }
+    runSetStaffChef(staff);
   };
 
   const handleAddStaff = async () => {
@@ -440,9 +409,9 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
 
 
   return (
-    <nav className="pos-navbar h-20 px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-3 bg-white/75 dark:bg-[#1c1c1e]/88 backdrop-blur-2xl backdrop-saturate-150 border-b border-black/[0.06] dark:border-white/[0.08] shadow-[0_1px_0_rgba(0,0,0,0.03)] relative z-50">
+    <nav className="pos-navbar relative z-50 grid h-20 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3 border-b border-slate-200/80 bg-white px-4 dark:border-white/10 dark:bg-[#141416] sm:px-5">
       {/* Sol: marka + meta */}
-      <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+      <div className="flex min-w-0 items-center gap-2 sm:gap-3">
         <div ref={hamburgerMenuRef} className="shrink-0">
           <button
             type="button"
@@ -458,11 +427,11 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
         </div>
 
         {!isSultanBranch && (
-          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center overflow-hidden bg-white dark:bg-[#2c2c2e] p-1 shrink-0 ring-1 ring-black/[0.06] dark:ring-white/10 shadow-sm">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-slate-50 p-1 ring-1 ring-slate-200 dark:bg-[#2c2c2e] dark:ring-white/10">
             <img
               src="./logo.png"
               alt="Makara Logo"
-              className="w-full h-full object-contain"
+              className="h-full w-full object-contain"
               style={{ display: 'block' }}
               onError={(e) => {
                 console.error('Logo yüklenemedi, icon.png kullanılıyor:', e.target.src);
@@ -473,19 +442,15 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           </div>
         )}
 
-        <div className="min-w-0 hidden sm:block">
-          <h1
-            className={
-              isSultanBranch
-                ? 'text-base lg:text-lg font-bold tracking-tight truncate bg-gradient-to-r from-emerald-600 to-teal-600 bg-clip-text text-transparent'
-                : 'text-base lg:text-lg font-bold tracking-tight truncate text-[#1d1d1f] dark:text-[#f5f5f7]'
-            }
-          >
-            {systemTitle}
-          </h1>
-          <p className="text-[11px] text-[#86868b] dark:text-[#a1a1a6] font-medium tabular-nums">v500.0.0</p>
+        <div className="hidden min-w-0 sm:block">
+          <div className="flex items-center gap-2">
+            <h1 className="truncate text-[15px] font-black tracking-tight text-slate-900 dark:text-[#f5f5f7] lg:text-base">
+              {systemTitle}
+            </h1>
+            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-300">v550.0.0</span>
+          </div>
         </div>
-        <div className="ml-4 pl-4 border-l border-gray-300 dark:border-slate-600 flex items-center gap-3">
+        <div className="ml-1 hidden items-center gap-2 rounded-full bg-slate-50 py-1 pl-1.5 pr-3 ring-1 ring-slate-200 md:flex dark:bg-white/[0.04] dark:ring-white/10">
           {typeof setThemeMode === 'function' && (
             <ThemeToggle themeMode={themeMode} onThemeChange={setThemeMode} />
           )}
@@ -494,7 +459,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       </div>
 
       {/* Orta: ana gezinme — segment kontrol */}
-      <div className="hidden md:flex items-center justify-center shrink-0">
+      <div className="hidden items-center justify-center md:flex">
         <div className="pos-nav-segment" role="tablist" aria-label="Ana görünüm">
           <button
             type="button"
@@ -504,7 +469,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             className={`pos-nav-segment-btn ${currentView === 'tables' ? 'pos-nav-segment-btn--active' : ''}`}
           >
             <svg className="w-[18px] h-[18px]" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M4 5h7v7H4V5zm9 0h7v7h-7V5zM4 14h7v5H4v-5zm9 0h7v5h-7v-5z" />
             </svg>
             <span>{tablesNavLabel(isSuriciBranch, isSultanBranch)}</span>
           </button>
@@ -520,7 +485,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             </svg>
             <span>Satış Yap</span>
             {totalItems > 0 && (
-              <span className="min-w-[1.25rem] h-5 px-1.5 flex items-center justify-center rounded-full bg-rose-500 text-white text-[10px] font-bold tabular-nums">
+              <span className={`flex h-5 min-w-[1.25rem] items-center justify-center rounded-full px-1.5 text-[10px] font-bold tabular-nums ${currentView === 'pos' ? 'bg-white text-slate-900' : 'bg-slate-900 text-white'}`}>
                 {totalItems > 99 ? '99+' : totalItems}
               </span>
             )}
@@ -529,7 +494,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
       </div>
 
       {/* Sağ: aksiyonlar + kullanıcı */}
-      <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+      <div className="flex items-center justify-end gap-1.5 sm:gap-2">
         {/* Mobil: segment yerine kısa butonlar */}
         <button
           type="button"
@@ -596,20 +561,14 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
           </button>
         )}
 
-        <div className="relative ml-1 pl-2 sm:pl-3 border-l border-black/[0.08] dark:border-white/10" ref={menuRef}>
+        <div className="relative ml-0.5" ref={menuRef}>
           <button
             type="button"
             onClick={() => setShowUserMenu(!showUserMenu)}
-            className="flex items-center gap-2 sm:gap-2.5 rounded-xl py-1.5 pl-1.5 pr-2 sm:pr-3 hover:bg-black/[0.04] dark:hover:bg-white/[0.06] transition-colors"
+            className="flex items-center gap-2 rounded-full py-1 pl-1 pr-2.5 transition-colors hover:bg-slate-100 dark:hover:bg-white/[0.06] sm:gap-2.5 sm:pr-3"
           >
-            <div className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-sm ${
-              userType === 'Admin'
-                ? 'bg-gradient-to-br from-slate-700 to-slate-900 dark:from-slate-500 dark:to-slate-700'
-                : isSultanBranch
-                  ? 'bg-gradient-to-br from-emerald-500 to-teal-600'
-                  : 'bg-gradient-to-br from-rose-500 to-pink-600'
-            }`}>
-              <svg className="w-[18px] h-[18px] text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 dark:bg-slate-100">
+              <svg className="h-[18px] w-[18px] text-white dark:text-slate-900" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
               </svg>
             </div>
@@ -661,9 +620,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                   onClick={() => handleUserTypeChange('Personel')}
                   className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all duration-200 mt-1 ${
                     userType === 'Personel'
-                      ? isSultanBranch
-                        ? 'bg-emerald-600 text-white'
-                        : 'bg-gradient-to-r from-rose-500 to-pink-600 text-white'
+                      ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
                       : 'hover:bg-black/[0.04] dark:hover:bg-white/[0.06] text-[#1d1d1f] dark:text-[#f5f5f7]'
                   }`}
                 >
@@ -946,11 +903,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                 <span className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-zinc-200 sm:inline">
                   {staffLoading && !staffList.length ? '…' : `${staffList.length} kayıt`}
                 </span>
-                {managerOpsConfigured && (
-                  <span className="rounded-full border border-zinc-500/50 bg-white/10 px-3 py-1 text-[11px] font-bold text-zinc-100 shadow-sm">
-                    Müdür şifresi aktif
-                  </span>
-                )}
                 <button
                   type="button"
                   onClick={handleSyncStaffToFirestore}
@@ -1399,59 +1351,6 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                       className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
                     >
                       İptal
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {managerOpsModalStaff && (
-              <div className="fixed inset-0 z-[2100] flex items-center justify-center bg-slate-950/50 px-4 backdrop-blur-sm">
-                <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl">
-                  <h4 className="text-base font-semibold text-slate-900">
-                    {managerDesktopOpsMode === 'chef' ? 'Şef ataması — masaüstü şifresi' : 'Müdür işlem şifresi'}
-                  </h4>
-                  <p className="mt-1 text-sm text-slate-600">
-                    {managerOpsModalStaff.name} {managerOpsModalStaff.surname} — masaüstü müdür işlem şifresini girin.
-                  </p>
-                  <input
-                    type="password"
-                    autoFocus
-                    value={managerOpsPin}
-                    onChange={(e) => setManagerOpsPin(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        if (managerDesktopOpsMode === 'chef') {
-                          runSetStaffChef(managerOpsModalStaff, managerOpsPin);
-                        } else {
-                          runSetStaffManager(managerOpsModalStaff, managerOpsPin);
-                        }
-                      }
-                    }}
-                    placeholder="Şifre"
-                    className="mt-4 w-full rounded-xl border border-slate-200 px-3 py-2.5 text-sm outline-none focus:border-slate-400 focus:ring-2 focus:ring-slate-200"
-                  />
-                  <div className="mt-4 flex justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setManagerOpsModalStaff(null);
-                        setManagerOpsPin('');
-                      }}
-                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
-                    >
-                      İptal
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        managerDesktopOpsMode === 'chef'
-                          ? runSetStaffChef(managerOpsModalStaff, managerOpsPin)
-                          : runSetStaffManager(managerOpsModalStaff, managerOpsPin)
-                      }
-                      className="rounded-xl bg-zinc-900 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-black"
-                    >
-                      Onayla
                     </button>
                   </div>
                 </div>

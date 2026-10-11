@@ -2,21 +2,21 @@
   "name": "MAKARA Admin Dashboard",
   "short_name": "MAKARA",
   "description": "MAKARA Satış Sistemi - Admin Dashboard",
-  "start_url": "/?v=45.0.0",
+  "start_url": "/?v=550.0.0",
   "display": "standalone",
-  "background_color": "#dc2626",
-  "theme_color": "#dc2626",
+  "background_color": "#14110f",
+  "theme_color": "#14110f",
   "orientation": "portrait",
-  "version": "45.0.0",
+  "version": "550.0.0",
   "icons": [
     {
-      "src": "/patron.png?v=45.0.0",
+      "src": "/patron.png?v=550.0.0",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
     },
     {
-      "src": "/patron.png?v=45.0.0",
+      "src": "/patron.png?v=550.0.0",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any maskable"

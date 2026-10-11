@@ -2,10 +2,11 @@ import { useMemo, useState } from 'react';
 import { useBranch } from '../../context/BranchContext';
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../context/AuthContext';
-import { canCancelOrderItem } from '../../config/branch';
+import { canCancelOrderItem, hasManagerPermission } from '../../config/branch';
 import { ProductCard } from './ProductCard';
 import { ExistingOrdersPanel } from './ExistingOrdersPanel';
 import { CancelItemModal } from '../modals/CancelItemModal';
+import { TransferItemsModal } from '../modals/TransferItemsModal';
 
 export function OrderScreen() {
   const { branchKey } = useBranch();
@@ -16,6 +17,7 @@ export function OrderScreen() {
     currentOrderItems, loading, selectedTable,
   } = useApp();
   const [cancelItem, setCancelItem] = useState(null);
+  const [transferOpen, setTransferOpen] = useState(false);
 
   const filteredProducts = useMemo(() => {
     let list = products;
@@ -38,6 +40,7 @@ export function OrderScreen() {
   }, [categories]);
 
   const canCancel = canCancelOrderItem(staff, branchKey);
+  const canTransferItems = hasManagerPermission(staff, branchKey);
 
   return (
     <div className="px-4 pb-[calc(7.5rem+env(safe-area-inset-bottom,0px))]">
@@ -88,11 +91,23 @@ export function OrderScreen() {
         />
       </div>
 
+      {canTransferItems && currentOrderItems.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setTransferOpen(true)}
+          className="w-full mb-4 py-3.5 rounded-2xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-bold shadow-lg shadow-violet-500/20 active:scale-[0.98] transition-transform"
+        >
+          Ürün aktar
+        </button>
+      )}
+
       <ExistingOrdersPanel
         items={currentOrderItems}
         canCancel={canCancel}
         onCancelItem={canCancel ? (item) => setCancelItem(item) : undefined}
       />
+
+      <TransferItemsModal open={transferOpen} onClose={() => setTransferOpen(false)} />
 
       <CancelItemModal
         open={!!cancelItem}

@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createSale: (saleData) => ipcRenderer.invoke('create-sale', saleData),
   getSales: () => ipcRenderer.invoke('get-sales'),
   getRecentSales: (hours) => ipcRenderer.invoke('get-recent-sales', hours),
+  getAdisyonHistory: (cursor, limit) => ipcRenderer.invoke('get-adisyon-history', cursor, limit),
   getSaleDetails: (saleId) => ipcRenderer.invoke('get-sale-details', saleId),
   deleteSale: (saleId) => ipcRenderer.invoke('delete-sale', saleId),
   deleteAllSales: () => ipcRenderer.invoke('delete-all-sales'),

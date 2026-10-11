@@ -1,13 +1,128 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  displayProductImage,
+  peekProductImage,
+  registerProductImage,
+  resolveProductImage,
+} from '../utils/productImageCache';
 
 const INITIAL_VISIBLE = 48;
 const LOAD_MORE_STEP = 56;
+
+const HavzanProductCard = React.memo(function HavzanProductCard({ product, onAddToCart }) {
+  const trackStock = product.trackStock === true;
+  const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
+  const isOutOfStock = trackStock && stock !== null && stock === 0;
+  const price = Number(product.price);
+  const [src, setSrc] = useState(() => peekProductImage(product.id, product.image) || displayProductImage(product.image));
+
+  useEffect(() => {
+    let cancelled = false;
+    const immediate = peekProductImage(product.id, product.image) || displayProductImage(product.image);
+    if (immediate) setSrc(immediate);
+    else setSrc(null);
+    resolveProductImage(product.id, product.image).then((url) => {
+      if (!cancelled && url) setSrc(url);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [product.id, product.image]);
+
+  const priceLabel = Number.isFinite(price) ? price.toFixed(2) : '0.00';
+
+  return (
+    <article role="listitem" className="min-w-0">
+      <button
+        type="button"
+        disabled={isOutOfStock}
+        onClick={() => {
+          if (isOutOfStock) return;
+          const { image: _image, ...sellable } = product;
+          onAddToCart(sellable);
+        }}
+        className={`group flex h-full w-full flex-col overflow-hidden rounded-[18px] border border-[var(--pos-border)] bg-[var(--pos-surface-elevated)] text-left touch-manipulation shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-16px_rgba(0,0,0,0.28)] transition duration-200 ${
+          isOutOfStock
+            ? 'cursor-not-allowed opacity-70'
+            : 'cursor-pointer hover:-translate-y-0.5 hover:border-[var(--pos-border-strong)] hover:shadow-[0_12px_32px_-18px_rgba(0,0,0,0.35)] active:scale-[0.985]'
+        }`}
+      >
+        <div className="relative aspect-[5/4] w-full shrink-0 overflow-hidden bg-[var(--pos-surface-muted)]">
+          {src ? (
+            <img
+              src={src}
+              alt=""
+              draggable={false}
+              className={`h-full w-full object-cover transition duration-500 ${
+                isOutOfStock ? 'grayscale' : 'group-hover:scale-[1.03]'
+              }`}
+              onError={() => {
+                if (src && !String(src).startsWith('data:image') && !String(src).startsWith('blob:')) {
+                  setSrc(null);
+                }
+              }}
+            />
+          ) : (
+            <img
+              src="./logo.png"
+              alt=""
+              draggable={false}
+              className="h-full w-full scale-125 object-cover opacity-70 blur-md"
+            />
+          )}
+
+          {(product.per_person || product.gluten_free) && (
+            <div className="absolute left-2 top-2 flex flex-wrap gap-1">
+              {product.per_person ? (
+                <span className="rounded-md bg-white/95 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800 shadow-sm">
+                  Kişi başı
+                </span>
+              ) : null}
+              {product.gluten_free ? (
+                <span className="rounded-md bg-white/95 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-800 shadow-sm">
+                  Glutensiz
+                </span>
+              ) : null}
+            </div>
+          )}
+
+          {isOutOfStock ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-white/55">
+              <span className="rounded-full bg-[var(--pos-text)] px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[var(--pos-surface)]">
+                Tükendi
+              </span>
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex min-h-[4.6rem] flex-1 flex-col px-3 pb-3 pt-2.5">
+          <h4 className="line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-tight text-[var(--pos-text)]">
+            {product.name}
+          </h4>
+          <div className="mt-auto flex items-end justify-between gap-2 pt-2">
+            <span className={`text-[16px] font-bold tabular-nums tracking-tight ${isOutOfStock ? 'text-[var(--pos-text-tertiary)]' : 'pos-price-gradient'}`}>
+              ₺{priceLabel}
+            </span>
+            {trackStock && stock !== null && !isOutOfStock ? (
+              <span className="mb-0.5 text-[10px] font-semibold tabular-nums text-[var(--pos-text-tertiary)]">
+                Stok {stock}
+              </span>
+            ) : null}
+          </div>
+        </div>
+      </button>
+    </article>
+  );
+});
 
 const ProductGrid = ({
   products,
   onAddToCart,
   isSearchMode = false,
   categoryName = '',
+  visual = false,
+  groupByCategory = false,
+  categories = [],
 }) => {
   const scrollRef = useRef(null);
   const sentinelRef = useRef(null);
@@ -17,9 +132,62 @@ const ProductGrid = ({
     setVisibleCount(Math.min(INITIAL_VISIBLE, products.length));
   }, [products]);
 
+  useEffect(() => {
+    for (const product of products) {
+      registerProductImage(product.id, product.image);
+    }
+  }, [products]);
+
+  const grouped = visual && groupByCategory && !isSearchMode;
+
+  const categorySections = useMemo(() => {
+    if (!grouped) return [];
+    const names = new Map();
+    const order = [];
+    for (const category of categories || []) {
+      const id = Number(category.id);
+      if (!Number.isFinite(id) || id === -998 || id === -999) continue;
+      if (names.has(id)) continue;
+      names.set(id, category.name || 'Kategori');
+      order.push({ id, rank: category.order_index ?? order.length });
+    }
+    order.sort((a, b) => a.rank - b.rank || a.id - b.id);
+    const buckets = new Map(order.map((entry) => [entry.id, []]));
+    const other = [];
+    for (const product of products) {
+      const id = Number(product.category_id);
+      if (buckets.has(id)) buckets.get(id).push(product);
+      else other.push(product);
+    }
+    const sections = order
+      .map((entry) => ({
+        id: entry.id,
+        name: names.get(entry.id),
+        products: buckets.get(entry.id),
+      }))
+      .filter((section) => section.products.length > 0);
+    if (other.length) sections.push({ id: 'other', name: 'Diğer', products: other });
+    return sections;
+  }, [grouped, categories, products]);
+
+  const visibleSections = useMemo(() => {
+    if (!grouped) return [];
+    let left = visibleCount;
+    const windowed = [];
+    for (const section of categorySections) {
+      if (left <= 0) break;
+      const take = section.products.slice(0, left);
+      left -= take.length;
+      if (take.length) {
+        windowed.push({ ...section, products: take, total: section.products.length });
+      }
+    }
+    return windowed;
+  }, [grouped, categorySections, visibleCount]);
+
   const visibleProducts = useMemo(
-    () => products.slice(0, Math.min(visibleCount, products.length)),
-    [products, visibleCount]
+    () => (grouped ? [] : products.slice(0, Math.min(visibleCount, products.length))),
+    [grouped, products, visibleCount]
   );
 
   const loadMore = useCallback(() => {
@@ -118,11 +286,39 @@ const ProductGrid = ({
         ref={scrollRef}
         className="flex-1 overflow-y-auto pos-catalog-scroll scrollbar-custom min-h-0 -mx-0.5 px-0.5"
       >
+        {grouped ? (
+          <div className="space-y-8 pb-4">
+            {visibleSections.map((section) => (
+              <section key={section.id} aria-label={section.name}>
+                <div className="mb-3 flex items-end justify-between gap-3 border-b border-[var(--pos-border)] pb-2">
+                  <h4 className="text-[16px] font-bold tracking-tight text-[var(--pos-text)]">
+                    {section.name}
+                  </h4>
+                  <span className="shrink-0 text-[12px] font-semibold tabular-nums text-[var(--pos-text-tertiary)]">
+                    {section.total} ürün
+                  </span>
+                </div>
+                <div className="pos-product-grid--havzan grid gap-3" role="list">
+                  {section.products.map((product) => (
+                    <HavzanProductCard key={product.id} product={product} onAddToCart={onAddToCart} />
+                  ))}
+                </div>
+              </section>
+            ))}
+            {showSentinel ? <div ref={sentinelRef} className="h-1 w-full" aria-hidden /> : null}
+          </div>
+        ) : null}
+        {!grouped ? (
         <div
-          className="pos-product-grid grid gap-2.5 sm:gap-3 pb-4"
+          className={`grid pb-4 ${visual ? 'pos-product-grid--havzan gap-3' : 'pos-product-grid gap-2.5 sm:gap-3'}`}
           role="list"
         >
-          {visibleProducts.map((product) => {
+          {visual
+            ? visibleProducts.map((product) => (
+                <HavzanProductCard key={product.id} product={product} onAddToCart={onAddToCart} />
+              ))
+            : null}
+          {!visual && visibleProducts.map((product) => {
             const trackStock = product.trackStock === true;
             const stock = trackStock && product.stock !== undefined ? (product.stock || 0) : null;
             const isOutOfStock = trackStock && stock !== null && stock === 0;
@@ -232,6 +428,7 @@ const ProductGrid = ({
             <div ref={sentinelRef} className="col-span-full h-1 w-full shrink-0" aria-hidden />
           ) : null}
         </div>
+        ) : null}
       </div>
     </div>
   );

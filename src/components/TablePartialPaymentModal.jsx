@@ -19,7 +19,7 @@ const roundMoney = (x) => Math.round(Number(x) * 100) / 100;
  *  │  [ KALAN TÜMÜNÜ AL · ₺X ]           │  [ SEÇİLENLERİN ÖD. AL ₺X ]│
  *  └─────────────────────────────────────┴────────────────────────────┘
  */
-const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
+const TablePartialPaymentModal = ({ order, items, onClose, onComplete, embedded = false }) => {
   const [selectedKeys, setSelectedKeys] = useState(() => new Set());
   const [processing, setProcessing] = useState(false);
   const [paymentMethodModal, setPaymentMethodModal] = useState(null);
@@ -35,16 +35,38 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
     (items || []).forEach((it) => {
       if (it.isGift) return;
       const qty = Number(it.quantity) || 0;
-      const paid = Math.max(0, Math.min(qty, Number(it.paid_quantity) || 0));
+      const paidQty = Math.max(0, Math.min(qty, Number(it.paid_quantity) || 0));
+      const listPrice = Number(it.price) || 0;
+      let cover = Math.max(0, Number(it.amount_settled) || 0);
       for (let i = 0; i < qty; i += 1) {
+        const alreadyPaid = i < paidQty;
+        let covered = 0;
+        let due = listPrice;
+        if (!alreadyPaid && cover > 0.009) {
+          if (cover >= listPrice - 0.009) {
+            covered = listPrice;
+            due = 0;
+            cover = roundMoney(cover - listPrice);
+          } else {
+            covered = cover;
+            due = roundMoney(listPrice - cover);
+            cover = 0;
+          }
+        }
+        const settledFully = !alreadyPaid && due <= 0.009;
         list.push({
           key: `${it.id}__${i}`,
           itemId: it.id,
           unitIndex: i,
           productName: it.product_name,
-          price: Number(it.price) || 0,
-          paid: i < paid,
-          paymentMethod: i < paid ? (it.payment_method || null) : null,
+          originalPrice: listPrice,
+          price: settledFully || alreadyPaid ? listPrice : due,
+          covered,
+          partial: !alreadyPaid && !settledFully && covered > 0.009,
+          paid: alreadyPaid || settledFully,
+          paymentMethod: alreadyPaid
+            ? (it.payment_method || null)
+            : (settledFully ? 'Tutarlı ödeme' : null),
         });
       }
     });
@@ -64,11 +86,11 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
   }, [items]);
 
   const totalAmount = useMemo(
-    () => roundMoney(units.reduce((s, u) => s + u.price, 0)),
+    () => roundMoney(units.reduce((s, u) => s + (u.originalPrice ?? u.price), 0)),
     [units]
   );
   const paidAmount = useMemo(
-    () => roundMoney(units.filter((u) => u.paid).reduce((s, u) => s + u.price, 0)),
+    () => roundMoney(units.reduce((s, u) => s + (u.paid ? (u.originalPrice ?? u.price) : (u.covered || 0)), 0)),
     [units]
   );
   const remainingAmount = useMemo(
@@ -95,6 +117,7 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
           key,
           productName: u.productName,
           price: u.price,
+          originalPrice: u.originalPrice,
           quantity: 0,
           unitKeys: [],
         });
@@ -146,12 +169,12 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
 
     const qtyByItem = new Map();
     validUnits.forEach((u) => {
-      qtyByItem.set(u.itemId, (qtyByItem.get(u.itemId) || 0) + 1);
+      const prev = qtyByItem.get(u.itemId) || { itemId: u.itemId, quantity: 0, amount: 0 };
+      prev.quantity += 1;
+      prev.amount = roundMoney(prev.amount + (Number(u.price) || 0));
+      qtyByItem.set(u.itemId, prev);
     });
-    const paymentsPayload = Array.from(qtyByItem.entries()).map(([itemId, quantity]) => ({
-      itemId,
-      quantity,
-    }));
+    const paymentsPayload = Array.from(qtyByItem.values());
 
     setProcessing(true);
 
@@ -274,12 +297,12 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
   const productGroups = useMemo(() => {
     const map = new Map();
     units.forEach((u) => {
-      const key = `${u.productName}__${u.price}`;
+      const key = `${u.productName}__${u.originalPrice}`;
       if (!map.has(key)) {
         map.set(key, {
           key,
           productName: u.productName,
-          price: u.price,
+          price: u.originalPrice,
           units: [],
           unpaidCount: 0,
           paidCount: 0,
@@ -303,11 +326,11 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
     return arr;
   }, [units]);
 
-  return createPortal(
+  const panel = (
     <>
-      <div className="fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-2 sm:p-4 animate-fade-in">
-        <div className="relative w-full h-[96vh] max-w-[1400px] flex flex-col rounded-3xl border border-slate-200 bg-white shadow-[0_40px_100px_-20px_rgba(0,0,0,0.55)] overflow-hidden">
-          {/* Header — sade */}
+      <div className={embedded ? 'relative flex min-h-0 flex-1 flex-col overflow-hidden bg-white' : 'fixed inset-0 z-[1200] flex items-center justify-center bg-slate-950/75 backdrop-blur-sm p-2 sm:p-4 animate-fade-in'}>
+        <div className={embedded ? 'relative flex min-h-0 flex-1 flex-col overflow-hidden' : 'relative w-full h-[96vh] max-w-[1400px] flex flex-col rounded-3xl border border-slate-200 bg-white shadow-[0_40px_100px_-20px_rgba(0,0,0,0.55)] overflow-hidden'}>
+          {!embedded && (
           <header className="shrink-0 flex items-center justify-between gap-4 px-8 py-5 bg-white border-b border-slate-200">
             <div className="min-w-0 flex items-center gap-4">
               <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-slate-900 to-zinc-700 text-white shadow-md">
@@ -341,6 +364,7 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
               </svg>
             </button>
           </header>
+          )}
 
           {/* İki sütun */}
           <div className="flex-1 min-h-0 flex flex-col lg:flex-row">
@@ -530,9 +554,11 @@ const TablePartialPaymentModal = ({ order, items, onClose, onComplete }) => {
           onClose={() => setToast({ message: '', type: 'info', show: false })}
         />
       )}
-    </>,
-    document.body
+    </>
   );
+
+  if (embedded) return panel;
+  return createPortal(panel, document.body);
 };
 
 /* ----------------------------- Alt bileşenler ----------------------------- */
@@ -573,6 +599,7 @@ const EmptyCart = () => (
 
 const CartLine = ({ line, disabled, onRemove }) => {
   const lineTotal = line.price * line.quantity;
+  const broken = line.originalPrice != null && line.originalPrice - line.price > 0.009;
   return (
     <li className="rounded-2xl border border-slate-200 bg-white px-4 py-3.5 shadow-sm transition hover:border-blue-300">
       <div className="flex items-center gap-3">
@@ -582,6 +609,12 @@ const CartLine = ({ line, disabled, onRemove }) => {
         <div className="min-w-0 flex-1">
           <p className="truncate text-base font-bold text-slate-900">{line.productName}</p>
           <p className="mt-0.5 text-[13px] text-slate-500">
+            {broken ? (
+              <>
+                <span className="line-through text-slate-400">₺{line.originalPrice.toFixed(2)}</span>
+                {' '}
+              </>
+            ) : null}
             Birim ₺{line.price.toFixed(2)} · Toplam{' '}
             <span className="font-bold text-slate-800">₺{lineTotal.toFixed(2)}</span>
           </p>
@@ -610,7 +643,7 @@ const CartLine = ({ line, disabled, onRemove }) => {
  */
 const ProductGroupCard = ({ group, selectedKeys, disabled, onToggleUnit }) => {
   const allPaid = group.unpaidCount === 0;
-  const groupTotal = group.price * group.units.length;
+  const groupTotal = group.units.reduce((sum, unit) => sum + (unit.paid ? 0 : unit.price), 0);
 
   return (
     <div
@@ -663,7 +696,7 @@ const ProductGroupCard = ({ group, selectedKeys, disabled, onToggleUnit }) => {
         </div>
         <div className="text-right shrink-0">
           <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Grup Toplamı
+            Kalan
           </p>
           <p
             className={`text-base sm:text-lg font-extrabold ${
@@ -700,7 +733,7 @@ const UnitCard = ({ unit, selected, disabled, onClick }) => {
   if (unit.paid) {
     return (
       <div
-        className="relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-3 py-4 h-[96px] shadow-sm cursor-not-allowed"
+        className="relative flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-emerald-300 bg-emerald-50 px-3 py-3 min-h-[112px] shadow-sm cursor-not-allowed"
         aria-disabled="true"
         title={unit.paymentMethod || 'Ödendi'}
       >
@@ -708,8 +741,13 @@ const UnitCard = ({ unit, selected, disabled, onClick }) => {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
         </svg>
         <span className="rounded-md bg-emerald-600 px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-widest text-white shadow">
-          Ödendi
+          {unit.paymentMethod === 'Tutarlı ödeme' ? 'Düşüldü' : 'Ödendi'}
         </span>
+        {unit.originalPrice > 0 && (
+          <span className="text-[11px] font-bold text-emerald-800 line-through">
+            ₺{unit.originalPrice.toFixed(2)}
+          </span>
+        )}
         {unit.paymentMethod && (
           <span className="text-[10px] font-semibold text-emerald-700 truncate max-w-full">
             {unit.paymentMethod}
@@ -720,7 +758,7 @@ const UnitCard = ({ unit, selected, disabled, onClick }) => {
   }
 
   const base =
-    'relative flex flex-col items-center justify-center gap-1 rounded-xl border-2 px-3 py-4 h-[96px] text-center transition select-none';
+    'relative flex flex-col items-center justify-center gap-1 rounded-xl border-2 px-3 py-3 min-h-[112px] text-center transition select-none';
   const stateClass = selected
     ? 'border-blue-600 bg-gradient-to-br from-blue-50 via-white to-indigo-50 shadow-[0_10px_24px_-8px_rgba(37,99,235,0.45)] ring-2 ring-blue-400/60'
     : 'border-slate-200 bg-white shadow-sm hover:border-blue-400 hover:shadow-md hover:-translate-y-0.5';
@@ -740,12 +778,17 @@ const UnitCard = ({ unit, selected, disabled, onClick }) => {
           </svg>
         </div>
       )}
+      {unit.partial ? (
+        <span className="text-[11px] font-bold text-slate-400 line-through">
+          ₺{unit.originalPrice.toFixed(2)}
+        </span>
+      ) : null}
       <span
-        className={`text-3xl sm:text-4xl font-extrabold leading-none ${
-          selected ? 'text-blue-700' : 'text-slate-400'
+        className={`text-2xl sm:text-3xl font-extrabold leading-none ${
+          selected ? 'text-blue-700' : 'text-slate-800'
         }`}
       >
-        ×1
+        ₺{unit.price.toFixed(2)}
       </span>
       <span
         className={`text-[11px] font-bold uppercase tracking-wider ${

@@ -32,6 +32,7 @@ let firebaseQuery = null;
 let firebaseOrderBy = null;
 let firebaseLimit = null;
 let firebaseUpdateDoc = null;
+let firebaseRunTransaction = null;
 let storageRef = null;
 let storageUploadBytes = null;
 let storageGetDownloadURL = null;
@@ -465,6 +466,7 @@ async function initializeFirebaseForBranch(branchKey) {
     firebaseOrderBy = firebaseFirestoreModule.orderBy;
     firebaseLimit = firebaseFirestoreModule.limit;
     firebaseUpdateDoc = firebaseFirestoreModule.updateDoc;
+    firebaseRunTransaction = firebaseFirestoreModule.runTransaction;
     storageRef = firebaseStorageModule.ref;
     storageUploadBytes = firebaseStorageModule.uploadBytes;
     storageGetDownloadURL = firebaseStorageModule.getDownloadURL;
@@ -824,7 +826,11 @@ function initDefaultData() {
   saveDatabase();
 }
 
+/** Geçmiş adisyon listesi. Satış yazılınca saveDatabase sıfırlar; sonraki okuma bir kez kurar. */
+let adisyonHistoryCache = null;
+
 function saveDatabase() {
+  adisyonHistoryCache = null;
   if (saveDatabaseTimer) clearTimeout(saveDatabaseTimer);
   saveDatabaseTimer = setTimeout(() => {
     saveDatabaseTimer = null;
@@ -921,6 +927,29 @@ async function saveProductToFirebase(product) {
   }
 }
 
+function normalizeStoredProductImage(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('data:image')) return trimmed;
+  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) return trimmed;
+  if (trimmed.length > 80 && !/\s/.test(trimmed)) return `data:image/jpeg;base64,${trimmed}`;
+  return null;
+}
+
+/** Mobil katalogla aynı kaynak: image_base64 asıl görsel, image çoğu üründe boş veya kırık depo adresi. */
+function extractFirestoreProductImage(firebaseProduct) {
+  if (!firebaseProduct) return null;
+  const fromBase64 = normalizeStoredProductImage(
+    firebaseProduct.image_base64 || firebaseProduct.imageBase64 || null
+  );
+  if (fromBase64 && fromBase64.startsWith('data:image')) return fromBase64;
+  return normalizeStoredProductImage(
+    firebaseProduct.image || firebaseProduct.image_url || firebaseProduct.imageUrl || fromBase64
+  );
+}
+
 function mapFirebaseProductToLocal(firebaseProduct) {
   const productId = typeof firebaseProduct.id === 'string' ? parseInt(firebaseProduct.id, 10) : firebaseProduct.id;
   const o = {
@@ -928,7 +957,7 @@ function mapFirebaseProductToLocal(firebaseProduct) {
     name: firebaseProduct.name || '',
     category_id: typeof firebaseProduct.category_id === 'string' ? parseInt(firebaseProduct.category_id, 10) : firebaseProduct.category_id,
     price: parseFloat(firebaseProduct.price) || 0,
-    image: firebaseProduct.image || null
+    image: extractFirestoreProductImage(firebaseProduct)
   };
   if (firebaseProduct.description) o.description = firebaseProduct.description;
   if (firebaseProduct.gluten_free === true) o.gluten_free = true;
@@ -940,13 +969,11 @@ function mapFirebaseProductToLocal(firebaseProduct) {
 
 /** Firebase dokümanında image yokken (eski kayıtlar) yerel data:image korunur */
 function mergeProductFromFirebaseWithLocalDataUrl(prevLocal, mappedFromFirebase) {
-  if (
-    prevLocal &&
-    typeof prevLocal.image === 'string' &&
-    prevLocal.image.startsWith('data:image') &&
-    (mappedFromFirebase.image == null || mappedFromFirebase.image === '')
-  ) {
-    return { ...mappedFromFirebase, image: prevLocal.image };
+  const remoteImg = typeof mappedFromFirebase.image === 'string' ? mappedFromFirebase.image : '';
+  if (remoteImg.startsWith('data:image')) return mappedFromFirebase;
+  const localImg = prevLocal && typeof prevLocal.image === 'string' ? prevLocal.image : '';
+  if (localImg.startsWith('data:image')) {
+    return { ...mappedFromFirebase, image: localImg };
   }
   return mappedFromFirebase;
 }
@@ -2290,71 +2317,300 @@ ipcMain.handle('get-sales', () => {
   return salesWithItems.sort((a, b) => b.id - a.id).slice(0, 100);
 });
 
-// Son 12 saatin satışlarını getir
-ipcMain.handle('get-recent-sales', (event, hours = 12) => {
-  const now = new Date();
-  const hoursAgo = new Date(now.getTime() - (hours * 60 * 60 * 1000));
-  
-  // Satışları ve itemları birleştir
-  const salesWithItems = db.sales.map(sale => {
-    const saleItems = db.saleItems.filter(si => si.sale_id === sale.id);
-    
-    // Items string'i (eski format için uyumluluk)
-    const items = saleItems
-      .map(si => {
-        const giftText = si.isGift ? ' (İKRAM)' : '';
-        return `${si.product_name} x${si.quantity}${giftText}`;
-      })
-      .join(', ');
-    
-    // Items array (gerçek veriler için - personel bilgisi dahil)
-    const itemsArray = saleItems.map(si => ({
-      product_id: si.product_id,
-      product_name: si.product_name,
-      quantity: si.quantity,
-      price: si.price,
-      isGift: si.isGift || false,
-      staff_id: si.staff_id || null,
-      staff_name: si.staff_name || null
+function parseSaleDateTimeMs(dateStr, timeStr) {
+  if (!dateStr) return 0;
+  try {
+    const [day, month, year] = String(dateStr).split('.');
+    const [hour, minute, second] = String(timeStr || '00:00:00').split(':');
+    const parsed = new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour) || 0,
+      Number(minute) || 0,
+      Number(second) || 0
+    );
+    const time = parsed.getTime();
+    return Number.isFinite(time) ? time : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function paymentKindLabel(sale) {
+  const kind = sale.payment_kind;
+  if (kind === 'bolmeli') return 'Bölmeli ödeme';
+  if (kind === 'tutarli' || sale.is_amount_payment) return 'Tutarlı ödeme';
+  if (kind === 'kismi') return 'Kısmi ödeme';
+  if (kind === 'kapanis') return 'Kapanış';
+  return 'Ödeme';
+}
+
+function isAmountPaymentSale(sale) {
+  return sale.payment_kind === 'bolmeli' || sale.payment_kind === 'tutarli' || sale.is_amount_payment === true;
+}
+
+function mergePaymentLines(items) {
+  const map = new Map();
+  for (const item of items || []) {
+    const name = item.product_name || item.name || 'Ürün';
+    const price = Number(item.price) || 0;
+    const isGift = !!(item.isGift);
+    const key = `${name}|${price}|${isGift ? 1 : 0}`;
+    let row = map.get(key);
+    if (!row) {
+      row = { name, price, quantity: 0, isGift };
+      map.set(key, row);
+    }
+    row.quantity += Number(item.quantity) || 0;
+  }
+  return [...map.values()].filter((row) => row.quantity > 0);
+}
+
+function buildSessionPayments(sales) {
+  const ordered = [...(sales || [])].sort((a, b) => Number(a.id) - Number(b.id));
+  const groups = [];
+  for (const sale of ordered) {
+    const batch = sale.payment_batch || null;
+    const last = groups[groups.length - 1];
+    if (batch && last && last.batch === batch && last.amountPayment === isAmountPaymentSale(sale)) {
+      last.amount += Number(sale.total_amount) || 0;
+      last.lines.push(...(sale.items || []));
+      if (sale.payment_method && !last.methods.includes(sale.payment_method)) last.methods.push(sale.payment_method);
+      continue;
+    }
+    groups.push({
+      batch,
+      kind: sale.payment_kind || null,
+      amountPayment: isAmountPaymentSale(sale),
+      amount: Number(sale.total_amount) || 0,
+      methods: sale.payment_method ? [sale.payment_method] : [],
+      lines: [...(sale.items || [])]
+    });
+  }
+  return groups.map((group, index) => ({
+    index: index + 1,
+    label: paymentKindLabel(group.amountPayment ? { payment_kind: group.kind, is_amount_payment: true } : { payment_kind: group.kind }),
+    method: group.methods.filter(Boolean).join(' + '),
+    amount: Math.round(group.amount * 100) / 100,
+    items: group.amountPayment ? [] : mergePaymentLines(group.lines)
+  }));
+}
+
+function getAdisyonHistoryCache() {
+  if (adisyonHistoryCache) return adisyonHistoryCache;
+
+  const itemsBySale = new Map();
+  for (const saleItem of db.saleItems || []) {
+    const key = String(saleItem.sale_id);
+    let bucket = itemsBySale.get(key);
+    if (!bucket) {
+      bucket = [];
+      itemsBySale.set(key, bucket);
+    }
+    bucket.push(saleItem);
+  }
+
+  const sessionGroups = new Map();
+  const standalone = [];
+
+  const orderedSales = [...(db.sales || [])].sort(
+    (a, b) => parseSaleDateTimeMs(a.sale_date, a.sale_time) - parseSaleDateTimeMs(b.sale_date, b.sale_time)
+  );
+
+  for (const sale of orderedSales) {
+    const saleItems = itemsBySale.get(String(sale.id)) || [];
+    const itemsArray = saleItems.map((saleItem) => ({
+      product_id: saleItem.product_id,
+      product_name: saleItem.product_name,
+      quantity: saleItem.quantity,
+      price: saleItem.price,
+      isGift: saleItem.isGift || false,
+      staff_id: saleItem.staff_id || null,
+      staff_name: saleItem.staff_name || null
     }));
-    
-    return {
-      ...sale,
-      items: items || 'Ürün bulunamadı',
-      items_array: itemsArray
+    const itemsText = saleItems
+      .map((saleItem) => `${saleItem.product_name} x${saleItem.quantity}${saleItem.isGift ? ' (İKRAM)' : ''}`)
+      .join(', ');
+
+    const tableOrderId = sale.table_order_id;
+    let key = null;
+    if (tableOrderId != null && tableOrderId !== '') {
+      key = `to_${tableOrderId}`;
+    } else if (sale.table_name && sale.sale_date && sale.sale_time) {
+      key = `ts_${sale.table_name}|${sale.table_type || ''}|${sale.sale_date}|${sale.sale_time}`;
+    }
+
+    const saleRecord = {
+      id: sale.id,
+      total_amount: parseFloat(sale.total_amount || 0),
+      payment_method: sale.payment_method || '',
+      payment_kind: sale.payment_kind || null,
+      payment_batch: sale.payment_batch || null,
+      is_amount_payment: !!sale.is_amount_payment,
+      items: itemsArray
     };
-  });
-  
-  // Son 12 saat içindeki satışları filtrele
-  const recentSales = salesWithItems.filter(sale => {
-    try {
-      // Tarih ve saat bilgisini parse et
-      const [day, month, year] = sale.sale_date.split('.');
-      const [hours, minutes, seconds] = (sale.sale_time || '00:00:00').split(':');
-      const saleDate = new Date(year, month - 1, day, hours || 0, minutes || 0, seconds || 0);
-      
-      return saleDate >= hoursAgo;
-    } catch (error) {
-      return false;
+
+    if (!key) {
+      const payments = buildSessionPayments([saleRecord]);
+      standalone.push({
+        id: sale.id,
+        table_order_id: tableOrderId || null,
+        table_name: sale.table_name || null,
+        table_type: sale.table_type || null,
+        sale_date: sale.sale_date,
+        sale_time: sale.sale_time,
+        payment_method: sale.payment_method,
+        total_amount: sale.total_amount,
+        items: itemsText || 'Ürün bulunamadı',
+        items_array: itemsArray,
+        payments,
+        staff_name: sale.staff_name || null,
+        isGrouped: false,
+        payment_count: 1,
+        sortTime: parseSaleDateTimeMs(sale.sale_date, sale.sale_time)
+      });
+      continue;
     }
-  });
-  
-  // En yeni satışlar önce
-  return recentSales.sort((a, b) => {
-    try {
-      const [dayA, monthA, yearA] = a.sale_date.split('.');
-      const [hoursA, minutesA, secondsA] = (a.sale_time || '00:00:00').split(':');
-      const dateA = new Date(yearA, monthA - 1, dayA, hoursA || 0, minutesA || 0, secondsA || 0);
-      
-      const [dayB, monthB, yearB] = b.sale_date.split('.');
-      const [hoursB, minutesB, secondsB] = (b.sale_time || '00:00:00').split(':');
-      const dateB = new Date(yearB, monthB - 1, dayB, hoursB || 0, minutesB || 0, secondsB || 0);
-      
-      return dateB - dateA;
-    } catch (error) {
-      return 0;
+
+    let group = sessionGroups.get(key);
+    if (!group) {
+      group = {
+        table_order_id: tableOrderId,
+        table_name: sale.table_name || null,
+        table_type: sale.table_type || null,
+        first_id: sale.id,
+        first_sale_date: sale.sale_date,
+        first_sale_time: sale.sale_time,
+        last_sale_date: sale.sale_date,
+        last_sale_time: sale.sale_time,
+        payment_methods: new Set(),
+        total_amount: 0,
+        items_array: [],
+        items_strings: [],
+        staff_names: new Set(),
+        payment_count: 0,
+        sales: []
+      };
+      sessionGroups.set(key, group);
     }
+    group.last_sale_date = sale.sale_date;
+    group.last_sale_time = sale.sale_time;
+    group.total_amount += parseFloat(sale.total_amount || 0);
+    group.payment_count += 1;
+    if (sale.payment_method) group.payment_methods.add(sale.payment_method);
+    if (sale.staff_name) group.staff_names.add(sale.staff_name);
+    group.sales.push(saleRecord);
+    if (itemsArray.length > 0) group.items_array.push(...itemsArray);
+    else if (itemsText) group.items_strings.push(itemsText);
+  }
+
+  const groupedSales = [];
+  for (const group of sessionGroups.values()) {
+    let itemsText = '';
+    let mergedItems = [];
+    if (group.items_array.length > 0) {
+      const itemMap = new Map();
+      for (const item of group.items_array) {
+        const itemKey = `${item.product_id || item.product_name}_${item.price}`;
+        let merged = itemMap.get(itemKey);
+        if (!merged) {
+          merged = {
+            product_id: item.product_id,
+            product_name: item.product_name,
+            price: item.price,
+            quantity: 0,
+            isGift: item.isGift || false,
+            staff_name: item.staff_name || null
+          };
+          itemMap.set(itemKey, merged);
+        }
+        merged.quantity += Number(item.quantity) || 0;
+        if (item.isGift) merged.isGift = true;
+      }
+      mergedItems = [...itemMap.values()].filter((item) => (Number(item.quantity) || 0) > 0);
+      itemsText = mergedItems
+        .map((item) => `${item.product_name} x${item.quantity}${item.isGift ? ' (İKRAM)' : ''}`)
+        .join(', ');
+    } else if (group.items_strings.length > 0) {
+      itemsText = group.items_strings.join(', ');
+    }
+
+    const paymentMethods = [...group.payment_methods];
+    const isGrouped = group.payment_count > 1;
+    const sortDate = isGrouped ? group.last_sale_date : group.first_sale_date;
+    const sortClock = isGrouped ? group.last_sale_time : group.first_sale_time;
+    const payments = buildSessionPayments(group.sales);
+    groupedSales.push({
+      id: group.first_id,
+      table_order_id: group.table_order_id,
+      table_name: group.table_name,
+      table_type: group.table_type,
+      sale_date: group.first_sale_date,
+      sale_time: group.first_sale_time,
+      last_sale_date: group.last_sale_date,
+      last_sale_time: group.last_sale_time,
+      payment_method: paymentMethods.length > 1
+        ? `${paymentMethods.join(' + ')} (Toplam)`
+        : (paymentMethods[0] || 'Bilinmiyor'),
+      total_amount: Math.round(group.total_amount * 100) / 100,
+      items: itemsText || 'Ürün bulunamadı',
+      items_array: mergedItems,
+      payments,
+      staff_name: [...group.staff_names].join(', ') || null,
+      isGrouped: payments.length > 1,
+      payment_count: payments.length,
+      sortTime: parseSaleDateTimeMs(sortDate, sortClock)
+    });
+  }
+
+  const idRank = (id) => {
+    const numeric = Number(id);
+    return Number.isFinite(numeric) ? numeric : 0;
+  };
+  adisyonHistoryCache = [...groupedSales, ...standalone].sort((a, b) => {
+    if (b.sortTime !== a.sortTime) return b.sortTime - a.sortTime;
+    return idRank(b.id) - idRank(a.id);
   });
+  return adisyonHistoryCache;
+}
+
+function toClientAdisyon(entry) {
+  const { sortTime, ...sale } = entry;
+  return sale;
+}
+
+ipcMain.handle('get-adisyon-history', (event, cursor = null, limit = 10) => {
+  const all = getAdisyonHistoryCache();
+  const size = Math.min(10, Math.max(1, Number(limit) || 10));
+  let start = 0;
+  if (cursor && cursor.time != null) {
+    const cursorTime = Number(cursor.time) || 0;
+    const cursorId = Number(cursor.id);
+    const cursorRank = Number.isFinite(cursorId) ? cursorId : 0;
+    start = all.findIndex((sale) => {
+      const rank = Number(sale.id);
+      const saleRank = Number.isFinite(rank) ? rank : 0;
+      return sale.sortTime < cursorTime || (sale.sortTime === cursorTime && saleRank < cursorRank);
+    });
+    if (start < 0) start = all.length;
+  }
+  const slice = all.slice(start, start + size);
+  const last = slice[slice.length - 1];
+  return {
+    items: slice.map(toClientAdisyon),
+    total: all.length,
+    hasMore: start + size < all.length,
+    nextCursor: last ? { time: last.sortTime, id: last.id } : null
+  };
+});
+
+// Eski çağrılar için: önbellekten saat penceresi. Geçmiş adisyon ekranı sayfalı API kullanır.
+ipcMain.handle('get-recent-sales', (event, hours = 12) => {
+  const cutoff = Date.now() - ((Number(hours) || 12) * 60 * 60 * 1000);
+  return getAdisyonHistoryCache()
+    .filter((sale) => (sale.sortTime || 0) >= cutoff)
+    .map(toClientAdisyon);
 });
 
 ipcMain.handle('get-sale-details', (event, saleId) => {
@@ -2643,6 +2899,18 @@ ipcMain.handle('get-table-order-items', (event, orderId) => {
       result.push(oi);
     }
   }
+  if (result.length) {
+    const order = db.tableOrders.find((o) => o.id === result[0].order_id || o.id === Number(result[0].order_id));
+    if (order && order.status === 'pending') {
+      const before = result.map((item) => `${item.id}:${item.paid_quantity || 0}:${item.amount_settled || 0}`).join('|');
+      rebalanceAmountSettledFifo(result);
+      const after = result.map((item) => `${item.id}:${item.paid_quantity || 0}:${item.amount_settled || 0}`).join('|');
+      if (before !== after) {
+        saveDatabase();
+        syncSingleTableToFirebase(order.table_id).catch(() => {});
+      }
+    }
+  }
   return result;
 });
 
@@ -2663,18 +2931,28 @@ function parseGiftGroupKey(groupKey) {
   return { productIdRaw, isGiftSuffix: suffix === 'true' };
 }
 
-/** Bir satırdan giftQty adedi ikram satırına ayırır (veya tüm satırı ikram yapar). */
+/** Ödenmemiş adedi ikram satırına ayırır. Ödenmiş adet satırda kalır. */
 function splitTableOrderRowGift(row, giftQty) {
   const oid = row.order_id;
   const q = Number(row.quantity) || 0;
-  const take = Math.min(Math.max(0, giftQty), q);
+  const paidQty = Math.min(q, Math.max(0, Number(row.paid_quantity) || 0));
+  const unpaid = q - paidQty;
+  const take = Math.min(Math.max(0, giftQty), unpaid);
   if (take <= 0) return 0;
   if (!db.tableOrderItems) db.tableOrderItems = [];
-  if (take >= q) {
+  if (paidQty === 0 && take >= q) {
     row.isGift = true;
+    row.paid_quantity = 0;
+    row.is_paid = false;
+    row.amount_settled = 0;
     return take;
   }
   row.quantity = q - take;
+  row.paid_quantity = Math.min(paidQty, row.quantity);
+  if (row.paid_quantity >= row.quantity) {
+    row.is_paid = true;
+    row.amount_settled = 0;
+  }
   db.tableOrderItems.push({
     id: nextTableOrderItemId(),
     order_id: oid,
@@ -2689,17 +2967,17 @@ function splitTableOrderRowGift(row, giftQty) {
     added_time: row.added_time,
     item_note: row.item_note ?? null,
     paid_quantity: 0,
-    is_paid: false
+    is_paid: false,
+    amount_settled: 0
   });
   return take;
 }
 
-function finalizeTableOrderGiftUpdate(order) {
-  const oid = order.id;
-  const newTotal = (db.tableOrderItems || [])
-    .filter((oi) => oi.order_id === oid)
-    .reduce((s, oi) => s + (oi.isGift ? 0 : Number(oi.price) * Number(oi.quantity)), 0);
-  order.total_amount = Math.round(newTotal * 100) / 100;
+function finalizeTableOrderGiftUpdate(order, deductedAmount) {
+  const lines = (db.tableOrderItems || []).filter((oi) => oi.order_id === order.id);
+  rebalanceAmountSettledFifo(lines);
+  const deduct = roundPaymentMoney(deductedAmount);
+  order.total_amount = roundPaymentMoney(Math.max(0, (Number(order.total_amount) || 0) - deduct));
   saveDatabase();
   syncSingleTableToFirebase(order.table_id).catch((err) => {
     console.error('Masa Firebase kaydetme hatası (ikram):', err);
@@ -2732,6 +3010,7 @@ ipcMain.handle('set-table-order-items-as-gift', (event, orderId, payload) => {
   // Kısmi ikram: { allocations: [{ groupKey, giftQuantity }] }
   if (payload && typeof payload === 'object' && !Array.isArray(payload) && Array.isArray(payload.allocations)) {
     let appliedGiftUnits = 0;
+    let deductedAmount = 0;
     for (const entry of payload.allocations) {
       const gk = entry && entry.groupKey;
       const want = Math.max(0, Math.floor(Number(entry.giftQuantity) || 0));
@@ -2741,20 +3020,22 @@ ipcMain.handle('set-table-order-items-as-gift', (event, orderId, payload) => {
       const pid = parsed.productIdRaw;
       const rows = (db.tableOrderItems || [])
         .filter((oi) => {
-          if (oi.order_id !== oid || oi.isGift) return false;
+          if (Number(oi.order_id) !== oid || oi.isGift) return false;
           if (String(oi.product_id) !== String(pid)) return false;
+          const qty = Number(oi.quantity) || 0;
           const paidQty = Number(oi.paid_quantity) || 0;
-          if (paidQty > 0 || oi.is_paid) return false;
-          return true;
+          return qty - paidQty > 0;
         })
         .sort((a, b) => a.id - b.id);
-      const maxUnits = rows.reduce((s, r) => s + (Number(r.quantity) || 0), 0);
+      const unpaidOf = (row) => Math.max(0, (Number(row.quantity) || 0) - (Number(row.paid_quantity) || 0));
+      const maxUnits = rows.reduce((s, r) => s + unpaidOf(r), 0);
       let remaining = Math.min(want, maxUnits);
       for (const row of rows) {
         if (remaining <= 0) break;
-        const rq = Number(row.quantity) || 0;
-        const take = Math.min(rq, remaining);
-        appliedGiftUnits += splitTableOrderRowGift(row, take);
+        const take = Math.min(unpaidOf(row), remaining);
+        const taken = splitTableOrderRowGift(row, take);
+        appliedGiftUnits += taken;
+        deductedAmount = roundPaymentMoney(deductedAmount + (Number(row.price) || 0) * taken);
         remaining -= take;
       }
     }
@@ -2764,7 +3045,7 @@ ipcMain.handle('set-table-order-items-as-gift', (event, orderId, payload) => {
         error: 'İkram yapılacak uygun satır yok veya adet geçersiz'
       };
     }
-    finalizeTableOrderGiftUpdate(order);
+    finalizeTableOrderGiftUpdate(order, deductedAmount);
     return {
       success: true,
       updatedCount: appliedGiftUnits,
@@ -2783,14 +3064,17 @@ ipcMain.handle('set-table-order-items-as-gift', (event, orderId, payload) => {
 
   let updatedRows = 0;
   let appliedGiftUnits = 0;
+  let deductedAmount = 0;
   for (const rawId of ids) {
     const row = db.tableOrderItems.find((oi) => oi.id === rawId && oi.order_id === oid);
     if (!row || row.isGift) continue;
     const paidQty = Number(row.paid_quantity) || 0;
     if (paidQty > 0 || row.is_paid) continue;
+    const qty = Number(row.quantity) || 0;
     row.isGift = true;
     updatedRows += 1;
-    appliedGiftUnits += Number(row.quantity) || 0;
+    appliedGiftUnits += qty;
+    deductedAmount = roundPaymentMoney(deductedAmount + (Number(row.price) || 0) * qty);
   }
 
   if (updatedRows === 0) {
@@ -2800,7 +3084,7 @@ ipcMain.handle('set-table-order-items-as-gift', (event, orderId, payload) => {
     };
   }
 
-  finalizeTableOrderGiftUpdate(order);
+  finalizeTableOrderGiftUpdate(order, deductedAmount);
   return {
     success: true,
     updatedCount: updatedRows,
@@ -3294,6 +3578,7 @@ ipcMain.handle('transfer-table-order', async (event, sourceTableId, targetTableI
 
 // Sipariş ürünlerini başka masaya aktar (ürünleri kaynak masadan sil, hedef masaya ekle, kategori bazlı yazdır + aktarım bildirimi)
 function getTableNameFromId(tableId) {
+  tableId = String(tableId ?? '');
   const sultanParsed = parseSultanTableIdForMain(tableId);
   if (sultanParsed) return sultanParsed.name;
   if (tableId.startsWith('inside-')) return `Masa ${tableId.replace('inside-', '')}`;
@@ -3308,6 +3593,7 @@ function getTableNameFromId(tableId) {
   return tableId;
 }
 function getTableTypeFromId(tableId) {
+  tableId = String(tableId ?? '');
   const sultanParsed = parseSultanTableIdForMain(tableId);
   if (sultanParsed) return sultanParsed.type;
   if (tableId.startsWith('inside-') || (tableId.startsWith('package-') && tableId.includes('inside'))) return 'inside';
@@ -3319,26 +3605,79 @@ function tableIdsEqual(a, b) {
   return String(a) === String(b);
 }
 
+/** Suriçi dış masa: eski sıra numarası ile güncel masa numarası aynı siparişi gösterir */
+function pendingTableIdCandidates(tableId) {
+  const id = String(tableId ?? '');
+  const ids = [id];
+  if (id.startsWith('outside-')) {
+    const tableNumber = parseInt(id.replace('outside-', ''), 10) || 0;
+    const idx = MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.indexOf(tableNumber);
+    if (idx >= 0) ids.push(`outside-${idx + 1}`);
+    else if (
+      tableNumber >= 1 &&
+      tableNumber <= MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS.length &&
+      MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[tableNumber - 1] != null
+    ) {
+      ids.push(`outside-${MAKARA_SURICI_OUTSIDE_TABLE_NUMBERS[tableNumber - 1]}`);
+    }
+  }
+  return ids;
+}
+
+function findPendingOrderForTable(tableId) {
+  const candidates = pendingTableIdCandidates(tableId);
+  return (db.tableOrders || []).find(
+    (o) => o.status === 'pending' && candidates.some((id) => tableIdsEqual(o.table_id, id))
+  );
+}
+
+function findTableOrderById(orderId) {
+  return (db.tableOrders || []).find((o) => String(o.id) === String(orderId)) || null;
+}
+
+function pwaStaffHintsFromPayload(data) {
+  const src = data || {};
+  return {
+    is_manager: !!(src.staffIsManager || src.is_manager),
+    is_chef: !!(src.staffIsChef || src.is_chef),
+    is_admin: !!(src.staffIsAdmin || src.is_admin),
+    is_boss: !!(src.staffIsBoss || src.is_boss),
+  };
+}
+
+/** PWA müdür işlemleri: yerel kayıt, Firestore ve oturum bayrağı birlikte bakılır */
+async function mobileStaffMayTransfer(staffId, hints = {}, actionLabel = 'Bu işlem') {
+  if (activeBranchKey === 'sultansomati') return { ok: true };
+  if (staffId == null || staffId === '') {
+    return { ok: false, error: 'Personel bilgisi gerekli' };
+  }
+  const staff = await resolveStaffForMobileCancel(staffId, hints);
+  const allowed = !!(staff && (staff.is_manager || staff.is_admin || staff.is_boss));
+  if (!allowed) {
+    return {
+      ok: false,
+      error: `${actionLabel} yetkisi yok. Bu işlem için müdür yetkisi gereklidir.`,
+    };
+  }
+  return { ok: true, staff };
+}
+
 /** PWA + IPC: masa aktarımı (Firebase senkronu arka planda, yanıtı bloklamaz) */
 async function transferTableOrderInternal(sourceTableId, targetTableId) {
   const sourceId = String(sourceTableId);
   const targetId = String(targetTableId);
 
-  const sourceOrder = db.tableOrders.find(
-    (o) => tableIdsEqual(o.table_id, sourceId) && o.status === 'pending'
-  );
+  const sourceOrder = findPendingOrderForTable(sourceId);
   if (!sourceOrder) {
     return { success: false, error: 'Kaynak masada aktif sipariş bulunamadı' };
   }
 
-  const targetOrder = db.tableOrders.find(
-    (o) => tableIdsEqual(o.table_id, targetId) && o.status === 'pending'
-  );
+  const targetOrder = findPendingOrderForTable(targetId);
   if (targetOrder) {
     return { success: false, error: 'Hedef masada zaten aktif bir sipariş var' };
   }
 
-  const sourceItems = db.tableOrderItems.filter((oi) => oi.order_id === sourceOrder.id);
+  const sourceItems = db.tableOrderItems.filter((oi) => String(oi.order_id) === String(sourceOrder.id));
   if (sourceItems.length === 0) {
     return { success: false, error: 'Aktarılacak ürün bulunamadı' };
   }
@@ -3383,30 +3722,21 @@ async function transferTableOrderInternal(sourceTableId, targetTableId) {
 }
 
 /** PWA + IPC: masa birleştirme */
-async function mergeTableOrderInternal(sourceTableId, targetTableId, staffId) {
+async function mergeTableOrderInternal(sourceTableId, targetTableId, staffId, staffHints = {}) {
   const sourceId = String(sourceTableId);
   const targetId = String(targetTableId);
 
   if (activeBranchKey !== 'sultansomati' && staffId != null && staffId !== '') {
-    const staff = (db.staff || []).find((s) => s.id == staffId);
-    if (!staff || !staff.is_manager) {
-      return {
-        success: false,
-        error: 'Masa birleştirme yetkisi yok. Bu işlem için müdür yetkisi gereklidir.',
-      };
-    }
+    const gate = await mobileStaffMayTransfer(staffId, staffHints, 'Masa birleştirme');
+    if (!gate.ok) return { success: false, error: gate.error };
   }
 
-  const sourceOrder = db.tableOrders.find(
-    (o) => tableIdsEqual(o.table_id, sourceId) && o.status === 'pending'
-  );
+  const sourceOrder = findPendingOrderForTable(sourceId);
   if (!sourceOrder) {
     return { success: false, error: 'Kaynak masada aktif sipariş bulunamadı' };
   }
 
-  const targetOrder = db.tableOrders.find(
-    (o) => tableIdsEqual(o.table_id, targetId) && o.status === 'pending'
-  );
+  const targetOrder = findPendingOrderForTable(targetId);
   if (!targetOrder) {
     return { success: false, error: 'Hedef masada aktif sipariş bulunamadı. Lütfen dolu bir masa seçin.' };
   }
@@ -3480,19 +3810,21 @@ async function mergeTableOrderInternal(sourceTableId, targetTableId, staffId) {
   };
 }
 
-ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableId, itemsToTransfer) => {
-  const sourceOrder = db.tableOrders.find(o => o.id === sourceOrderId);
+async function transferOrderItemsInternal(sourceOrderId, targetTableId, itemsToTransfer) {
+  const sourceOrder = findTableOrderById(sourceOrderId);
   if (!sourceOrder) return { success: false, error: 'Sipariş bulunamadı' };
   if (sourceOrder.status !== 'pending') return { success: false, error: 'Bu sipariş aktarılamaz' };
 
   const list = Array.isArray(itemsToTransfer) ? itemsToTransfer : [];
   if (list.length === 0) return { success: false, error: 'Aktarılacak ürün seçin' };
 
-  if (sourceOrder.table_id === targetTableId) return { success: false, error: 'Hedef masa, mevcut masa ile aynı olamaz' };
+  const targetId = String(targetTableId);
+  if (tableIdsEqual(sourceOrder.table_id, targetId)) return { success: false, error: 'Hedef masa, mevcut masa ile aynı olamaz' };
 
-  const targetTableName = getTableNameFromId(targetTableId);
-  const targetTableType = getTableTypeFromId(targetTableId);
-  let targetOrder = db.tableOrders.find(o => o.table_id === targetTableId && o.status === 'pending');
+  const targetTableName = getTableNameFromId(targetId);
+  const targetTableType = getTableTypeFromId(targetId);
+  let targetOrder = findPendingOrderForTable(targetId);
+  let createdTargetOrder = false;
 
   const now = new Date();
   const orderDate = now.toLocaleDateString('tr-TR');
@@ -3502,7 +3834,7 @@ ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableI
     const newOrderId = db.tableOrders.length > 0 ? Math.max(...db.tableOrders.map(o => o.id)) + 1 : 1;
     targetOrder = {
       id: newOrderId,
-      table_id: targetTableId,
+      table_id: targetId,
       table_name: targetTableName,
       table_type: targetTableType,
       total_amount: 0,
@@ -3512,19 +3844,39 @@ ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableI
       order_note: null
     };
     db.tableOrders.push(targetOrder);
+    createdTargetOrder = true;
   }
 
   let transferredAmount = 0;
   const itemsForPrint = [];
 
+  const normName = (value) => String(value || '').trim().toLowerCase();
+
   for (const it of list) {
-    const qty = Math.max(0, Math.floor(Number(it.quantity) || 0));
+    const qty = Math.max(0, Math.floor(Number(it.quantity ?? it.qty) || 0));
     if (qty <= 0) continue;
 
-    const productId = it.product_id;
-    const isGift = !!it.isGift;
+    const rowId = it.itemId ?? it.item_id ?? null;
+    const productId = it.product_id ?? it.productId ?? null;
+    const productName = it.product_name || it.productName || '';
+    const isGift = !!(it.isGift || it.is_gift);
+    const onSource = (oi) => String(oi.order_id) === String(sourceOrder.id);
+    let sourceRows = rowId != null
+      ? db.tableOrderItems.filter((oi) => onSource(oi) && String(oi.id) === String(rowId))
+      : [];
+    if (sourceRows.length === 0 && productId != null) {
+      sourceRows = db.tableOrderItems.filter((oi) => onSource(oi) && String(oi.product_id) === String(productId) && !!oi.isGift === isGift);
+    }
+    if (sourceRows.length === 0 && productName) {
+      sourceRows = db.tableOrderItems.filter((oi) => onSource(oi) && normName(oi.product_name) === normName(productName) && !!oi.isGift === isGift);
+    }
+
     let remaining = qty;
-    const sourceRows = db.tableOrderItems.filter(oi => oi.order_id === sourceOrderId && oi.product_id === productId && !!oi.isGift === isGift);
+    let movedProductId = productId;
+    let movedName = productName;
+    let movedPrice = it.price;
+    let movedGift = isGift;
+    let movedStaffName = it.staff_name || it.staffName || null;
 
     for (const row of sourceRows) {
       if (remaining <= 0) break;
@@ -3532,68 +3884,79 @@ ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableI
       const take = Math.min(remaining, Math.max(0, unpaid));
       if (take <= 0) continue;
       remaining -= take;
-      row.quantity -= take;
-      if (row.quantity <= 0) {
-        row.paid_quantity = 0;
-        const idx = db.tableOrderItems.findIndex(oi => oi.id === row.id);
-        if (idx !== -1) db.tableOrderItems.splice(idx, 1);
-      } else {
-        row.paid_quantity = Math.min(row.paid_quantity || 0, row.quantity);
-      }
-      const itemAmount = isGift ? 0 : Math.round(row.price * take * 100) / 100;
+      movedProductId = row.product_id;
+      movedName = row.product_name || movedName;
+      movedPrice = row.price;
+      movedGift = !!row.isGift;
+      movedStaffName = row.staff_name || movedStaffName;
+      const itemAmount = row.isGift ? 0 : Math.round(row.price * take * 100) / 100;
       transferredAmount += itemAmount;
+
+      if (take >= row.quantity) {
+        row.order_id = targetOrder.id;
+        row.paid_quantity = 0;
+        row.is_paid = false;
+        row.payment_method = null;
+      } else {
+        row.quantity -= take;
+        row.paid_quantity = Math.min(Number(row.paid_quantity) || 0, row.quantity);
+        const newItemId = db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map((oi) => Number(oi.id) || 0)) + 1 : 1;
+        db.tableOrderItems.push({
+          id: newItemId,
+          order_id: targetOrder.id,
+          product_id: row.product_id,
+          product_name: row.product_name || '',
+          quantity: take,
+          price: row.price || 0,
+          isGift: !!row.isGift,
+          staff_id: row.staff_id || null,
+          staff_name: row.staff_name || null,
+          added_date: orderDate,
+          added_time: orderTime,
+          paid_quantity: 0,
+          is_paid: false,
+          payment_method: null
+        });
+      }
     }
 
-    if (qty - remaining > 0) {
-      const addQty = qty - remaining;
-      const newItemId = db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 : 1;
-      db.tableOrderItems.push({
-        id: newItemId,
-        order_id: targetOrder.id,
-        product_id: productId,
-        product_name: it.product_name || '',
-        quantity: addQty,
-        price: it.price || 0,
-        isGift: isGift,
-        staff_id: it.staff_id || null,
-        staff_name: it.staff_name || null,
-        added_date: orderDate,
-        added_time: orderTime,
-        paid_quantity: 0,
-        is_paid: false,
-        payment_method: null
-      });
-      // Ürünün kategori bilgisini bul
-      const product = db.products.find(p => p.id === productId);
-      const categoryId = product ? (product.category_id || null) : null;
-      
+    const addQty = qty - remaining;
+    if (addQty > 0) {
+      const product = (db.products || []).find((p) => String(p.id) === String(movedProductId));
       itemsForPrint.push({
-        id: productId,
-        name: it.product_name || '',
+        id: movedProductId,
+        name: movedName || product?.name || '',
         quantity: addQty,
-        price: it.price || 0,
-        isGift: isGift,
-        staff_name: it.staff_name || null,
+        price: movedPrice || 0,
+        isGift: movedGift,
+        staff_name: movedStaffName,
         added_date: orderDate,
         added_time: orderTime,
-        category_id: categoryId
+        category_id: product ? (product.category_id || null) : null
       });
     }
   }
 
-  const sourceRemainingItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrderId);
+  const sourceRemainingItems = db.tableOrderItems.filter((oi) => String(oi.order_id) === String(sourceOrder.id));
+  if (itemsForPrint.length === 0) {
+    if (createdTargetOrder) {
+      db.tableOrders = db.tableOrders.filter((o) => o.id !== targetOrder.id);
+    }
+    return { success: false, error: 'Aktarılacak ödenmemiş ürün bulunamadı' };
+  }
   sourceOrder.total_amount = Math.round(sourceRemainingItems.reduce((sum, oi) => sum + (oi.isGift ? 0 : oi.price * oi.quantity), 0) * 100) / 100;
   targetOrder.total_amount = Math.round(((targetOrder.total_amount || 0) + transferredAmount) * 100) / 100;
 
   if (sourceRemainingItems.length === 0) {
     sourceOrder.status = 'completed';
     if (io) io.emit('table-update', { tableId: sourceOrder.table_id, hasOrder: false });
-    syncSingleTableToFirebase(sourceOrder.table_id).catch(() => {});
   }
 
   saveDatabase();
-  if (io) io.emit('table-update', { tableId: targetTableId, hasOrder: true });
-  syncSingleTableToFirebase(targetTableId).catch(() => {});
+  if (io) io.emit('table-update', { tableId: targetId, hasOrder: true });
+  holdMakaraRemoteTables([sourceOrder.table_id, targetId]);
+  await syncSingleTableToFirebase(String(sourceOrder.table_id));
+  await syncSingleTableToFirebase(targetId);
 
   if (itemsForPrint.length > 0) {
     const adisyonDataForPrint = {
@@ -3609,17 +3972,23 @@ ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableI
     });
   }
 
-  if (mainWindow && mainWindow.webContents) {
-    mainWindow.webContents.send('table-order-updated', { orderId: sourceOrder.id, targetOrderId: targetOrder.id, targetTableId });
-  }
+  try {
+    if (mainWindow && mainWindow.webContents) {
+      mainWindow.webContents.send('table-order-updated', { orderId: sourceOrder.id, targetOrderId: targetOrder.id, targetTableId });
+    }
+  } catch (_) {}
 
   return {
     success: true,
     sourceOrderId: sourceOrder.id,
     targetOrderId: targetOrder.id,
-    targetTableId,
+    targetTableId: targetId,
     transferredCount: itemsForPrint.length
   };
+}
+
+ipcMain.handle('transfer-order-items', async (event, sourceOrderId, targetTableId, itemsToTransfer) => {
+  return transferOrderItemsInternal(sourceOrderId, targetTableId, itemsToTransfer);
 });
 
 // Masa birleştir: dolu masayı başka bir dolu masaya aktar (kaynak masanın ürünleri hedef masaya eklenir, kaynak kapanır)
@@ -3722,6 +4091,331 @@ ipcMain.handle('cancel-entire-table-order', async (event, orderId, cancelReason 
   return { success: true };
 });
 
+const orderPaymentChains = new Map();
+
+function withOrderPaymentLock(orderId, fn) {
+  const key = String(orderId);
+  const prev = orderPaymentChains.get(key) || Promise.resolve();
+  const run = prev.catch(() => {}).then(fn);
+  orderPaymentChains.set(key, run);
+  const clear = run.then(() => {}, () => {});
+  clear.then(() => {
+    if (orderPaymentChains.get(key) === run) orderPaymentChains.delete(key);
+  });
+  return run;
+}
+
+function roundPaymentMoney(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+function itemUnpaidValue(item) {
+  if (!item || item.isGift) return 0;
+  const qty = Number(item.quantity) || 0;
+  const paidQty = Math.min(qty, Math.max(0, Number(item.paid_quantity) || 0));
+  const gross = roundPaymentMoney((Number(item.price) || 0) * (qty - paidQty));
+  const settled = roundPaymentMoney(item.amount_settled || 0);
+  return Math.max(0, roundPaymentMoney(gross - settled));
+}
+
+function normalizeItemSettlement(item) {
+  if (!item || item.isGift) return;
+  const price = roundPaymentMoney(item.price);
+  const qty = Number(item.quantity) || 0;
+  let paidQty = Math.min(qty, Math.max(0, Number(item.paid_quantity) || 0));
+  let cover = roundPaymentMoney(item.amount_settled || 0);
+  if (!(price > 0)) {
+    item.paid_quantity = paidQty;
+    item.amount_settled = 0;
+    return;
+  }
+  const startedPaid = paidQty;
+  while (paidQty < qty && cover >= price - 0.009) {
+    cover = roundPaymentMoney(cover - price);
+    paidQty += 1;
+  }
+  item.paid_quantity = paidQty;
+  item.amount_settled = Math.max(0, cover);
+  if (paidQty > startedPaid && !item.payment_method) {
+    item.payment_method = 'Tutarlı ödeme';
+  }
+  if (paidQty >= qty) {
+    item.is_paid = true;
+    item.amount_settled = 0;
+  }
+}
+
+/** Tutarlı ödemeyi ilk üründen itibaren düşer: tam kapanan adet paid_quantity olur, üstü sonraki üründe kalır. */
+function rebalanceAmountSettledFifo(orderItems) {
+  const all = (orderItems || []).filter((item) => item);
+  const lines = all.filter((item) => !item.isGift);
+  const pool = roundPaymentMoney(all.reduce((sum, item) => sum + (Number(item.amount_settled) || 0), 0));
+  all.forEach((item) => {
+    item.amount_settled = 0;
+  });
+  let left = pool;
+  lines.forEach((item) => {
+    if (left <= 0.009) return;
+    const qty = Number(item.quantity) || 0;
+    const paidQty = Math.min(qty, Math.max(0, Number(item.paid_quantity) || 0));
+    const capacity = roundPaymentMoney((Number(item.price) || 0) * Math.max(0, qty - paidQty));
+    const take = Math.min(capacity, left);
+    item.amount_settled = take;
+    left = roundPaymentMoney(left - take);
+  });
+  lines.forEach((item) => normalizeItemSettlement(item));
+}
+
+function dueSlices(item) {
+  if (!item || item.isGift) return [];
+  normalizeItemSettlement(item);
+  const price = roundPaymentMoney(item.price);
+  const qty = Number(item.quantity) || 0;
+  const paidQty = Math.min(qty, Math.max(0, Number(item.paid_quantity) || 0));
+  const slices = [];
+  const cover = roundPaymentMoney(item.amount_settled || 0);
+  for (let i = paidQty; i < qty; i += 1) {
+    if (i === paidQty && cover > 0.009) slices.push(roundPaymentMoney(Math.max(0, price - cover)));
+    else slices.push(price);
+  }
+  return slices;
+}
+
+function applyMoneyToItem(item, amount) {
+  const add = roundPaymentMoney(amount);
+  if (!(add > 0) || !item) return;
+  item.amount_settled = roundPaymentMoney((Number(item.amount_settled) || 0) + add);
+  normalizeItemSettlement(item);
+}
+
+function settleAmountAcrossItems(orderItems, payAmount) {
+  rebalanceAmountSettledFifo(orderItems);
+  const lines = (orderItems || [])
+    .map((item) => ({ item, unpaid: itemUnpaidValue(item) }))
+    .filter((line) => line.unpaid > 0.009);
+  const shares = [];
+  let left = roundPaymentMoney(payAmount);
+  lines.forEach((line) => {
+    if (left <= 0.009) return;
+    const take = Math.min(line.unpaid, left);
+    applyMoneyToItem(line.item, take);
+    left = roundPaymentMoney(left - take);
+    if (take > 0.009) {
+      shares.push({
+        product_id: line.item.product_id,
+        product_name: line.item.product_name,
+        quantity: 1,
+        price: take,
+        isGift: false,
+        is_amount_share: true,
+        staff_id: line.item.staff_id || null,
+        staff_name: line.item.staff_name || null
+      });
+    }
+  });
+  return shares;
+}
+
+function dominantStaffName(orderItems) {
+  const staffCounts = {};
+  (orderItems || []).forEach((item) => {
+    if (!item.staff_name) return;
+    staffCounts[item.staff_name] = (staffCounts[item.staff_name] || 0) + (Number(item.quantity) || 0);
+  });
+  const names = Object.keys(staffCounts);
+  if (!names.length) return null;
+  return names.reduce((best, name) => (staffCounts[name] > staffCounts[best] ? name : best));
+}
+
+function buildCloseSaleLines(orderItems, finalAmount) {
+  const lines = [];
+  (orderItems || []).forEach((item) => {
+    const qty = Number(item.quantity) || 0;
+    const paidQty = Math.min(qty, Math.max(0, Number(item.paid_quantity) || 0));
+    const remainQty = Math.max(0, qty - paidQty);
+    if (remainQty <= 0) return;
+    if (item.isGift) {
+      lines.push({
+        item,
+        quantity: remainQty,
+        price: 0,
+        isGift: true,
+        lineAmount: 0
+      });
+      return;
+    }
+    const settled = roundPaymentMoney(item.amount_settled || 0);
+    const gross = roundPaymentMoney((Number(item.price) || 0) * remainQty);
+    const unpaid = Math.max(0, roundPaymentMoney(gross - settled));
+    if (unpaid <= 0.009) return;
+    if (settled > 0.009) {
+      lines.push({ item, quantity: 1, price: unpaid, isGift: false, lineAmount: unpaid });
+    } else {
+      lines.push({
+        item,
+        quantity: remainQty,
+        price: Number(item.price) || 0,
+        isGift: false,
+        lineAmount: unpaid
+      });
+    }
+  });
+
+  const payable = lines.filter((line) => !line.isGift);
+  const raw = roundPaymentMoney(payable.reduce((sum, line) => sum + line.lineAmount, 0));
+  const target = roundPaymentMoney(finalAmount);
+  if (payable.length && raw > 0.009 && Math.abs(raw - target) > 0.009) {
+    let allocated = 0;
+    payable.forEach((line, index) => {
+      const share = index === payable.length - 1
+        ? roundPaymentMoney(target - allocated)
+        : roundPaymentMoney(target * (line.lineAmount / raw));
+      allocated = roundPaymentMoney(allocated + Math.max(0, share));
+      line.lineAmount = Math.max(0, share);
+      line.price = line.quantity > 0 ? roundPaymentMoney(line.lineAmount / line.quantity) : line.lineAmount;
+    });
+  }
+  return lines;
+}
+
+async function writeFirebaseSaleDocument(firebaseSale) {
+  if (!firestore || !firebaseCollection || !firebaseAddDoc || !firebaseServerTimestamp) return;
+  const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
+  await firebaseAddDoc(salesRef, {
+    ...firebaseSale,
+    created_at: firebaseServerTimestamp()
+  });
+}
+
+function notifyTablePayment(order, hasOrder) {
+  saveDatabase();
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.send('table-order-updated', {
+      orderId: order.id,
+      tableId: order.table_id
+    });
+  }
+  if (io) {
+    io.emit('table-update', {
+      tableId: order.table_id,
+      hasOrder: hasOrder
+    });
+  }
+  syncSingleTableToFirebase(order.table_id).catch((err) => {
+    console.error('Masa Firebase kaydetme hatası:', err);
+  });
+}
+
+/**
+ * Tutarlı / parçalı ödeme. Satış kaydı ve masa tutarı aynı kilitte düşer.
+ * Fişe siparişin tamamı değil, yalnızca bu tahsilatın payı yazılır.
+ */
+async function recordTableAmountPayment(orderId, payAmount, paymentMethod, tableName, tableType, paymentKind) {
+  return withOrderPaymentLock(orderId, async () => {
+    const order = db.tableOrders.find((o) => o.id === orderId);
+    if (!order) return { success: false, error: 'Sipariş bulunamadı' };
+    if (order.status !== 'pending') {
+      return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
+    }
+    if (paymentMethod !== 'Nakit' && paymentMethod !== 'Kredi Kartı') {
+      return { success: false, error: 'Geçerli bir ödeme yöntemi seçilmedi' };
+    }
+
+    const amount = roundPaymentMoney(payAmount);
+    const remaining = roundPaymentMoney(order.total_amount);
+    if (!(amount > 0)) return { success: false, error: 'Geçersiz tutar' };
+    if (amount - remaining > 0.02) {
+      return { success: false, error: `Girilen tutar kalan tutardan (₺${remaining.toFixed(2)}) fazla` };
+    }
+    const pay = Math.min(amount, remaining);
+    const orderItems = db.tableOrderItems.filter((oi) => oi.order_id === order.id);
+    let shares = settleAmountAcrossItems(orderItems, pay);
+    const staffName = dominantStaffName(orderItems);
+    if (!shares.length) {
+      shares = [{
+        product_name: 'Tutarlı ödeme',
+        quantity: 1,
+        price: pay,
+        isGift: false,
+        is_amount_share: true,
+        staff_id: null,
+        staff_name: staffName
+      }];
+    }
+
+    const kind = paymentKind === 'bolmeli' ? 'bolmeli' : 'tutarli';
+    const saleDate = order.order_date || new Date().toLocaleDateString('tr-TR');
+    const saleTime = order.order_time || getFormattedTime(new Date());
+    const saleId = db.sales.length > 0 ? Math.max(...db.sales.map((s) => s.id)) + 1 : 1;
+    db.sales.push({
+      id: saleId,
+      table_order_id: order.id,
+      total_amount: pay,
+      payment_method: paymentMethod,
+      sale_date: saleDate,
+      sale_time: saleTime,
+      table_name: tableName || order.table_name,
+      table_type: tableType || order.table_type,
+      staff_name: staffName,
+      is_amount_payment: true,
+      payment_kind: kind
+    });
+    shares.forEach((share) => {
+      const itemId = db.saleItems.length > 0 ? Math.max(...db.saleItems.map((si) => si.id)) + 1 : 1;
+      db.saleItems.push({
+        id: itemId,
+        sale_id: saleId,
+        product_id: share.product_id || null,
+        product_name: share.product_name,
+        quantity: share.quantity,
+        price: share.price,
+        isGift: false,
+        staff_id: share.staff_id || null,
+        staff_name: share.staff_name || null
+      });
+    });
+
+    order.total_amount = roundPaymentMoney(Math.max(0, remaining - pay));
+    order.skipNextAmountReduction = true;
+    const orderCompleted = order.total_amount <= 0.01;
+    if (orderCompleted) {
+      order.total_amount = 0;
+      order.status = 'completed';
+      order.completed_sale_id = saleId;
+    }
+
+    notifyTablePayment(order, orderCompleted ? false : tableHasOpenItems(order.table_id));
+
+    const itemsText = shares.map((share) => `${share.product_name} x${share.quantity}`).join(', ');
+    try {
+      await writeFirebaseSaleDocument({
+        sale_id: saleId,
+        table_order_id: order.id,
+        total_amount: pay,
+        payment_method: paymentMethod,
+        sale_date: saleDate,
+        sale_time: saleTime,
+        table_name: tableName || order.table_name,
+        table_type: tableType || order.table_type,
+        staff_name: staffName,
+        is_amount_payment: true,
+        payment_kind: kind,
+        items: itemsText,
+        items_array: shares
+      });
+    } catch (error) {
+      console.error('Tutarlı ödeme Firebase hatası:', error);
+    }
+
+    return {
+      success: true,
+      saleId,
+      remainingAmount: order.total_amount,
+      orderCompleted
+    };
+  });
+}
+
 /** Masa kapatma / ödeme alma (masaüstü ipc + Sultan mobil müdür API). */
 async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaignPercentage = null, discountAmountTL = null) {
   const order = db.tableOrders.find(o => o.id === orderId);
@@ -3729,8 +4423,18 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
     return { success: false, error: 'Sipariş bulunamadı' };
   }
 
+  if (order.status === 'completed') {
+    return { success: true, alreadySettled: true };
+  }
   if (order.status !== 'pending') {
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
+  }
+
+  if ((parseFloat(order.total_amount) || 0) <= 0.01) {
+    order.status = 'completed';
+    order.total_amount = 0;
+    notifyTablePayment(order, false);
+    return { success: true, alreadySettled: true };
   }
 
   if (!paymentMethod || (paymentMethod !== 'Nakit' && paymentMethod !== 'Kredi Kartı')) {
@@ -3799,24 +4503,16 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
     sale_time: saleTime,
     table_name: order.table_name,
     table_type: order.table_type,
-    staff_name: mainStaffName
+    staff_name: mainStaffName,
+    payment_kind: 'kapanis'
   });
   order.completed_sale_id = saleId;
 
-  // Bu masada daha önce kısmi ödemeler yapıldıysa (paid_quantity > 0), kapanış
-  // satışında SADECE KALAN (ödenmemiş) miktarları kaydet. Aksi halde aynı ürünler
-  // hem kısmi ödemede hem kapanış satışında görünür → geçmiş adisyon çift sayar.
-  // Ciro zaten finalAmount = order.total_amount - indirim olduğundan toplam doğru;
-  // burada yalnızca items satırları kalan miktarla hizalanıyor.
-  const remainingOrderItems = orderItems
-    .map(item => {
-      const paidQty = Number(item.paid_quantity) || 0;
-      const remainingQty = Math.max(0, Number(item.quantity) - paidQty);
-      return { item, remainingQty };
-    })
-    .filter(x => x.remainingQty > 0);
+  // Kapanış fişi yalnızca henüz tahsil edilmemiş payı yazar. Tutarlı ödemede
+  // amount_settled düşülür; satır tutarlarının toplamı finalAmount'u aşamaz.
+  const closeLines = buildCloseSaleLines(orderItems, finalAmount);
 
-  remainingOrderItems.forEach(({ item, remainingQty }) => {
+  closeLines.forEach((line) => {
     const itemId = db.saleItems.length > 0
       ? Math.max(...db.saleItems.map(si => si.id)) + 1
       : 1;
@@ -3824,13 +4520,13 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
     db.saleItems.push({
       id: itemId,
       sale_id: saleId,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: remainingQty,
-      price: item.price,
-      isGift: item.isGift || false,
-      staff_id: item.staff_id || null,
-      staff_name: item.staff_name || null
+      product_id: line.item.product_id,
+      product_name: line.item.product_name,
+      quantity: line.quantity,
+      price: line.price,
+      isGift: line.isGift || false,
+      staff_id: line.item.staff_id || null,
+      staff_name: line.item.staff_name || null
     });
   });
 
@@ -3840,12 +4536,12 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
     try {
       const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
 
-      const itemsText = remainingOrderItems.map(({ item, remainingQty }) => {
-        const giftText = item.isGift ? ' (İKRAM)' : '';
-        return `${item.product_name} x${remainingQty}${giftText}`;
+      const itemsText = closeLines.map((line) => {
+        const giftText = line.isGift ? ' (İKRAM)' : '';
+        return `${line.item.product_name} x${line.quantity}${giftText}`;
       }).join(', ');
 
-      const staffNames = [...new Set(remainingOrderItems.filter(x => x.item.staff_name).map(x => x.item.staff_name))];
+      const staffNames = [...new Set(closeLines.filter(x => x.item.staff_name).map(x => x.item.staff_name))];
       const staffName = staffNames.length > 0 ? staffNames.join(', ') : null;
 
       const di = order.firstOrderDiscount;
@@ -3863,15 +4559,16 @@ async function completeTableOrderCore(orderId, paymentMethod = 'Nakit', campaign
         table_name: order.table_name,
         table_type: order.table_type,
         staff_name: staffName,
+        payment_kind: 'kapanis',
         items: itemsText,
-        items_array: remainingOrderItems.map(({ item, remainingQty }) => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: remainingQty,
-          price: item.price,
-          isGift: item.isGift || false,
-          staff_id: item.staff_id || null,
-          staff_name: item.staff_name || null
+        items_array: closeLines.map((line) => ({
+          product_id: line.item.product_id,
+          product_name: line.item.product_name,
+          quantity: line.quantity,
+          price: line.price,
+          isGift: line.isGift || false,
+          staff_id: line.item.staff_id || null,
+          staff_name: line.item.staff_name || null
         })),
         created_at: firebaseServerTimestamp()
       };
@@ -3959,7 +4656,7 @@ async function revertCompletedTableOrderCore(orderId) {
 }
 
 ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit', campaignPercentage = null) => {
-  return completeTableOrderCore(orderId, paymentMethod, campaignPercentage);
+  return withOrderPaymentLock(orderId, () => completeTableOrderCore(orderId, paymentMethod, campaignPercentage));
 });
 
 // Kısmi ödeme için masa siparişi tutarını güncelle ve satış kaydı oluştur
@@ -3967,6 +4664,13 @@ ipcMain.handle('update-table-order-amount', async (event, orderId, paidAmount) =
   const order = db.tableOrders.find(o => o.id === orderId);
   if (!order) {
     return { success: false, error: 'Sipariş bulunamadı' };
+  }
+
+  // Tutarlı ödeme tutarı satışla birlikte düştü; ikinci kez düşürme.
+  if (order.skipNextAmountReduction) {
+    order.skipNextAmountReduction = false;
+    saveDatabase();
+    return { success: true, remainingAmount: order.total_amount, skippedDuplicate: true };
   }
 
   if (order.status !== 'pending') {
@@ -4012,118 +4716,18 @@ ipcMain.handle('update-table-order-amount', async (event, orderId, paidAmount) =
 
 // Kısmi ödeme için satış kaydı oluştur
 ipcMain.handle('create-partial-payment-sale', async (event, saleData) => {
-  // Masa açılış tarihini kullan (masa hangi tarihte açıldıysa o tarihin cirosuna geçer)
-  // Bu sayede çift sayım önlenir ve masa açılış tarihine göre ciraya eklenir
-  const order = db.tableOrders.find(o => o.id === saleData.orderId);
-  const saleDate = (order && order.order_date) ? order.order_date : new Date().toLocaleDateString('tr-TR');
-  const saleTime = (order && order.order_time) ? order.order_time : getFormattedTime(new Date());
-
-  // Yeni satış ID'si
-  const saleId = db.sales.length > 0 
-    ? Math.max(...db.sales.map(s => s.id)) + 1 
-    : 1;
-
-  // Satış itemlarını al (kısmi ödeme için tüm ürünleri göster, sadece ödeme yöntemi farklı)
-  const orderItems = db.tableOrderItems.filter(oi => oi.order_id === saleData.orderId);
-
-  // Staff bilgilerini topla (varsa) - En çok ürün ekleyen personel ana personel olarak kaydedilir
-  const staffCounts = {};
-  orderItems.forEach(item => {
-    if (item.staff_name) {
-      if (!staffCounts[item.staff_name]) {
-        staffCounts[item.staff_name] = 0;
-      }
-      staffCounts[item.staff_name] += item.quantity;
-    }
-  });
-  
-  // En çok ürün ekleyen personel ana personel
-  const mainStaffName = Object.keys(staffCounts).length > 0
-    ? Object.keys(staffCounts).reduce((a, b) => staffCounts[a] > staffCounts[b] ? a : b)
-    : null;
-
-  // Satış ekle — table_order_id ile oturum etiketleniyor
-  db.sales.push({
-    id: saleId,
-    table_order_id: saleData.orderId,
-    total_amount: saleData.totalAmount,
-    payment_method: saleData.paymentMethod,
-    sale_date: saleDate,
-    sale_time: saleTime,
-    table_name: saleData.tableName,
-    table_type: saleData.tableType,
-    staff_name: mainStaffName // Ana personel bilgisi
-  });
-
-  // Satış itemlarını ekle - Her item için personel bilgisini de kaydet
-  orderItems.forEach(item => {
-    const itemId = db.saleItems.length > 0 
-      ? Math.max(...db.saleItems.map(si => si.id)) + 1 
-      : 1;
-    
-    db.saleItems.push({
-      id: itemId,
-      sale_id: saleId,
-      product_id: item.product_id,
-      product_name: item.product_name,
-      quantity: item.quantity,
-      price: item.price,
-      isGift: item.isGift || false,
-      staff_id: item.staff_id || null, // Her ürün için personel bilgisi
-      staff_name: item.staff_name || null
-    });
-  });
-
-  saveDatabase();
-
-  // Firebase'e kaydet
-  if (firestore && firebaseCollection && firebaseAddDoc && firebaseServerTimestamp) {
-    try {
-      const salesRef = firebaseCollection(getSalesFirestore(), 'sales');
-      
-      // Items'ı string formatına çevir
-      const itemsText = orderItems.map(item => {
-        const giftText = item.isGift ? ' (İKRAM)' : '';
-        return `${item.product_name} x${item.quantity}${giftText}`;
-      }).join(', ');
-
-      // Staff bilgilerini topla (varsa)
-      const staffNames = [...new Set(orderItems.filter(oi => oi.staff_name).map(oi => oi.staff_name))];
-      const staffName = staffNames.length > 0 ? staffNames.join(', ') : null;
-
-      await firebaseAddDoc(salesRef, {
-        sale_id: saleId,
-        table_order_id: saleData.orderId,
-        total_amount: saleData.totalAmount,
-        payment_method: saleData.paymentMethod,
-        sale_date: saleDate,
-        sale_time: saleTime,
-        table_name: saleData.tableName,
-        table_type: saleData.tableType,
-        staff_name: staffName,
-        items: itemsText,
-        items_array: orderItems.map(item => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          price: item.price,
-          isGift: item.isGift || false,
-          staff_id: item.staff_id || null,
-          staff_name: item.staff_name || null // Her item için personel bilgisi
-        })),
-        created_at: firebaseServerTimestamp()
-      });
-      console.log('Kısmi ödeme satışı Firebase\'e kaydedildi:', saleId);
-    } catch (error) {
-      console.error('Firebase\'e kaydetme hatası:', error);
-    }
-  }
-
-  return { success: true, saleId };
+  return recordTableAmountPayment(
+    saleData && saleData.orderId,
+    saleData && saleData.totalAmount,
+    saleData && saleData.paymentMethod,
+    saleData && saleData.tableName,
+    saleData && saleData.tableType,
+    saleData && saleData.paymentKind
+  );
 });
 
 // Ürün bazlı ödeme al (yeni sistem)
-ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paidQuantity = null) => {
+async function payTableOrderItemBody(itemId, paymentMethod, paidQuantity = null) {
   const item = db.tableOrderItems.find(oi => oi.id === itemId);
   if (!item) {
     return { success: false, error: 'Ürün bulunamadı' };
@@ -4137,6 +4741,8 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
   if (order.status !== 'pending') {
     return { success: false, error: 'Bu sipariş zaten tamamlanmış veya iptal edilmiş' };
   }
+
+  rebalanceAmountSettledFifo(db.tableOrderItems.filter((oi) => oi.order_id === order.id));
 
   // Ödenecek miktarı belirle (kısmi ödeme: sadece gönderilen miktar; sayı zorunlu)
   const requestedQty = paidQuantity != null ? Number(paidQuantity) : NaN;
@@ -4159,19 +4765,14 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
     return { success: false, error: `Bu kalem için ödenecek miktar kalmadı` };
   }
 
-  // Yeni ödenen miktar
-  const newPaidQuantity = currentPaidQuantity + actualQuantityToPay;
-
-  // Ürün tutarını hesapla (ikram değilse) - para birimi 2 basamak
-  const itemAmount = item.isGift ? 0 : Math.round(item.price * actualQuantityToPay * 100) / 100;
-
-  // Ödenen miktarı güncelle
-  item.paid_quantity = newPaidQuantity;
-
-  // Eğer tüm miktar ödendiyse, ürünü tamamen ödendi olarak işaretle
-  if (newPaidQuantity >= item.quantity) {
-    item.is_paid = true;
+  const slices = item.isGift ? [] : dueSlices(item).slice(0, actualQuantityToPay);
+  if (!item.isGift && slices.length === 0) {
+    return { success: false, error: 'Bu kalem için ödenecek tutar kalmadı' };
   }
+  const sliceSum = roundPaymentMoney(slices.reduce((sum, due) => sum + due, 0));
+  const itemAmount = item.isGift ? 0 : Math.min(sliceSum, roundPaymentMoney(order.total_amount));
+  if (!item.isGift) applyMoneyToItem(item, itemAmount);
+  const newPaidQuantity = Number(item.paid_quantity) || 0;
   
   // Ödeme yöntemi ve tarih bilgilerini güncelle (ilk ödeme ise)
   if (currentPaidQuantity === 0) {
@@ -4219,7 +4820,8 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
     sale_time: saleTime,
     table_name: order.table_name,
     table_type: order.table_type,
-    staff_name: item.staff_name || null
+    staff_name: item.staff_name || null,
+    payment_kind: 'kismi'
   });
 
   // Satış itemını ekle (sadece ödenen miktar için)
@@ -4258,6 +4860,7 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
         table_name: order.table_name,
         table_type: order.table_type,
         staff_name: item.staff_name || null,
+        payment_kind: 'kismi',
         items: itemsText,
         items_array: [{
           product_id: item.product_id,
@@ -4298,6 +4901,12 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
   });
 
   return { success: true, remainingAmount: order.total_amount, saleId };
+}
+
+ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paidQuantity = null) => {
+  const peek = (db.tableOrderItems || []).find((oi) => oi.id === itemId);
+  if (!peek) return { success: false, error: 'Ürün bulunamadı' };
+  return withOrderPaymentLock(peek.order_id, () => payTableOrderItemBody(itemId, paymentMethod, paidQuantity));
 });
 
 /**
@@ -4318,7 +4927,7 @@ ipcMain.handle('pay-table-order-item', async (event, itemId, paymentMethod, paid
  * Payload:
  *   { payments: [{itemId, quantity}, ...], paymentMethod: 'Nakit'|'Kredi Kartı' }
  */
-ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
+async function payTableOrderItemsBulkBody(payload) {
   try {
     const payments = Array.isArray(payload?.payments) ? payload.payments : [];
     const paymentMethod = payload?.paymentMethod;
@@ -4359,6 +4968,8 @@ ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
         return { success: false, error: 'Sipariş zaten tamamlanmış veya iptal edilmiş' };
       }
 
+      rebalanceAmountSettledFifo(db.tableOrderItems.filter((oi) => oi.order_id === itemOrder.id));
+
       if (!order) {
         order = itemOrder;
       } else if (order.id !== itemOrder.id) {
@@ -4374,13 +4985,17 @@ ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
         continue;
       }
 
-      const itemAmount = item.isGift ? 0 : Math.round(item.price * payQty * 100) / 100;
-      const newPaidQuantity = currentPaid + payQty;
-
-      item.paid_quantity = newPaidQuantity;
-      if (newPaidQuantity >= item.quantity) {
-        item.is_paid = true;
+      const slices = item.isGift ? [] : dueSlices(item).slice(0, payQty);
+      if (!item.isGift && slices.length === 0) {
+        errors.push(`#${i + 1} ödenecek tutar kalmadı (itemId=${itemId})`);
+        continue;
       }
+      const sliceSum = roundPaymentMoney(slices.reduce((sum, due) => sum + due, 0));
+      const requestedAmount = roundPaymentMoney(p.amount);
+      const chargeBase = requestedAmount > 0.009 ? requestedAmount : sliceSum;
+      const itemAmount = item.isGift ? 0 : Math.min(chargeBase, itemUnpaidValue(item), roundPaymentMoney(order.total_amount));
+      if (!item.isGift) applyMoneyToItem(item, itemAmount);
+      const newPaidQuantity = Number(item.paid_quantity) || 0;
       if (currentPaid === 0) {
         item.payment_method = paymentMethod;
         item.paid_date = new Date().toLocaleDateString('tr-TR');
@@ -4421,7 +5036,8 @@ ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
     // 3) Her ödenen kalem için satış kaydı (eski davranışla uyum — her kalem ayrı satış)
     const firebaseSaleWrites = [];
     const baseSaleDate = order.order_date || new Date().toLocaleDateString('tr-TR');
-    const baseSaleTime = order.order_time || getFormattedTime(new Date());
+    const baseSaleTime = getFormattedTime(new Date());
+    const paymentBatch = `kismi-${order.id}-${Date.now()}`;
 
     for (const r of results) {
       const { item, paymentMethod: pm, quantity: payQty, itemAmount } = r;
@@ -4437,6 +5053,8 @@ ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
         table_name: order.table_name,
         table_type: order.table_type,
         staff_name: item.staff_name || null,
+        payment_kind: 'kismi',
+        payment_batch: paymentBatch,
       });
 
       const saleItemId = db.saleItems.length > 0 ? Math.max(...db.saleItems.map(si => si.id)) + 1 : 1;
@@ -4470,6 +5088,8 @@ ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
                 table_name: order.table_name,
                 table_type: order.table_type,
                 staff_name: item.staff_name || null,
+                payment_kind: 'kismi',
+                payment_batch: paymentBatch,
                 items: itemsText,
                 items_array: [{
                   product_id: item.product_id,
@@ -4537,6 +5157,13 @@ ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
     console.error('pay-table-order-items-bulk hata:', err);
     return { success: false, error: err?.message || String(err) };
   }
+}
+
+ipcMain.handle('pay-table-order-items-bulk', async (event, payload) => {
+  const firstId = payload?.payments?.[0]?.itemId;
+  const peek = (db.tableOrderItems || []).find((oi) => oi.id === firstId);
+  const orderId = peek ? peek.order_id : 'bulk-none';
+  return withOrderPaymentLock(orderId, () => payTableOrderItemsBulkBody(payload));
 });
 
 // Settings IPC Handlers
@@ -5976,35 +6603,148 @@ ipcMain.handle('print-receipt', async (event, receiptData) => {
   }
 });
 
-// Yazıcı listesi önbelleği (art arda yazdırmalarda gecikmeyi önler)
+// Yazıcı listesi: tıklamada PowerShell/WMI çalıştırılmaz (o tarama tek başına birkaç saniye sürüyordu).
 let _printerNamesCache = { list: null, at: 0 };
-const PRINTER_CACHE_TTL_MS = 6000;
+let _printerRefreshPromise = null;
+function refreshPrinterNameCache() {
+  if (_printerRefreshPromise) return _printerRefreshPromise;
+  _printerRefreshPromise = (async () => {
+    try {
+      const wc = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null;
+      if (!wc) return;
+      const printers = await wc.getPrintersAsync();
+      const names = (printers || []).map((p) => p && p.name).filter(Boolean);
+      if (names.length) _printerNamesCache = { list: names, at: Date.now() };
+    } catch (err) {
+      console.warn('Yazıcı listesi alınamadı:', err?.message || err);
+    } finally {
+      _printerRefreshPromise = null;
+    }
+  })();
+  return _printerRefreshPromise;
+}
 function getAvailablePrinterNames() {
-  const now = Date.now();
-  if (_printerNamesCache.list && (now - _printerNamesCache.at) < PRINTER_CACHE_TTL_MS) {
-    return _printerNamesCache.list;
+  if (!_printerNamesCache.list || (Date.now() - _printerNamesCache.at) > 60000) {
+    refreshPrinterNameCache();
   }
+  return _printerNamesCache.list || [];
+}
+function resolvePrinterDeviceName(printerName) {
+  if (!printerName) return null;
+  const available = _printerNamesCache.list || [];
+  if (!available.length) {
+    refreshPrinterNameCache();
+    return printerName;
+  }
+  const exact = available.find((p) => p === printerName);
+  if (exact) return exact;
+  const wanted = String(printerName).toLocaleLowerCase('tr-TR');
+  const partial = available.find((p) => {
+    const name = String(p).toLocaleLowerCase('tr-TR');
+    return name.includes(wanted) || wanted.includes(name);
+  });
+  return partial || printerName;
+}
+
+let sharedPrintWindow = null;
+let sharedPrintQueue = Promise.resolve();
+
+function getSharedPrintWindow() {
+  if (sharedPrintWindow && !sharedPrintWindow.isDestroyed()) return sharedPrintWindow;
+  sharedPrintWindow = new BrowserWindow({
+    show: false,
+    x: -3200,
+    y: -3200,
+    width: 302,
+    height: 640,
+    paintWhenInitiallyHidden: true,
+    skipTaskbar: true,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      backgroundThrottling: false
+    }
+  });
+  sharedPrintWindow.webContents.setBackgroundThrottling(false);
+  sharedPrintWindow.on('closed', () => { sharedPrintWindow = null; });
+  return sharedPrintWindow;
+}
+
+function prewarmPrintWindow() {
   try {
-    const result = execSync('powershell -Command "Get-WmiObject Win32_Printer | Select-Object Name | ConvertTo-Json"', { encoding: 'utf-8', timeout: 4000 });
-    const data = JSON.parse(result);
-    const arr = Array.isArray(data) ? data : [data];
-    _printerNamesCache = { list: arr.map(p => (p && p.Name) ? p.Name : '').filter(n => n), at: now };
-    return _printerNamesCache.list;
-  } catch (e) {
-    if (_printerNamesCache.list) return _printerNamesCache.list;
-    return [];
+    const win = getSharedPrintWindow();
+    const url = win.webContents.getURL();
+    if (!url || url === '') win.loadURL('about:blank').catch(() => {});
+  } catch (_) {}
+  refreshPrinterNameCache();
+}
+
+function enqueueHtmlPrint(printerName, html, options = {}) {
+  const job = sharedPrintQueue.then(
+    () => printHtmlNow(printerName, html, options),
+    () => printHtmlNow(printerName, html, options)
+  );
+  sharedPrintQueue = job.then(() => {}, () => {});
+  return job;
+}
+
+async function printHtmlNow(printerName, html, options = {}) {
+  const win = getSharedPrintWindow();
+  await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+  let scrollHeight = 400;
+  try {
+    scrollHeight = await win.webContents.executeJavaScript(`(() => {
+      document.body.style.minHeight = 'auto';
+      document.body.style.height = 'auto';
+      document.documentElement.style.height = 'auto';
+      return Math.max(
+        document.body.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.scrollHeight,
+        document.documentElement.offsetHeight
+      );
+    })()`);
+  } catch (_) {}
+  const height = Math.min(2400, Math.max(240, (Number(scrollHeight) || 400) + 24));
+  win.setSize(302, height);
+  await new Promise((r) => setTimeout(r, 16));
+  const deviceName = resolvePrinterDeviceName(printerName);
+  const printOnce = (opts) => new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Yazdırma timeout')), 12000);
+    win.webContents.print(opts, (success, errType) => {
+      clearTimeout(timer);
+      if (!success) reject(new Error(errType || 'Yazdırma başarısız'));
+      else resolve();
+    });
+  });
+  const printOptions = {
+    silent: true,
+    printBackground: true,
+    margins: { marginType: 'none' },
+    landscape: false,
+    scaleFactor: 100,
+    pagesPerSheet: 1,
+    collate: false,
+    color: false,
+    copies: 1,
+    duplex: 'none'
+  };
+  if (deviceName) printOptions.deviceName = deviceName;
+  try {
+    await printOnce(printOptions);
+  } catch (err) {
+    if (options.fallbackDefault && printOptions.deviceName) {
+      delete printOptions.deviceName;
+      await printOnce(printOptions);
+      return;
+    }
+    throw err;
   }
 }
 
 // Metin belgesi olarak yazdır - temp .txt + PowerShell (yol/kaçış güvenli: -File script)
 function printRawToPrinter(printerName, text) {
-  let targetName = printerName || null;
-  if (targetName) {
-    const available = getAvailablePrinterNames();
-    const exact = available.find(p => p === targetName);
-    const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
-    targetName = exact || partial || null;
-  }
+  const targetName = resolvePrinterDeviceName(printerName);
   const tmpDir = os.tmpdir();
   const tmpFile = path.join(tmpDir, 'makara-print-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8) + '.txt');
   fs.writeFileSync(tmpFile, text, { encoding: 'utf8' });
@@ -6128,7 +6868,6 @@ function generateReceiptText(receiptData) {
 
 // Yazıcıya yazdırma — HTML ile (okunaklı, düzgün düzen; metin belgesi silik/bozuk çıkıyordu)
 async function printToPrinter(printerName, printerType, receiptData, isProductionReceipt = false, productionItems = null, rawHTML = null) {
-  let printWindow = null;
   try {
     const receiptType = isProductionReceipt ? 'ÜRETİM FİŞİ' : rawHTML ? 'ÖZEL FİŞ' : 'KASA FİŞİ';
     console.log(`   [printToPrinter] ${receiptType} (HTML): "${printerName || 'Varsayılan'}"`);
@@ -6137,61 +6876,10 @@ async function printToPrinter(printerName, printerType, receiptData, isProductio
       : isProductionReceipt
         ? generateProductionReceiptHTML(productionItems || receiptData.items, receiptData)
         : generateReceiptHTML(receiptData);
-    printWindow = new BrowserWindow({
-      show: false,
-      width: 220,
-      height: 3000,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
-    });
-    let printResolve, printReject;
-    const printPromise = new Promise((resolve, reject) => { printResolve = resolve; printReject = reject; });
-    let printStarted = false;
-    const startPrint = () => {
-      if (printStarted) return;
-      printStarted = true;
-      setImmediate(async () => {
-        try {
-          const scrollHeight = await printWindow.webContents.executeJavaScript(`
-            (function() {
-              document.body.style.minHeight = 'auto'; document.body.style.height = 'auto';
-              document.documentElement.style.height = 'auto';
-              return Math.max(document.body.scrollHeight, document.body.offsetHeight,
-                document.documentElement.scrollHeight, document.documentElement.offsetHeight);
-            })();
-          `);
-          printWindow.setSize(220, Math.max(3000, scrollHeight + 200));
-        } catch (_) {}
-        let targetName = printerName;
-        if (targetName) {
-          const available = getAvailablePrinterNames();
-          const exact = available.find(p => p === targetName);
-          const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
-          targetName = exact || partial || null;
-        }
-        const printOptions = {
-          silent: true, printBackground: true, margins: { marginType: 'none' },
-          landscape: false, scaleFactor: 100, pagesPerSheet: 1, collate: false, color: false, copies: 1, duplex: 'none'
-        };
-        if (targetName) printOptions.deviceName = targetName;
-        printWindow.webContents.print(printOptions, (success, errType) => {
-          if (!success) printReject(new Error(errType || 'Yazdırma başarısız'));
-          else printResolve(true);
-          setTimeout(() => { if (printWindow && !printWindow.isDestroyed()) { printWindow.close(); printWindow = null; } }, 150);
-        });
-      });
-    };
-    printWindow.webContents.once('did-finish-load', () => startPrint());
-    printWindow.webContents.once('dom-ready', () => startPrint());
-    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(receiptHTML)}`);
-    setImmediate(() => startPrint());
-    await Promise.race([
-      printPromise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('Yazdırma timeout')), 10000))
-    ]);
+    await enqueueHtmlPrint(printerName, receiptHTML);
     return { success: true, printerName: printerName || 'Varsayılan' };
   } catch (error) {
     console.error(`   [printToPrinter] Hata:`, error.message);
-    if (printWindow && !printWindow.isDestroyed()) printWindow.close();
     return { success: false, error: error.message, printerName: printerName || 'Varsayılan' };
   }
 }
@@ -6244,9 +6932,6 @@ function generateProductionReceiptHTML(items, receiptData) {
     <html>
     <head>
       <meta charset="UTF-8">
-      <link rel="preconnect" href="https://fonts.googleapis.com">
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-      <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@900&display=swap" rel="stylesheet">
       <style>
         @media print {
           @page {
@@ -6425,8 +7110,6 @@ function generateReservationReceiptHTML(reservation) {
   const now = new Date();
   const printedAt = now.toLocaleDateString('tr-TR') + ' ' + now.toLocaleTimeString('tr-TR', { hour:'2-digit', minute:'2-digit' });
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;900&display=swap" rel="stylesheet">
 <style>
 @media print{@page{size:58mm auto;margin:0;}body{margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact;}*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -6512,7 +7195,29 @@ function generateMinimalAdisyonReceiptHTML(receiptData) {
     return '';
   })();
 
-  const itemsHTML = items.map((item) => {
+  const itemsHTML = Array.isArray(receiptData.paymentGroups) && receiptData.paymentGroups.length
+    ? receiptData.paymentGroups.map((group) => {
+        const title = `${group.index}. ödeme${group.label ? ` · ${group.label}` : ''}${group.method ? ` · ${group.method}` : ''}`;
+        const lines = (group.items || []).map((item) => {
+          const qty = Number(item.quantity) || 0;
+          const line = item.isGift ? 0 : (Number(item.price) || 0) * qty;
+          return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin:1px 0;font-size:${fs.row}px;line-height:1.28;">
+            <span style="flex:1;min-width:0;word-break:break-word;">${qty}× ${item.name || ''}${item.isGift ? ' · İKRAM' : ''}</span>
+            <span style="white-space:nowrap;font-weight:600;">₺${line.toFixed(2)}</span>
+          </div>`;
+        }).join('');
+        const amount = Number(group.amount) || 0;
+        const payLine = `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin:4px 0 0;padding-top:3px;border-top:1px solid #000;font-size:${fs.total + 5}px;font-weight:900;line-height:1.1;letter-spacing:-0.01em;">
+            <span>Ödeme ${group.index}</span>
+            <span style="white-space:nowrap;">₺${amount.toFixed(2)}</span>
+          </div>`;
+        const body = lines ? `${lines}${payLine}` : payLine;
+        return `<div style="margin:0 0 7px;">
+          <div style="font-size:${fs.meta}px;font-weight:700;letter-spacing:0.02em;margin:0 0 2px;">${title}</div>
+          ${body}
+        </div>`;
+      }).join('')
+    : items.map((item) => {
     const isGift = item.isGift || false;
     const qty = item.quantity || 0;
     const lineTotal = isGift ? 0 : (item.price * item.quantity);
@@ -6637,9 +7342,6 @@ function generateReceiptHTML(receiptData) {
     <html>
     <head>
       <meta charset="UTF-8">
-      <link rel="preconnect" href="https://fonts.googleapis.com">
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-      <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@900&display=swap" rel="stylesheet">
       <style>
         @media print {
           @page {
@@ -6910,6 +7612,7 @@ app.whenReady().then(() => {
   initDatabase();
   enableLaunchAtStartup();
   createWindow();
+  prewarmPrintWindow();
   startAPIServer();
 
   // Varsayılan/son seçilen branch için Firebase istemcilerini hazırla.
@@ -7400,14 +8103,20 @@ ipcMain.handle('print-adisyon-prepared', async (event, receipts) => {
 /** Kasa adisyon fişi (cashierOnly) — ipc ve Sultan mobil müdür API ortak. */
 async function printCashierAdisyonFromData(adisyonData) {
   const items = adisyonData.items || [];
+  const paymentGroups = Array.isArray(adisyonData.paymentGroups) ? adisyonData.paymentGroups : null;
   const cashierPrinter = db.settings.cashierPrinter;
   if (!cashierPrinter || !cashierPrinter.printerName) {
     return { success: false, error: 'Kasa yazıcısı ayarlanmamış' };
   }
-  const totalAmount = adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
-    if (item.isGift) return sum;
-    return sum + (item.price * item.quantity);
-  }, 0);
+  const groupedTotal = paymentGroups
+    ? Math.round(paymentGroups.reduce((sum, group) => sum + (Number(group.amount) || 0), 0) * 100) / 100
+    : null;
+  const totalAmount = groupedTotal != null
+    ? groupedTotal
+    : (adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : items.reduce((sum, item) => {
+      if (item.isGift) return sum;
+      return sum + (item.price * item.quantity);
+    }, 0));
   const receiptData = {
     sale_id: null,
     totalAmount,
@@ -7415,7 +8124,8 @@ async function printCashierAdisyonFromData(adisyonData) {
     sale_date: adisyonData.sale_date || new Date().toLocaleDateString('tr-TR'),
     sale_time: adisyonData.sale_time || getFormattedTime(new Date()),
     items,
-    orderNote: adisyonData.orderNote || null,
+    paymentGroups,
+    orderNote: paymentGroups ? null : (adisyonData.orderNote || null),
     tableName: adisyonData.tableName || null,
     tableType: adisyonData.tableType || null,
     cashierOnly: true,
@@ -7423,10 +8133,10 @@ async function printCashierAdisyonFromData(adisyonData) {
     customer_phone: adisyonData.customer_phone || null,
     customer_address: adisyonData.customer_address || null,
     address_note: adisyonData.address_note || null,
-    discountInfo: adisyonData.discountInfo || null,
-    subtotal: adisyonData.subtotal !== undefined ? adisyonData.subtotal : totalAmount,
-    discountAmount: adisyonData.discountAmount || 0,
-    finalTotal: adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : totalAmount
+    subtotal: paymentGroups ? totalAmount : (adisyonData.subtotal !== undefined ? adisyonData.subtotal : totalAmount),
+    discountAmount: paymentGroups ? 0 : (adisyonData.discountAmount || 0),
+    discountInfo: paymentGroups ? null : (adisyonData.discountInfo || null),
+    finalTotal: paymentGroups ? totalAmount : (adisyonData.finalTotal !== undefined ? adisyonData.finalTotal : totalAmount)
   };
   if (adisyonData.tableType === 'online' && adisyonData.customer_address) {
     try {
@@ -7478,63 +8188,13 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
 
 // Adisyon yazdırma — HTML ile (okunaklı; metin belgesi silik/bozuk çıkıyordu)
 async function printAdisyonToPrinter(printerName, printerType, items, adisyonData) {
-  let printWindow = null;
   try {
     console.log(`   [printAdisyonToPrinter] Adisyon (HTML): "${printerName || 'Varsayılan'}"`);
     const adisyonHTML = generateAdisyonHTML(items, adisyonData);
-    printWindow = new BrowserWindow({
-      show: false, width: 220, height: 3000,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
-    });
-    let printResolve, printReject;
-    const printPromise = new Promise((resolve, reject) => { printResolve = resolve; printReject = reject; });
-    let printStarted = false;
-    const startPrint = () => {
-      if (printStarted) return;
-      printStarted = true;
-      setImmediate(async () => {
-        try {
-          const scrollHeight = await printWindow.webContents.executeJavaScript(`
-            (function() {
-              document.body.style.minHeight = 'auto'; document.body.style.height = 'auto';
-              document.documentElement.style.height = 'auto';
-              return Math.max(document.body.scrollHeight, document.body.offsetHeight,
-                document.documentElement.scrollHeight, document.documentElement.offsetHeight);
-            })();
-          `);
-          printWindow.setSize(220, Math.max(3000, scrollHeight + 200));
-        } catch (_) {}
-        let targetName = printerName;
-        if (targetName) {
-          const available = getAvailablePrinterNames();
-          const exact = available.find(p => p === targetName);
-          const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
-          targetName = exact || partial || null;
-        }
-        const printOptions = {
-          silent: true, printBackground: true, margins: { marginType: 'none' },
-          landscape: false, scaleFactor: 100, pagesPerSheet: 1, collate: false, color: false, copies: 1, duplex: 'none'
-        };
-        if (targetName) printOptions.deviceName = targetName;
-        printWindow.webContents.print(printOptions, (success, errType) => {
-          if (!success) printReject(new Error(errType || 'Adisyon yazdırma başarısız'));
-          else printResolve(true);
-          setTimeout(() => { if (printWindow && !printWindow.isDestroyed()) { printWindow.close(); printWindow = null; } }, 150);
-        });
-      });
-    };
-    printWindow.webContents.once('did-finish-load', () => startPrint());
-    printWindow.webContents.once('dom-ready', () => startPrint());
-    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(adisyonHTML)}`);
-    setImmediate(() => startPrint());
-    await Promise.race([
-      printPromise,
-      new Promise((_, rej) => setTimeout(() => rej(new Error('Adisyon yazdırma timeout')), 18000))
-    ]);
+    await enqueueHtmlPrint(printerName, adisyonHTML);
     return { success: true, printerName: printerName || 'Varsayılan' };
   } catch (error) {
     console.error(`   [printAdisyonToPrinter] Hata:`, error.message);
-    if (printWindow && !printWindow.isDestroyed()) printWindow.close();
     return { success: false, error: error.message, printerName: printerName || 'Varsayılan' };
   }
 }
@@ -7771,62 +8431,9 @@ async function printPreparedHtmlReceipts(printerNameToHtml) {
   if (!printerNameToHtml || typeof printerNameToHtml !== 'object') return;
   const entries = Object.entries(printerNameToHtml);
   if (entries.length === 0) return;
-  const printOne = (printerName, html) => {
-    return new Promise((resolve, reject) => {
-      let printWindow = null;
-      try {
-        printWindow = new BrowserWindow({
-          show: false, width: 220, height: 3000,
-          webPreferences: { nodeIntegration: false, contextIsolation: true }
-        });
-        let printResolve, printReject;
-        const printPromise = new Promise((res, rej) => { printResolve = res; printReject = rej; });
-        let printStarted = false;
-        const startPrint = () => {
-          if (printStarted) return;
-          printStarted = true;
-          setImmediate(async () => {
-            try {
-              const scrollHeight = await printWindow.webContents.executeJavaScript(`
-                (function() {
-                  document.body.style.minHeight = 'auto'; document.body.style.height = 'auto';
-                  document.documentElement.style.height = 'auto';
-                  return Math.max(document.body.scrollHeight, document.body.offsetHeight,
-                    document.documentElement.scrollHeight, document.documentElement.offsetHeight);
-                })();
-              `);
-              printWindow.setSize(220, Math.max(3000, scrollHeight + 200));
-            } catch (_) {}
-            const available = getAvailablePrinterNames();
-            const exact = available.find(p => p === printerName);
-            const partial = available.find(p => p.includes(printerName) || printerName.includes(p));
-            const targetName = exact || partial || printerName;
-            const printOptions = {
-              silent: true, printBackground: true, margins: { marginType: 'none' },
-              landscape: false, scaleFactor: 100, pagesPerSheet: 1, collate: false, color: false, copies: 1, duplex: 'none'
-            };
-            if (targetName) printOptions.deviceName = targetName;
-            printWindow.webContents.print(printOptions, (success, errType) => {
-              if (!success) printReject(new Error(errType || 'Yazdırma başarısız'));
-              else printResolve(true);
-              if (printWindow && !printWindow.isDestroyed()) { printWindow.close(); printWindow = null; }
-            });
-          });
-        };
-        printWindow.webContents.once('did-finish-load', () => startPrint());
-        printWindow.webContents.once('dom-ready', () => startPrint());
-        const timeout = setTimeout(() => printReject(new Error('Yazdırma timeout')), 15000);
-        printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
-          setImmediate(() => startPrint());
-        }).catch(err => { clearTimeout(timeout); printReject(err); });
-        printPromise.then(() => { clearTimeout(timeout); resolve(); }, err => { clearTimeout(timeout); reject(err); });
-      } catch (e) {
-        if (printWindow && !printWindow.isDestroyed()) printWindow.close();
-        reject(e);
-      }
-    });
-  };
-  await Promise.all(entries.map(([name, html]) => printOne(name, html).catch(err => console.error(`Hazır fiş yazdırma ${name}:`, err?.message || err))));
+  await Promise.all(entries.map(([name, html]) =>
+    enqueueHtmlPrint(name, html).catch(err => console.error(`Hazır fiş yazdırma ${name}:`, err?.message || err))
+  ));
 }
 
 // Kategori bazlı adisyon yazdırma fonksiyonu
@@ -8188,9 +8795,6 @@ function generateAdisyonHTML(items, adisyonData) {
     <html>
     <head>
       <meta charset="UTF-8">
-      <link rel="preconnect" href="https://fonts.googleapis.com">
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-      <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&display=swap" rel="stylesheet">
       <style>
         @media print {
           @page {
@@ -8416,9 +9020,6 @@ function generateCancelReceiptHTML(cancelData) {
     <html>
     <head>
       <meta charset="UTF-8">
-      <link rel="preconnect" href="https://fonts.googleapis.com">
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-      <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700;900&display=swap" rel="stylesheet">
       <style>
         @media print {
           @page {
@@ -8519,84 +9120,13 @@ function generateCancelReceiptHTML(cancelData) {
 // İptal fişi yazdırma fonksiyonu
 // İptal fişi — HTML ile (okunaklı; metin belgesi silik/bozuk çıkıyordu)
 async function printCancelReceipt(printerName, printerType, cancelData) {
-  let printWindow = null;
   try {
     console.log(`   [printCancelReceipt] İptal fişi (HTML): "${printerName || 'Varsayılan'}"`);
     const cancelHTML = generateCancelReceiptHTML(cancelData);
-    printWindow = new BrowserWindow({
-      show: false,
-      width: 220,
-      height: 3000,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
-    });
-    let targetName = printerName || null;
-    if (targetName) {
-      try {
-        const available = getAvailablePrinterNames();
-        const exact = available.find(p => p === targetName);
-        const partial = available.find(p => p.includes(targetName) || targetName.includes(p));
-        targetName = exact || partial || targetName;
-      } catch (_) {}
-    }
-    const printOptions = {
-      silent: true,
-      printBackground: true,
-      margins: { marginType: 'none' },
-      landscape: false,
-      scaleFactor: 100,
-      pagesPerSheet: 1,
-      collate: false,
-      color: false,
-      copies: 1,
-      duplex: 'none'
-    };
-    if (targetName) printOptions.deviceName = targetName;
-    const loadDone = new Promise((resolve) => {
-      printWindow.webContents.once('did-finish-load', () => resolve());
-      printWindow.webContents.once('did-fail-load', (e, code, desc) => {
-        console.warn(`   [printCancelReceipt] load uyarısı: ${code} ${desc}`);
-        resolve();
-      });
-    });
-    await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(cancelHTML)}`);
-    await Promise.race([loadDone, new Promise((r) => setTimeout(r, 3000))]);
-    await new Promise((r) => setTimeout(r, 400));
-    const doPrint = (options) => new Promise((resolve, reject) => {
-      if (!printWindow || printWindow.isDestroyed()) {
-        reject(new Error('Pencere kapatıldı'));
-        return;
-      }
-      printWindow.webContents.print(options, (success, errType) => {
-        if (!success) reject(new Error(errType || 'İptal fişi yazdırma başarısız'));
-        else resolve();
-      });
-    });
-    try {
-      await Promise.race([
-        doPrint(printOptions),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('İptal fişi yazdırma timeout (10s)')), 10000))
-      ]);
-    } catch (firstErr) {
-      if (printOptions.deviceName) {
-        console.warn(`   [printCancelReceipt] Hedef yazıcı başarısız, varsayılan deneniyor:`, firstErr.message);
-        delete printOptions.deviceName;
-        await Promise.race([
-          doPrint(printOptions),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('İptal fişi timeout')), 10000))
-        ]);
-      } else {
-        throw firstErr;
-      }
-    } finally {
-      if (printWindow && !printWindow.isDestroyed()) {
-        printWindow.close();
-        printWindow = null;
-      }
-    }
-    return { success: true, printerName: targetName || 'Varsayılan' };
+    await enqueueHtmlPrint(printerName, cancelHTML, { fallbackDefault: true });
+    return { success: true, printerName: printerName || 'Varsayılan' };
   } catch (error) {
     console.error(`   [printCancelReceipt] Hata:`, error.message);
-    if (printWindow && !printWindow.isDestroyed()) printWindow.close();
     throw error;
   }
 }
@@ -12389,7 +12919,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
       var mergeBtn = document.getElementById('drawerMergeBtn');
       if (mergeBtn) mergeBtn.style.display = !isSultanMobile && currentStaff && currentStaff.is_manager ? '' : 'none';
       var mgrOpsBtn = document.getElementById('drawerManagerOpsBtn');
-      if (mgrOpsBtn) mgrOpsBtn.style.display = hasManagerPermission() ? 'flex' : 'none';
+      if (mgrOpsBtn) mgrOpsBtn.style.display = 'none';
       var allOrdBtn = document.getElementById('drawerAllOrdersBtn');
       if (allOrdBtn) allOrdBtn.style.display = isSultanMobile ? '' : 'none';
       var makCanBtn = document.getElementById('drawerMakaraCancellationsBtn');
@@ -12423,7 +12953,7 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
         const mergeBtn = document.getElementById('drawerMergeBtn');
         if (mergeBtn) mergeBtn.style.display = !isSultanMobile && staff.is_manager ? 'flex' : 'none';
         const mgrOpsBtn = document.getElementById('drawerManagerOpsBtn');
-        if (mgrOpsBtn) mgrOpsBtn.style.display = (isSultanMobile || staff.is_manager) ? 'flex' : 'none';
+        if (mgrOpsBtn) mgrOpsBtn.style.display = 'none';
         const allOrdersBtn = document.getElementById('drawerAllOrdersBtn');
         if (allOrdersBtn) allOrdersBtn.style.display = isSultanMobile ? 'flex' : 'none';
         var makCanBtn = document.getElementById('drawerMakaraCancellationsBtn');
@@ -12745,9 +13275,10 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
           }, 200);
         });
         socket.on('staff-deleted', (data) => {
+          if (!currentStaff || String(currentStaff.id) !== String(data && data.staffId)) return;
           console.log('⚠️ Personel silindi:', data);
-          // Otomatik çıkış yap
           localStorage.removeItem('staffSession');
+          currentStaff = null;
           // Ana ekranı gizle, giriş ekranını göster
           document.getElementById('mainSection').style.display = 'none';
           document.getElementById('pinSection').style.display = 'block';
@@ -13828,7 +14359,9 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
               sourceOrderId: selectedTransferItemsSourceOrderId,
               targetTableId: selectedTransferItemsTargetTableId,
               itemsToTransfer: itemsToTransfer,
-              staffId: currentStaff.id
+              staffId: currentStaff && currentStaff.id,
+              staffIsManager: !!(currentStaff && currentStaff.is_manager),
+              staffIsChef: !!(currentStaff && currentStaff.is_chef)
             })
           });
           
@@ -17037,83 +17570,46 @@ ${isSultanMobileTpl ? `<script>(function(){document.documentElement.classList.ad
 const preloadedPrintJobs = new Map();
 const PRINT_JOB_TTL_MS = 5 * 60 * 1000; // 5 dakika sonra temizle
 
+function closePreloadedWindows(job) {
+  (job?.windows || []).forEach(({ win }) => {
+    try { if (win && !win.isDestroyed()) win.close(); } catch (_) {}
+  });
+}
+
 function cleanupOldPrintJobs() {
   const now = Date.now();
   for (const [jobId, job] of preloadedPrintJobs.entries()) {
     if (now - job.createdAt > PRINT_JOB_TTL_MS) {
-      job.windows.forEach(({ win }) => {
-        try { if (win && !win.isDestroyed()) win.close(); } catch (_) {}
-      });
+      closePreloadedWindows(job);
       preloadedPrintJobs.delete(jobId);
     }
   }
 }
 
-// Sepetteyken çağrılır — her yazıcı için BrowserWindow açar + HTML yükler
+// Sepetteyken fiş HTML'i hazırlanır. Yazıcıya basış, sıcak fiş penceresinden gider.
 function preloadPrintWindows(htmlReceiptsMap) {
-  // Önceki preload işlerini iptal et (kart değişmişse)
   for (const [, oldJob] of preloadedPrintJobs.entries()) {
-    oldJob.windows.forEach(({ win }) => {
-      try { if (win && !win.isDestroyed()) win.close(); } catch (_) {}
-    });
+    closePreloadedWindows(oldJob);
   }
   preloadedPrintJobs.clear();
 
   const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2);
-  const windows = Object.entries(htmlReceiptsMap).map(([printerName, html]) => {
-    const win = new BrowserWindow({
-      show: false, width: 220, height: 3000,
-      webPreferences: { nodeIntegration: false, contextIsolation: true }
-    });
-    const entry = { printerName, win, ready: false };
-    win.webContents.once('did-finish-load', () => { entry.ready = true; });
-    win.webContents.once('dom-ready', () => { entry.ready = true; });
-    win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).catch(() => {});
-    return entry;
-  });
-  preloadedPrintJobs.set(jobId, { windows, createdAt: Date.now() });
+  const receipts = Object.entries(htmlReceiptsMap || {}).map(([printerName, html]) => ({ printerName, html }));
+  preloadedPrintJobs.set(jobId, { receipts, windows: [], createdAt: Date.now() });
   cleanupOldPrintJobs();
   return jobId;
 }
 
-// "Siparişi Gönder"e basılınca çağrılır — pencere zaten hazır, sadece .print()
+// Sipariş düşünce kategori yazıcılarına aynı hızlı yoldan basar.
 async function printPreloadedJob(printJobId) {
   const job = preloadedPrintJobs.get(printJobId);
   if (!job) return false;
   preloadedPrintJobs.delete(printJobId);
-  console.log(`[printPreloadedJob] ${job.windows.length} yazıcı için yazdırma başlıyor`);
-
-  const printOne = async ({ printerName, win, ready }) => {
-    if (!win || win.isDestroyed()) return;
-    console.log(`[printPreloadedJob] Yazıcı: "${printerName}", hazır: ${ready}`);
-    // Pencere yüklenmediyse en fazla 1000ms bekle (genellikle zaten hazır)
-    if (!ready) {
-      await new Promise(r => {
-        const t = setTimeout(r, 1000);
-        win.webContents.once('did-finish-load', () => { clearTimeout(t); r(); });
-        win.webContents.once('dom-ready', () => { clearTimeout(t); r(); });
-      });
-    }
-    const available = getAvailablePrinterNames();
-    const exact = available.find(p => p === printerName);
-    const partial = available.find(p => p.includes(printerName) || printerName.includes(p));
-    const targetName = exact || partial || printerName;
-    const printOptions = {
-      silent: true, printBackground: true, margins: { marginType: 'none' },
-      landscape: false, scaleFactor: 100, pagesPerSheet: 1,
-      collate: false, color: false, copies: 1, duplex: 'none',
-      deviceName: targetName
-    };
-    await new Promise((resolve) => {
-      win.webContents.print(printOptions, () => {
-        try { if (!win.isDestroyed()) win.close(); } catch (_) {}
-        resolve();
-      });
-    });
-  };
-
-  await Promise.all(job.windows.map(e =>
-    printOne(e).catch(err => console.error(`[printPreloadedJob] ${e.printerName}:`, err?.message || err))
+  closePreloadedWindows(job);
+  const receipts = job.receipts || [];
+  console.log(`[printPreloadedJob] ${receipts.length} yazıcı için yazdırma başlıyor`);
+  await Promise.all(receipts.map(({ printerName, html }) =>
+    enqueueHtmlPrint(printerName, html).catch(err => console.error(`[printPreloadedJob] ${printerName}:`, err?.message || err))
   ));
   return true;
 }
@@ -17750,193 +18246,23 @@ function startAPIServer() {
         return res.status(400).json({ success: false, error: 'Geçersiz istek parametreleri' });
       }
 
-      // Sultan Somatı'da tüm personel yetkili; diğer şubelerde sadece müdür
-      if (!staffId) {
-        return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
-      }
-      if (activeBranchKey !== 'sultansomati') {
-        const staff = (db.staff || []).find(s => s.id === staffId);
-        if (!staff || !staff.is_manager) {
-          return res.status(403).json({ 
-            success: false, 
-            error: 'Ürün aktarma yetkisi yok. Bu işlem için müdür yetkisi gereklidir.' 
-          });
-        }
+      const gate = await mobileStaffMayTransfer(
+        staffId,
+        pwaStaffHintsFromPayload(req.body),
+        'Ürün aktarma'
+      );
+      if (!gate.ok) {
+        const status = gate.error === 'Personel bilgisi gerekli' ? 400 : 403;
+        return res.status(status).json({ success: false, error: gate.error });
       }
 
-      const sourceOrder = db.tableOrders.find(o => o.id === sourceOrderId);
-      if (!sourceOrder) return res.status(404).json({ success: false, error: 'Sipariş bulunamadı' });
-      if (sourceOrder.status !== 'pending') return res.status(400).json({ success: false, error: 'Bu sipariş aktarılamaz' });
-
-      if (sourceOrder.table_id === targetTableId) return res.status(400).json({ success: false, error: 'Hedef masa, mevcut masa ile aynı olamaz' });
-
-      const targetTableName = getTableNameFromId(targetTableId);
-      const targetTableType = getTableTypeFromId(targetTableId);
-      let targetOrder = db.tableOrders.find(o => o.table_id === targetTableId && o.status === 'pending');
-
-      const now = new Date();
-      const orderDate = now.toLocaleDateString('tr-TR');
-      const orderTime = getFormattedTime(now);
-
-      if (!targetOrder) {
-        const newOrderId = db.tableOrders.length > 0 ? Math.max(...db.tableOrders.map(o => o.id)) + 1 : 1;
-        targetOrder = {
-          id: newOrderId,
-          table_id: targetTableId,
-          table_name: targetTableName,
-          table_type: targetTableType,
-          total_amount: 0,
-          order_date: orderDate,
-          order_time: orderTime,
-          status: 'pending',
-          order_note: null
-        };
-        db.tableOrders.push(targetOrder);
+      const result = await transferOrderItemsInternal(sourceOrderId, targetTableId, itemsToTransfer);
+      if (!result.success) {
+        const status = result.error === 'Sipariş bulunamadı' ? 404 : 400;
+        return res.status(status).json(result);
       }
+      return res.json({ success: true, transferredCount: result.transferredCount || 0 });
 
-      let transferredAmount = 0;
-      const itemsForPrint = [];
-      const transferredItemsMap = {}; // Aktarılan item'ları takip etmek için
-
-      for (const it of itemsToTransfer) {
-        const productId = it.product_id;
-        const qty = it.quantity || 0;
-        const isGift = it.isGift || false;
-        if (qty <= 0) continue;
-
-        const sourceItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrderId && oi.product_id === productId && (oi.isGift || false) === isGift);
-        let remaining = qty;
-
-        for (const item of sourceItems) {
-          if (remaining <= 0) break;
-          
-          // Sadece ödenmemiş miktarı al
-          const unpaidQty = item.quantity - (Number(item.paid_quantity) || 0);
-          if (unpaidQty <= 0) continue;
-          
-          const takeQty = Math.min(remaining, unpaidQty);
-          const itemAmount = isGift ? 0 : (item.price * takeQty);
-          transferredAmount += itemAmount;
-
-          if (takeQty >= unpaidQty) {
-            // Tüm ödenmemiş miktarı al - item'ı hedef siparişe taşı
-            // Ama paid_quantity'yi sıfırla çünkü yeni siparişte ödenmemiş
-            const newItemId = db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 : 1;
-            db.tableOrderItems.push({
-              ...item,
-              id: newItemId,
-              order_id: targetOrder.id,
-              quantity: unpaidQty,
-              paid_quantity: 0,
-              is_paid: false,
-              payment_method: null
-            });
-            
-            // Yazdırma listesine ekle
-            const printKey = `${productId}_${isGift}`;
-            if (!transferredItemsMap[printKey]) {
-              transferredItemsMap[printKey] = {
-                id: productId,
-                name: it.product_name || item.product_name || '',
-                quantity: 0,
-                price: item.price || it.price || 0,
-                isGift: isGift,
-                staff_name: it.staff_name || item.staff_name || null,
-                added_date: orderDate,
-                added_time: orderTime
-              };
-            }
-            transferredItemsMap[printKey].quantity += unpaidQty;
-            
-            // Kaynak item'dan ödenmemiş miktarı çıkar
-            item.quantity -= unpaidQty;
-            // Eğer item tamamen tükendiyse sil
-            if (item.quantity <= 0) {
-              const idx = db.tableOrderItems.findIndex(oi => oi.id === item.id);
-              if (idx !== -1) db.tableOrderItems.splice(idx, 1);
-            } else {
-              // Kalan miktar için paid_quantity'yi güncelle
-              item.paid_quantity = Math.min(item.paid_quantity || 0, item.quantity);
-            }
-            
-            remaining -= takeQty;
-          } else {
-            // Sadece bir kısmını al - yeni item oluştur
-            const newItemId = db.tableOrderItems.length > 0 ? Math.max(...db.tableOrderItems.map(oi => oi.id)) + 1 : 1;
-            db.tableOrderItems.push({
-              ...item,
-              id: newItemId,
-              order_id: targetOrder.id,
-              quantity: takeQty,
-              paid_quantity: 0,
-              is_paid: false,
-              payment_method: null
-            });
-            
-            // Yazdırma listesine ekle
-            const printKey = `${productId}_${isGift}`;
-            if (!transferredItemsMap[printKey]) {
-              transferredItemsMap[printKey] = {
-                id: productId,
-                name: it.product_name || item.product_name || '',
-                quantity: 0,
-                price: item.price || it.price || 0,
-                isGift: isGift,
-                staff_name: it.staff_name || item.staff_name || null,
-                added_date: orderDate,
-                added_time: orderTime
-              };
-            }
-            transferredItemsMap[printKey].quantity += takeQty;
-            
-            // Kaynak item'dan ödenmemiş miktarın bir kısmını çıkar
-            item.quantity -= takeQty;
-            item.paid_quantity = Math.min(item.paid_quantity || 0, item.quantity);
-            
-            remaining -= takeQty;
-          }
-        }
-
-        // Eğer hala aktarılacak miktar varsa (bu durumda kaynakta yeterli ödenmemiş ürün yok demektir)
-        // Bu durum normalde olmamalı çünkü frontend'de sadece ödenmemiş miktar gösteriliyor
-        // Ama yine de güvenlik için kontrol ediyoruz
-        if (remaining > 0) {
-          console.warn(`Uyarı: ${remaining} adet aktarılamadı (yeterli ödenmemiş ürün yok)`);
-        }
-      }
-
-      // Aktarılan item'ları yazdırma listesine ekle
-      itemsForPrint.push(...Object.values(transferredItemsMap));
-
-      const sourceRemainingItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrderId);
-      sourceOrder.total_amount = Math.round(sourceRemainingItems.reduce((sum, oi) => sum + (oi.isGift ? 0 : oi.price * oi.quantity), 0) * 100) / 100;
-      targetOrder.total_amount = Math.round(((targetOrder.total_amount || 0) + transferredAmount) * 100) / 100;
-
-      if (sourceRemainingItems.length === 0) {
-        sourceOrder.status = 'completed';
-        if (io) io.emit('table-update', { tableId: sourceOrder.table_id, hasOrder: false });
-        syncSingleTableToFirebase(sourceOrder.table_id).catch(() => {});
-      }
-
-      saveDatabase();
-      if (io) io.emit('table-update', { tableId: targetTableId, hasOrder: true });
-      syncSingleTableToFirebase(targetTableId).catch(() => {});
-
-      if (itemsForPrint.length > 0) {
-        const adisyonDataForPrint = {
-          tableName: targetTableName,
-          tableType: targetTableType,
-          items: itemsForPrint,
-          orderDate: orderDate,
-          orderTime: orderTime
-        };
-        printAdisyonByCategory(adisyonDataForPrint).catch(err => console.error('Adisyon yazdırma hatası:', err));
-      }
-
-      res.json({ 
-        success: true, 
-        transferredCount: itemsForPrint.length
-      });
     } catch (error) {
       console.error('Ürün aktarım hatası:', error);
       res.status(500).json({ success: false, error: 'Ürün aktarılırken bir hata oluştu' });
@@ -17956,14 +18282,14 @@ function startAPIServer() {
       if (!staffId) {
         return res.status(400).json({ success: false, error: 'Personel bilgisi gerekli' });
       }
-      if (activeBranchKey !== 'sultansomati') {
-        const staff = findStaffById(staffId);
-        if (!staff || !staff.is_manager) {
-          return res.status(403).json({ 
-            success: false, 
-            error: 'Masa birleştirme yetkisi yok. Bu işlem için müdür yetkisi gereklidir.' 
-          });
-        }
+      const gate = await mobileStaffMayTransfer(
+        staffId,
+        pwaStaffHintsFromPayload(req.body),
+        'Masa birleştirme'
+      );
+      if (!gate.ok) {
+        const status = gate.error === 'Personel bilgisi gerekli' ? 400 : 403;
+        return res.status(status).json({ success: false, error: gate.error });
       }
 
       const sourceOrder = db.tableOrders.find(
@@ -18070,86 +18396,14 @@ function startAPIServer() {
       if (!sourceTableId || !targetTableId) {
         return res.status(400).json({ success: false, error: 'Kaynak ve hedef masa ID\'leri gerekli' });
       }
-      
-      // Kaynak masanın siparişini bul
-      const sourceOrder = db.tableOrders.find(
-        o => o.table_id === sourceTableId && o.status === 'pending'
-      );
 
-      if (!sourceOrder) {
-        return res.status(404).json({ success: false, error: 'Kaynak masada aktif sipariş bulunamadı' });
+      const result = await transferTableOrderInternal(sourceTableId, targetTableId);
+      if (!result.success) {
+        const status = result.error && result.error.indexOf('bulunamadı') !== -1 ? 404 : 400;
+        return res.status(status).json(result);
       }
+      return res.json(result);
 
-      // Hedef masada aktif sipariş var mı kontrol et
-      const targetOrder = db.tableOrders.find(
-        o => o.table_id === targetTableId && o.status === 'pending'
-      );
-
-      if (targetOrder) {
-        return res.status(400).json({ success: false, error: 'Hedef masada zaten aktif bir sipariş var' });
-      }
-
-      // Kaynak masanın sipariş itemlarını al
-      const sourceItems = db.tableOrderItems.filter(oi => oi.order_id === sourceOrder.id);
-
-      if (sourceItems.length === 0) {
-        return res.status(400).json({ success: false, error: 'Aktarılacak ürün bulunamadı' });
-      }
-
-      const targetTableName = getTableNameFromId(targetTableId);
-      const targetTableType = getTableTypeFromId(targetTableId);
-
-      // Kaynak siparişin tüm bilgilerini koru (order_date, order_time, order_note, total_amount)
-      // Sadece table_id, table_name ve table_type'ı güncelle
-      sourceOrder.table_id = targetTableId;
-      sourceOrder.table_name = targetTableName;
-      sourceOrder.table_type = targetTableType;
-
-      // Tüm itemların order_id'si zaten doğru (aynı order'a ait oldukları için değişmeyecek)
-      // Ancak emin olmak için kontrol edelim
-      sourceItems.forEach(item => {
-        if (item.order_id !== sourceOrder.id) {
-          item.order_id = sourceOrder.id;
-        }
-      });
-
-      saveDatabase();
-
-      // Masaüstü / patron ekranı (Firebase masalar dinleyicisi) ipc ile aynı veriyi görsün
-      if (mainWindow && mainWindow.webContents) {
-        mainWindow.webContents.send('table-order-updated', {
-          orderId: sourceOrder.id,
-          tableId: targetTableId,
-          sourceTableId: sourceTableId
-        });
-      }
-
-      // Mobil personel arayüzüne gerçek zamanlı güncelleme gönder
-      if (io) {
-        io.emit('table-update', {
-          tableId: sourceTableId,
-          hasOrder: false
-        });
-        io.emit('table-update', {
-          tableId: targetTableId,
-          hasOrder: true
-        });
-      }
-
-      // ipcMain.transfer-table-order ile aynı: makaramasalar Firebase'de kaynak boş, hedef dolu
-      syncSingleTableToFirebase(sourceTableId).catch((err) => {
-        console.error('Kaynak masa Firebase kaydetme hatası:', err);
-      });
-      syncSingleTableToFirebase(targetTableId).catch((err) => {
-        console.error('Hedef masa Firebase kaydetme hatası:', err);
-      });
-
-      res.json({ 
-        success: true, 
-        orderId: sourceOrder.id,
-        sourceTableId: sourceTableId,
-        targetTableId: targetTableId
-      });
     } catch (error) {
       console.error('Masa aktarım hatası:', error);
       res.status(500).json({ success: false, error: 'Masa aktarılırken bir hata oluştu' });
@@ -18335,7 +18589,7 @@ function startAPIServer() {
       if (!staff) {
         return res.status(403).json({ success: false, error: 'Personel bulunamadı.' });
       }
-      const result = await completeTableOrderCore(orderId, paymentMethod, null, discountAmountTL || null);
+      const result = await withOrderPaymentLock(orderId, () => completeTableOrderCore(orderId, paymentMethod, null, discountAmountTL || null));
       if (!result.success) {
         return res.status(400).json(result);
       }
@@ -19607,8 +19861,36 @@ async function syncAllStaffToFirestore(options = {}) {
 
 // ── PWA sipariş kuyruğu (Firestore mobile_orders → yazdır + yerel db) ───────
 const mobileOrdersProcessing = new Set();
+const MOBILE_QUEUE_OWNER = `${os.hostname()}-${process.pid}`;
+
+/** İki kasa aynı PWA kaydını birden işlemesin. Yalnızca bekleyen kaydı alan kasa true döner. */
+async function claimMobileQueueDoc(ref) {
+  if (!tablesFirestore || !firebaseRunTransaction) return false;
+  try {
+    return await firebaseRunTransaction(tablesFirestore, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) return false;
+      const data = snap.data() || {};
+      if (data.status !== 'pending') return false;
+      if (data.branchKey && data.branchKey !== activeBranchKey) return false;
+      tx.update(ref, {
+        status: 'processing',
+        processingAt: new Date().toISOString(),
+        claimedBy: MOBILE_QUEUE_OWNER,
+      });
+      return true;
+    });
+  } catch (err) {
+    console.warn('PWA kuyruk kilidi alınamadı:', err.message || err);
+    return false;
+  }
+}
 
 async function processMobileOrderPayload(payload) {
+  const actionType = String(payload?.type || payload?.action || '').trim();
+  if (payload?.queueKind === 'action' || MOBILE_ACTION_TYPES.has(actionType)) {
+    throw new Error('Ürün aktarımı sipariş olarak kaydedilemez');
+  }
   const { items, tableId, tableName, tableType, orderNote, staffId, staffName } = payload;
   if (!items || !Array.isArray(items) || items.length === 0) {
     throw new Error('Ürün listesi gerekli');
@@ -19779,6 +20061,31 @@ async function processMobileOrderPayload(payload) {
   return { orderId, isNewOrder, totalAmount: finalTotalAmount };
 }
 
+async function markMobileActionProcessed(ref, result) {
+  const processedAt = new Date().toISOString();
+  let safe = null;
+  try {
+    safe = result == null ? null : JSON.parse(JSON.stringify(result));
+  } catch (_) {
+    safe = { success: true };
+  }
+  try {
+    await firebaseUpdateDoc(ref, {
+      status: 'processed',
+      result: safe,
+      error: null,
+      processedAt,
+    });
+  } catch (err) {
+    console.error('PWA işlem sonucu yazılamadı, durum yine de tamamlandı:', err.message || err);
+    await firebaseUpdateDoc(ref, {
+      status: 'processed',
+      error: null,
+      processedAt,
+    });
+  }
+}
+
 async function handleFirestoreMobileOrder(docSnap) {
   const docId = docSnap.id;
   if (mobileOrdersProcessing.has(docId)) return;
@@ -19806,7 +20113,11 @@ async function handleFirestoreMobileOrder(docSnap) {
       throw new Error('Firestore mobile_orders güncellemesi hazır değil');
     }
     const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
-    await firebaseUpdateDoc(ref, { status: 'processing', processingAt: new Date().toISOString() });
+    const claimed = await claimMobileQueueDoc(ref);
+    if (!claimed) {
+      console.log(`PWA sipariş başka kasada işleniyor: ${docId}`);
+      return;
+    }
 
     if (isMobileQueueAction(data)) {
       const result = await processMobileActionPayload(data);
@@ -19822,11 +20133,7 @@ async function handleFirestoreMobileOrder(docSnap) {
         return;
       }
 
-      await firebaseUpdateDoc(ref, {
-        status: 'processed',
-        result: result || null,
-        processedAt: new Date().toISOString(),
-      });
+      await markMobileActionProcessed(ref, result);
       console.log(`✅ PWA işlem tamamlandı: ${docId} (${data.type})`);
     } else {
       await processMobileOrderPayload(data);
@@ -19904,21 +20211,36 @@ async function processPendingMobileOrdersOnStartup() {
 
 // ── PWA müdür/şef işlemleri (Firestore mobile_orders kuyruğu → yerel işlem) ──
 const mobileActionsProcessing = new Set();
-const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'merge_table']);
+const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'transfer_items', 'merge_table']);
 
 function isMobileQueueAction(data) {
   if (!data) return false;
   if (data.queueKind === 'action') return true;
-  return !!(data.type && MOBILE_ACTION_TYPES.has(data.type) && !Array.isArray(data.items));
+  const type = String(data.type || data.action || data.actionType || '').trim();
+  return MOBILE_ACTION_TYPES.has(type);
 }
 
 function findStaffById(staffId) {
   if (staffId == null || !db.staff) return null;
-  return db.staff.find((s) => s.id == staffId) || null;
+  return db.staff.find((s) => String(s.id) === String(staffId)) || null;
+}
+
+/** Silinen personelin numarası bir sonrakine verilmesin; geç kalan Firestore silmesi yeni hesabı ezmesin */
+function allocateStaffId() {
+  if (!db.settings) db.settings = {};
+  const existingMax = (db.staff || []).reduce((max, s) => {
+    const n = Number(s.id);
+    return Number.isFinite(n) ? Math.max(max, n) : max;
+  }, 0);
+  const cursor = Number(db.settings.nextStaffId) || 0;
+  const next = Math.max(existingMax, cursor) + 1;
+  db.settings.nextStaffId = next;
+  return next;
 }
 
 async function processMobileActionPayload(data) {
-  switch (data.type) {
+  const actionType = String(data?.type || data?.action || data?.actionType || '').trim();
+  switch (actionType) {
     case 'cancel_item': {
       const result = await cancelTableOrderItemInternal(
         data.itemId,
@@ -19948,17 +20270,39 @@ async function processMobileActionPayload(data) {
       if (!result.success) throw new Error(result.error || 'Masa aktarımı başarısız');
       return result;
     }
+    case 'transfer_items': {
+      const gate = await mobileStaffMayTransfer(
+        data.staffId,
+        pwaStaffHintsFromPayload(data),
+        'Ürün aktarma'
+      );
+      if (!gate.ok) throw new Error(gate.error);
+      let sourceOrderId = data.sourceOrderId;
+      if (sourceOrderId == null && data.sourceTableId != null) {
+        const sourceOrder = findPendingOrderForTable(data.sourceTableId);
+        if (!sourceOrder) throw new Error('Kaynak masada aktif sipariş bulunamadı');
+        sourceOrderId = sourceOrder.id;
+      }
+      const result = await transferOrderItemsInternal(
+        sourceOrderId,
+        data.targetTableId,
+        data.items || data.itemsToTransfer
+      );
+      if (!result.success) throw new Error(result.error || 'Ürün aktarımı başarısız');
+      return result;
+    }
     case 'merge_table': {
       const result = await mergeTableOrderInternal(
         data.sourceTableId,
         data.targetTableId,
-        data.staffId
+        data.staffId,
+        pwaStaffHintsFromPayload(data)
       );
       if (!result.success) throw new Error(result.error || 'Masa birleştirme başarısız');
       return result;
     }
     default:
-      throw new Error(`Bilinmeyen işlem türü: ${data.type}`);
+      throw new Error(`Bilinmeyen işlem türü: ${actionType || data?.type || '—'}`);
   }
 }
 
@@ -19988,7 +20332,11 @@ async function handleFirestoreMobileAction(docSnap) {
       throw new Error('Firestore mobile_actions güncellemesi hazır değil');
     }
     const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_actions', docId);
-    await firebaseUpdateDoc(ref, { status: 'processing', processingAt: new Date().toISOString() });
+    const claimed = await claimMobileQueueDoc(ref);
+    if (!claimed) {
+      console.log(`PWA işlem başka kasada işleniyor: ${docId}`);
+      return;
+    }
 
     const result = await processMobileActionPayload(data);
 
@@ -20075,48 +20423,58 @@ async function processPendingMobileActionsOnStartup() {
 }
 
 // Staff Management IPC Handlers
-ipcMain.handle('create-staff', (event, staffData) => {
+ipcMain.handle('create-staff', async (event, staffData) => {
   const { name, surname, password } = staffData;
   if (!name || !surname || !password) {
     return { success: false, error: 'Tüm alanları doldurun' };
   }
   if (!db.staff) db.staff = [];
-  const newId = db.staff.length > 0 
-    ? Math.max(...db.staff.map(s => s.id)) + 1 
-    : 1;
+  const newId = allocateStaffId();
   const newStaff = {
     id: newId,
     name: name.trim(),
     surname: surname.trim(),
     password: password.toString(),
-    is_manager: false, // Varsayılan olarak müdür değil
+    is_manager: false,
     is_chef: false
   };
   db.staff.push(newStaff);
   saveDatabase();
-  syncStaffMemberToFirestore(newStaff).catch(() => {});
+  const synced = await syncStaffMemberToFirestore(newStaff);
+  if (!synced) {
+    return {
+      success: true,
+      staff: newStaff,
+      warning: 'Personel kaydedildi ama telefona henüz yazılamadı. Uygulamayı kapatıp açınca şifreyle girilebilir.'
+    };
+  }
   return { success: true, staff: newStaff };
 });
 
-ipcMain.handle('delete-staff', (event, staffId) => {
+ipcMain.handle('delete-staff', async (event, staffId) => {
   if (!db.staff) db.staff = [];
-  const index = db.staff.findIndex(s => s.id === staffId);
+  const index = db.staff.findIndex((s) => String(s.id) === String(staffId));
   if (index === -1) {
     return { success: false, error: 'Personel bulunamadı' };
   }
   const deletedStaff = db.staff[index];
   db.staff.splice(index, 1);
+  const highest = Math.max(
+    Number(db.settings?.nextStaffId) || 0,
+    Number(deletedStaff.id) || 0
+  );
+  if (!db.settings) db.settings = {};
+  db.settings.nextStaffId = Math.max(Number(db.settings.nextStaffId) || 0, highest);
   saveDatabase();
-  deleteStaffFromFirestore(staffId).catch(() => {});
-  
-  // Mobil personel arayüzüne personel silme event'i gönder
+  await deleteStaffFromFirestore(deletedStaff.id);
+
   if (io) {
     io.emit('staff-deleted', {
-      staffId: staffId,
+      staffId: deletedStaff.id,
       message: 'Hesabınız silindi. Lütfen tekrar giriş yapın.'
     });
   }
-  
+
   return { success: true };
 });
 
@@ -20212,42 +20570,30 @@ ipcMain.handle('sync-staff-to-firestore', async () => {
   }
 });
 
-// Müdür atama/kaldırma (managerAuthPassword: managerOperationsPassword tanımlıysa zorunlu)
-ipcMain.handle('set-staff-manager', (event, staffId, isManager, managerAuthPassword) => {
+// Müdür atama/kaldırma — sayı sınırı yok, şifre gerekmez
+ipcMain.handle('set-staff-manager', (event, staffId, isManager) => {
   if (!db.staff) db.staff = [];
-  if (isManagerOperationsPasswordConfigured() && !verifyManagerOperationsPassword(managerAuthPassword)) {
-    return { success: false, error: 'Masaüstü müdür işlem şifresi hatalı veya girilmedi' };
-  }
   const staff = db.staff.find(s => s.id === staffId);
   if (!staff) {
     return { success: false, error: 'Personel bulunamadı' };
   }
-  
-  // Eğer müdür yapılıyorsa, diğer tüm personellerin müdürlüğünü kaldır
+
   if (isManager) {
-    db.staff.forEach(s => {
-      if (s.id !== staffId) {
-        s.is_manager = false;
-      }
-    });
     staff.is_chef = false;
   }
-  
+
   staff.is_manager = isManager;
   saveDatabase();
-  syncAllStaffToFirestore().catch(() => {});
+  syncStaffMemberToFirestore(staff).catch(() => {});
   return { success: true, staff: staff };
 });
 
-/** Makara Havzan: garson ile aynı işlemler + mevcut sipariş satırı iptali (masaüstü müdür şifresi ile) */
-ipcMain.handle('set-staff-chef', (event, staffId, isChef, managerAuthPassword) => {
+/** Makara Havzan: garson ile aynı işlemler + mevcut sipariş satırı iptali */
+ipcMain.handle('set-staff-chef', (event, staffId, isChef) => {
   if (activeBranchKey !== 'makara') {
     return { success: false, error: 'Şef ataması yalnızca Makara Havzan şubesinde kullanılır' };
   }
   if (!db.staff) db.staff = [];
-  if (isManagerOperationsPasswordConfigured() && !verifyManagerOperationsPassword(managerAuthPassword)) {
-    return { success: false, error: 'Masaüstü müdür işlem şifresi hatalı veya girilmedi' };
-  }
   const staff = db.staff.find((s) => s.id === staffId);
   if (!staff) {
     return { success: false, error: 'Personel bulunamadı' };
@@ -20348,7 +20694,8 @@ function makaraTableLineFingerprint(obj) {
     obj.isGift ? 1 : 0,
     note,
     obj.is_paid ? 1 : 0,
-    Number(obj.paid_quantity) || 0
+    Number(obj.paid_quantity) || 0,
+    makaraRoundMoney(obj.amount_settled)
   ].join('|');
 }
 
@@ -20374,7 +20721,8 @@ function makaraRemoteTableFingerprint(data) {
         isGift: i.isGift,
         item_note: i.item_note,
         is_paid: i.is_paid,
-        paid_quantity: i.paid_quantity
+        paid_quantity: i.paid_quantity,
+        amount_settled: i.amount_settled
       })
     )
     .sort()
@@ -20394,7 +20742,28 @@ function deletePendingTableOrderAndItemsForTable(tableId) {
  * Makara Havzan: Firestore `tables/{tableId}` → yerel db. Stok hareketi yapmaz (kaynak başka kasadır).
  * Kendi gönderdiğimiz snapshot ile yerel özet aynıysa no-op (yankı döngüsü yok).
  */
+const makaraRemoteHoldUntil = new Map();
+
+function holdMakaraRemoteTables(tableIds, ms = 5000) {
+  const until = Date.now() + ms;
+  for (const id of tableIds) {
+    if (id == null || id === '') continue;
+    makaraRemoteHoldUntil.set(String(id), until);
+  }
+}
+
+function isMakaraRemoteHeld(tableId) {
+  const until = makaraRemoteHoldUntil.get(String(tableId));
+  if (!until) return false;
+  if (Date.now() >= until) {
+    makaraRemoteHoldUntil.delete(String(tableId));
+    return false;
+  }
+  return true;
+}
+
 function applyMakaraRemoteTableDocument(tableId, data) {
+  if (isMakaraRemoteHeld(tableId)) return false;
   const remoteFp = makaraRemoteTableFingerprint(data);
   const localFp = makaraLocalPendingFingerprintForTable(tableId);
   if (remoteFp === localFp) return false;
@@ -20496,7 +20865,8 @@ function applyMakaraRemoteTableDocument(tableId, data) {
       added_time: ri.added_time || null,
       item_note: ri.item_note && String(ri.item_note).trim() ? String(ri.item_note).trim() : null,
       is_paid: !!ri.is_paid,
-      paid_quantity: Number(ri.paid_quantity) || 0
+      paid_quantity: Number(ri.paid_quantity) || 0,
+      amount_settled: makaraRoundMoney(ri.amount_settled)
     });
   }
 
@@ -20647,6 +21017,7 @@ async function syncSingleTableToFirebase(tableId, extraFields = {}) {
         isGift: item.isGift || false,
         is_paid: item.is_paid || false,
         paid_quantity: item.paid_quantity || 0,
+        amount_settled: roundPaymentMoney(item.amount_settled),
         staff_name: item.staff_name || null,
         added_date: item.added_date || null,
         added_time: item.added_time || null,

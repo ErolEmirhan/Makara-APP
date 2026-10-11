@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import PrintToast from './PrintToast';
 import DatePickerDropdown from './DatePickerDropdown';
 import Toast from './Toast';
@@ -16,6 +16,12 @@ const SalesHistory = () => {
   const [showAdisyonModal, setShowAdisyonModal] = useState(false);
   const [recentSales, setRecentSales] = useState([]);
   const [loadingRecentSales, setLoadingRecentSales] = useState(false);
+  const [loadingMoreAdisyon, setLoadingMoreAdisyon] = useState(false);
+  const [adisyonHasMore, setAdisyonHasMore] = useState(false);
+  const adisyonCursorRef = useRef(null);
+  const adisyonLoadingRef = useRef(false);
+  const adisyonHasMoreRef = useRef(false);
+  const adisyonListRef = useRef(null);
   const [selectedSaleForAdisyon, setSelectedSaleForAdisyon] = useState(null);
   const [saleToDelete, setSaleToDelete] = useState(null);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
@@ -177,6 +183,48 @@ const SalesHistory = () => {
     loadSales();
     loadStaff();
   }, []);
+
+  const loadAdisyonPage = useCallback(async (reset) => {
+    if (adisyonLoadingRef.current) return;
+    if (!reset && !adisyonHasMoreRef.current) return;
+    adisyonLoadingRef.current = true;
+    if (reset) setLoadingRecentSales(true);
+    else setLoadingMoreAdisyon(true);
+    try {
+      const page = await window.electronAPI.getAdisyonHistory(
+        reset ? null : adisyonCursorRef.current,
+        10
+      );
+      const items = page?.items || [];
+      adisyonHasMoreRef.current = !!page?.hasMore;
+      adisyonCursorRef.current = page?.nextCursor || null;
+      setAdisyonHasMore(!!page?.hasMore);
+      setRecentSales((prev) => (reset ? items : [...prev, ...items]));
+    } catch (error) {
+      console.error('Geçmiş adisyonlar yüklenemedi:', error);
+      showToast('Geçmiş adisyonlar yüklenemedi', 'error');
+    } finally {
+      adisyonLoadingRef.current = false;
+      setLoadingRecentSales(false);
+      setLoadingMoreAdisyon(false);
+    }
+  }, []);
+
+  const onAdisyonListScroll = (event) => {
+    const el = event.currentTarget;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 96) {
+      loadAdisyonPage(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!showAdisyonModal || !adisyonHasMore || loadingRecentSales || loadingMoreAdisyon) return;
+    const el = adisyonListRef.current;
+    if (!el) return;
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 96) {
+      loadAdisyonPage(false);
+    }
+  }, [showAdisyonModal, recentSales.length, adisyonHasMore, loadingRecentSales, loadingMoreAdisyon, loadAdisyonPage]);
 
   const loadSales = async () => {
     setLoading(true);
@@ -910,6 +958,14 @@ const SalesHistory = () => {
         const staffInThisSale = new Set();
         
         // Her item için personel bilgisini kontrol et
+        const paidForScale = parseFloat(sale.total_amount || 0);
+        let itemWeight = 0;
+        sale.items_array.forEach((item) => {
+          if (item.isGift || item.isExpense) return;
+          itemWeight += parseFloat(item.price || 0) * (Number(item.quantity) || 0);
+        });
+        const revenueFactor = itemWeight > 0 ? paidForScale / itemWeight : 1;
+
         sale.items_array.forEach(item => {
           // Her item için personel bilgisi varsa o personelin satışı olarak say
           const itemStaffName = item.staff_name || sale.staff_name;
@@ -938,7 +994,7 @@ const SalesHistory = () => {
           
           // Bu item'ın gelirini hesapla (ikram değilse)
           if (!isGift) {
-            staffStats[itemStaffName].totalRevenue += (price * quantity);
+            staffStats[itemStaffName].totalRevenue += (price * quantity) * revenueFactor;
           }
           
           // Ürün istatistikleri
@@ -951,7 +1007,7 @@ const SalesHistory = () => {
           
           staffStats[itemStaffName].products[productName].count += quantity;
           if (!isGift) {
-            staffStats[itemStaffName].products[productName].revenue += (price * quantity);
+            staffStats[itemStaffName].products[productName].revenue += (price * quantity) * revenueFactor;
           }
           
           staffStats[itemStaffName].totalItemsSold += quantity;
@@ -1246,20 +1302,9 @@ const SalesHistory = () => {
                 Dashboard'da tarih bazlı filtreleme, ödeme yöntemi analizleri, personel performans raporları ve daha fazlasını bulabilirsiniz.
               </p>
               <button
-                onClick={async () => {
+                onClick={() => {
                   setShowAdisyonModal(true);
-                  setLoadingRecentSales(true);
-                  try {
-                    const recent = await window.electronAPI.getRecentSales(12);
-                    // Kısmi ödemeleri grupla
-                    const groupedSales = groupPartialPayments(recent || []);
-                    setRecentSales(groupedSales);
-                  } catch (error) {
-                    console.error('Son satışlar yüklenemedi:', error);
-                    showToast('Son satışlar yüklenemedi', 'error');
-                  } finally {
-                    setLoadingRecentSales(false);
-                  }
+                  loadAdisyonPage(true);
                 }}
                 className="px-6 py-3 bg-gradient-to-r from-pink-600 theme-sultan:from-emerald-600 to-pink-500 theme-sultan:to-emerald-500 hover:from-pink-600 theme-sultan:hover:from-emerald-600 hover:to-pink-600 theme-sultan:hover:to-emerald-600 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 flex items-center space-x-2 mx-auto"
               >
@@ -1293,19 +1338,19 @@ const SalesHistory = () => {
               </button>
             </div>
 
-            <p className="text-gray-600 mb-6">Son 12 saatin satış geçmişi:</p>
+            <p className="text-gray-600 mb-6">Tüm adisyonlar. Aşağı kaydırdıkça 10’ar 10’ar gelir.</p>
 
-            {loadingRecentSales ? (
+            {loadingRecentSales && recentSales.length === 0 ? (
               <div className="flex items-center justify-center py-12">
                 <div className="w-12 h-12 border-4 border-pink-600 theme-sultan:border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
               </div>
             ) : recentSales.length === 0 ? (
               <div className="text-center py-12">
-                <p className="text-gray-600">Son 12 saatte satış bulunamadı.</p>
+                <p className="text-gray-600">Kayıtlı adisyon yok.</p>
               </div>
             ) : (
               <>
-                <div className="space-y-3 max-h-96 overflow-y-auto mb-6">
+                <div ref={adisyonListRef} className="space-y-3 max-h-96 overflow-y-auto mb-6" onScroll={onAdisyonListScroll}>
                   {recentSales.map((sale) => (
                     <div
                       key={sale.id}
@@ -1393,6 +1438,14 @@ const SalesHistory = () => {
                       </div>
                     </div>
                   ))}
+                  {loadingMoreAdisyon && (
+                    <div className="flex items-center justify-center py-3">
+                      <div className="w-6 h-6 border-2 border-pink-600 theme-sultan:border-emerald-600 border-t-transparent rounded-full animate-spin"></div>
+                    </div>
+                  )}
+                  {!adisyonHasMore && recentSales.length > 0 && (
+                    <p className="py-2 text-center text-xs text-gray-400">Tüm adisyonlar yüklendi</p>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end space-x-4">
@@ -1445,7 +1498,7 @@ const SalesHistory = () => {
                           tableName: selectedSaleForAdisyon.table_name || null,
                           tableType: selectedSaleForAdisyon.table_type || null,
                           orderNote: selectedSaleForAdisyon.isGrouped 
-                            ? `Kısmi Ödemeler (${selectedSaleForAdisyon.original_sales?.length || 0} ödeme)` 
+                            ? `Kısmi Ödemeler (${selectedSaleForAdisyon.payment_count || selectedSaleForAdisyon.original_sales?.length || 0} ödeme)` 
                             : null,
                           sale_date: saleDate,
                           sale_time: saleTime,

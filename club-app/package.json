@@ -1,0 +1,26 @@
+{
+  "name": "makara-club",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MAKARA Club — müşteri sadakat (puan) uygulaması",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "build:hosting": "vite build --outDir ../public/club --emptyOutDir",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "firebase": "10.14.1",
+    "framer-motion": "11.18.2",
+    "jsqr": "1.4.0",
+    "qrcode": "1.5.4",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "4.3.4",
+    "vite": "5.4.21"
+  }
+}

@@ -1,0 +1,66 @@
+rules_version = '2';
+
+// MAKARA Club — ayrı Firebase projesi için güvenlik kuralları.
+// Müşteri kendi puanını değiştiremez; puan yükleme/harcama yalnızca
+// staff/{uid} belgesi olan kasa personeli tarafından yapılır.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isStaff() {
+      return signedIn() && exists(/databases/$(database)/documents/staff/$(request.auth.uid));
+    }
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+    // config/loyalty.js → PROGRAM.welcomeBonus ile aynı olmalı
+    function welcomeBonus() {
+      return 250;
+    }
+
+    match /members/{uid} {
+      allow read: if isOwner(uid) || isStaff();
+      allow create: if isOwner(uid)
+        && request.resource.data.points == welcomeBonus()
+        && request.resource.data.lifetimePoints == welcomeBonus()
+        && request.resource.data.visits == 0
+        && request.resource.data.memberCode is string
+        && getAfter(/databases/$(database)/documents/codes/$(request.resource.data.memberCode)).data.uid == uid;
+      allow update: if isStaff()
+        || (isOwner(uid) && request.resource.data.diff(resource.data).affectedKeys()
+              .hasOnly(['name', 'phone', 'birthday', 'updatedAt']));
+      allow delete: if false;
+
+      match /activity/{entryId} {
+        allow read: if isOwner(uid) || isStaff();
+        allow create: if isStaff()
+          || (isOwner(uid) && entryId == 'welcome'
+              && request.resource.data.type == 'welcome'
+              && request.resource.data.points == welcomeBonus());
+        allow update, delete: if false;
+      }
+    }
+
+    // Üye kodu → uid eşlemesi. Yalnızca bir kez yazılabilir (kod çakışması reddedilir).
+    match /codes/{code} {
+      allow read: if isStaff();
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && getAfter(/databases/$(database)/documents/members/$(request.auth.uid)).data.memberCode == code;
+      allow update, delete: if false;
+    }
+
+    // Kullanılmış ödül kodları (aynı QR iki kez okutulamaz).
+    match /redemptions/{nonce} {
+      allow read, create: if isStaff();
+      allow update, delete: if false;
+    }
+
+    // Kasa personeli: Firebase Console'dan elle eklenir.
+    match /staff/{uid} {
+      allow read: if isOwner(uid);
+      allow write: if false;
+    }
+  }
+}

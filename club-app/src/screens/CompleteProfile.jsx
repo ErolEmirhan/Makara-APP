@@ -21,14 +21,13 @@ export default function CompleteProfile() {
   };
   return (
     <div className="app-shell">
-      <main className="welcome" style={{ justifyContent: 'center' }}>
-        <div className="welcome-top">
-          <img src={`${import.meta.env.BASE_URL}wordmark-pink.png`} alt="MAKARA" />
-        </div>
-        <div className="welcome-copy" style={{ marginBottom: 22 }}>
+      <main className="welcome">
+        <section className="welcome-hero" style={{ paddingBottom: 48 }}>
+          <img className="logo" src={`${import.meta.env.BASE_URL}wordmark-white.png`} alt="MAKARA" />
           <h1>Son bir adım</h1>
           <p>Kasada seni bulabilmemiz için birkaç bilgi.</p>
-        </div>
+        </section>
+        <section className="welcome-body">
         <form onSubmit={submit}>
           <div className="field-group">
             <div className="field">
@@ -52,6 +51,7 @@ export default function CompleteProfile() {
         <button className="link-btn" style={{ margin: '18px auto 0' }} onClick={app.signOut}>
           Farklı hesapla giriş yap
         </button>
+        </section>
       </main>
     </div>
   );

@@ -13,15 +13,15 @@ export default function EarnSheet({ data, onClose }) {
     <Sheet open={Boolean(data)} onClose={onClose}>
       {data && (
         <div className="earned">
-          <span className="avatar is-xl is-success">
-            <Icon name="check" size={40} stroke={2.6} />
+          <span className="check-ring">
+            <Icon name="check" size={44} stroke={2.6} />
           </span>
           <h2 className="num">
             +<AnimatedNumber value={data.delta} duration={900} /> puan
           </h2>
           <p>Hesabına eklendi. Toplam puanın {formatPoints(data.total)}.</p>
-          <button className="btn btn-primary btn-block" style={{ marginTop: 18 }} onClick={onClose}>
-            Tamam
+          <button className="btn btn-primary btn-block btn-caps" style={{ marginTop: 18 }} onClick={onClose}>
+            Harika
           </button>
         </div>
       )}

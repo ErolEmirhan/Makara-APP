@@ -116,6 +116,9 @@ try {
 
 async function saveImage(id, bytes) {
   if (sharp) {
+    // Boş / tek renk görselleri (ör. beyaz yer tutucu) ürün fotoğrafı sayma
+    const { channels } = await sharp(bytes).stats();
+    if (channels.slice(0, 3).every((c) => c.stdev < 6)) throw new Error('boş görsel');
     const file = `${id}.webp`;
     await sharp(bytes).resize(IMAGE_SIZE, IMAGE_SIZE, { fit: 'cover' }).webp({ quality: 82 }).toFile(path.join(imgDir, file));
     return `catalog/img/${file}`;

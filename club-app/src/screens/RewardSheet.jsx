@@ -63,10 +63,10 @@ export default function RewardSheet({ reward, open, onClose }) {
       {reward &&
         (done ? (
           <div className="earned" style={{ paddingTop: 40 }}>
-            <span className="avatar is-xl is-success">
-              <Icon name="check" size={40} stroke={2.6} />
+            <span className="check-ring">
+              <Icon name="check" size={44} stroke={2.6} />
             </span>
-            <h2 style={{ fontSize: 26 }}>Afiyet olsun</h2>
+            <h2 style={{ fontSize: 30 }}>Afiyet olsun</h2>
             <p>{reward.name} ödülün kasada onaylandı. {formatPoints(reward.cost)} puan kullanıldı.</p>
             <button className="btn btn-primary btn-block" style={{ marginTop: 18 }} onClick={onClose}>
               Tamam
@@ -74,7 +74,9 @@ export default function RewardSheet({ reward, open, onClose }) {
           </div>
         ) : ticket ? (
           <div className="redeem-box">
-            <ProductImage product={reward.product} size={72} />
+            <span className="ring-photo">
+              <ProductImage product={reward.product} size={76} />
+            </span>
             <h2 className="detail-title" style={{ marginTop: 0 }}>{reward.name}</h2>
             {left > 0 ? (
               <>
@@ -103,11 +105,14 @@ export default function RewardSheet({ reward, open, onClose }) {
           </div>
         ) : (
           <>
-            <div className="detail-photo">
-              <ProductImage product={reward.product} size={210} eager />
+            <div className="detail-hero" style={{ marginTop: -4 }}>
+              <span className="ring-photo">
+                <ProductImage product={reward.product} size={210} eager />
+              </span>
             </div>
-            <p className="eyebrow" style={{ marginTop: 18 }}>Ödül</p>
-            <h2 className="detail-title" style={{ marginTop: 4 }}>{reward.name}</h2>
+            <div className="detail-body">
+            <span className="points-pill num">{formatPoints(reward.cost)} puan</span>
+            <h2 className="detail-title" style={{ marginTop: 10 }}>{reward.name}</h2>
             {reward.product?.ingredients && <p className="muted" style={{ marginTop: 6, fontSize: 14.5 }}>{reward.product.ingredients}</p>}
             <div className="cost-row">
               <div>
@@ -122,7 +127,7 @@ export default function RewardSheet({ reward, open, onClose }) {
               </div>
             </div>
             {enough ? (
-              <button className="btn btn-primary btn-block" onClick={activate}>
+              <button className="btn btn-primary btn-block btn-caps" onClick={activate}>
                 Ödülü kullan
               </button>
             ) : (
@@ -135,6 +140,7 @@ export default function RewardSheet({ reward, open, onClose }) {
                 </button>
               </>
             )}
+            </div>
           </>
         ))}
     </Sheet>

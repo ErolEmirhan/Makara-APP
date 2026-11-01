@@ -2,13 +2,14 @@ import Icon from './Icon';
 import { haptic } from '../lib/format';
 
 const TABS = [
-  { key: 'home', label: 'Ana Sayfa', icon: 'home' },
-  { key: 'menu', label: 'Menü', icon: 'menu' },
+  { key: 'home', label: 'Ana Sayfa', icon: 'starFill', iconIdle: 'star' },
+  { key: 'menu', label: 'Menü', icon: 'cup' },
   null,
-  { key: 'rewards', label: 'Ödüller', icon: 'gift' },
-  { key: 'profile', label: 'Hesabım', icon: 'person' },
+  { key: 'club', label: 'Ödüller', icon: 'gift' },
+  { key: 'more', label: 'Diğer', icon: 'more' },
 ];
 
+/** Starbucks düzeni: ortada büyük, yükseltilmiş QR butonu. */
 export default function TabBar({ active, onChange, onCode }) {
   return (
     <nav className="tabbar" aria-label="Ana menü">
@@ -23,23 +24,20 @@ export default function TabBar({ active, onChange, onCode }) {
             }}
             aria-current={active === t.key ? 'page' : undefined}
           >
-            <Icon name={t.icon} size={24} stroke={active === t.key ? 2.1 : 1.8} />
+            <Icon name={active === t.key || !t.iconIdle ? t.icon : t.iconIdle} size={27} stroke={1.7} />
             {t.label}
           </button>
         ) : (
           <button
             key="code"
-            className="tab-code"
+            className="tab-qr"
             onClick={() => {
               haptic(10);
               onCode();
             }}
-            aria-label="Üyelik kodumu göster"
+            aria-label="Kodumu göster"
           >
-            <span>
-              <Icon name="qr" size={24} stroke={2} />
-            </span>
-            <span>Kodum</span>
+            <Icon name="qr" size={32} stroke={1.9} />
           </button>
         ),
       )}

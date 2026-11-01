@@ -8,15 +8,19 @@ menü, fiyatlar, içerikler ve ürün fotoğrafları POS veritabanından gelir.
 
 **Müşteri uygulaması** (telefon, PWA — "Ana Ekrana Ekle" ile uygulama gibi açılır)
 
+Düzen Starbucks ve McDonald's Türkiye uygulamalarının alışılmış yapısını izler (pembe-beyaz):
+
 - Üyelik: ad, telefon, e-posta, şifre, doğum günü · üye olana 250 puan hediye
-- **Ana Sayfa**: puan kartı, sıradaki ödüle ilerleme, kampanyalar, ödüller, menü kategorileri, son hareketler
-- **Menü**: gerçek kategoriler ve ürünler; arama, fiyat, kalori, içindekiler, alerjenler
-- **Kodum**: kasada okutulan QR + 8 haneli üye kodu
-- **Ödüller**: puan seviyelerine göre gruplanmış ürünler; "Ödülü kullan" → 10 dakika geçerli,
-  tek kullanımlık QR
+- **Ana Sayfa**: pembe başlıkta puan bakiyesi, sıradaki ödülün fotoğraflı ilerleme halkası, seviye rozeti;
+  üyelik kartı ("Kodumu göster"), "Senin İçin" kampanya kartları, ödül rafı
+- **Menü**: fotoğraflı kategori ızgarası → kategori sayfası → ürün detayı (fiyat, kalori, içindekiler,
+  alerjenler, kazanılacak puan); arama ve Favorilerim
+- **Ortadaki QR butonu**: kasada okutulan üyelik kodu
+- **Ödüller**: QR kartı, degrade halkalı ödül kartları (puan seviyelerine göre "Hepsini gör"), Fırsatlar;
+  "Ödülü kullan" → 10 dakika geçerli, tek kullanımlık QR
+- **Diğer**: Hesabım, puan geçmişi, seviye ve kazanım, şubeler (yol tarifi), hakkımızda
 - **Kampanyalar**: Çarşamba 2x puan, hafta içi 08–11 1,5x puan, doğum günü hediyesi (kasada otomatik uygulanır)
 - **Seviyeler**: Pembe → Gül (+%10) → Elmas (+%20)
-- Kasadan puan yüklendiği anda telefonda onay ekranı
 
 **Kasa paneli** — aynı uygulamada `#kasa` adresi (tablet / kasa bilgisayarı)
 

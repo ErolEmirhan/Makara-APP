@@ -1,23 +1,27 @@
 import Sheet from '../components/Sheet';
 import QRCode from '../components/QRCode';
+import { Watermark } from '../components/Brand';
 import { useAppData } from '../data/AppData';
 import { tierFor } from '../config/loyalty';
 import { formatMemberCode, memberQrPayload } from '../data/codes';
 import { formatPoints } from '../lib/format';
 
-/** Kasada okutulan üyelik kodu. */
+/** Kasada okutulan üyelik kodu (McDonald's MyM QR kartı düzeni). */
 export default function MemberCode({ open, onClose }) {
   const { member } = useAppData();
   if (!member) return null;
   const { current } = tierFor(member.lifetimePoints);
   return (
-    <Sheet open={open} onClose={onClose} title="Üyelik kodun">
+    <Sheet open={open} onClose={onClose} title="Kodum">
       <div className="code-screen">
-        <p className="muted" style={{ fontSize: 15 }}>Ödeme yaparken bu kodu kasada okut.</p>
-        <div className="qr-frame">
-          <QRCode value={memberQrPayload(member.memberCode)} size={250} />
-        </div>
-        <p className="member-code num">{formatMemberCode(member.memberCode)}</p>
+        <section className="qr-block">
+          <Watermark />
+          <div className="qr-card">
+            <QRCode value={memberQrPayload(member.memberCode)} size={230} />
+            <span className="code num">{formatMemberCode(member.memberCode)}</span>
+          </div>
+          <p>Kodunu kasada okut, puanlarını topla!</p>
+        </section>
         <div className="code-facts">
           <div>
             <span className="eyebrow">Puanın</span>

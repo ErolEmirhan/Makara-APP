@@ -11,35 +11,37 @@ import CompleteProfile from './CompleteProfile';
 import Home from './Home';
 import Menu from './Menu';
 import ProductSheet from './ProductSheet';
-import Rewards from './Rewards';
+import Club from './Club';
+import AllRewardsSheet from './AllRewardsSheet';
 import RewardSheet from './RewardSheet';
-import Profile from './Profile';
+import More from './More';
+import EditProfileSheet from './EditProfileSheet';
+import TierSheet from './TierSheet';
+import BranchesSheet from './BranchesSheet';
 import MemberCode from './MemberCode';
 import EarnSheet from './EarnSheet';
-import OffersSheet from './OffersSheet';
 import SimulateSheet from './SimulateSheet';
 
 /** Kapanış animasyonu sırasında içerik kaybolmasın diye son değeri tutan sayfa durumu. */
 function useSheet() {
   const [state, setState] = useState({ open: false, value: null });
-  return {
-    open: state.open,
-    value: state.value,
-    show: useCallback((value = null) => setState({ open: true, value }), []),
-    hide: useCallback(() => setState((s) => ({ ...s, open: false })), []),
-  };
+  const show = useCallback((value = null) => setState({ open: true, value }), []);
+  const hide = useCallback(() => setState((s) => ({ ...s, open: false })), []);
+  return { open: state.open, value: state.value, show, hide };
 }
 
 function MainApp() {
   const { member, activity } = useAppData();
   const toast = useToast();
   const [tab, setTab] = useState('home');
-  const [menuCategory, setMenuCategory] = useState(null);
   const code = useSheet();
   const reward = useSheet();
+  const allRewards = useSheet();
   const product = useSheet();
   const history = useSheet();
-  const offers = useSheet();
+  const tier = useSheet();
+  const branches = useSheet();
+  const editProfile = useSheet();
   const simulate = useSheet();
   const [earned, setEarned] = useState(null);
   const lastPoints = useRef(member.points);
@@ -58,8 +60,7 @@ function MainApp() {
     }
   }, [member.points]);
 
-  const goTab = useCallback((next, categoryId = null) => {
-    if (next === 'menu') setMenuCategory(categoryId);
+  const goTab = useCallback((next) => {
     setTab(next);
     window.scrollTo({ top: 0 });
   }, []);
@@ -67,9 +68,10 @@ function MainApp() {
   const openReward = useCallback(
     (r) => {
       product.hide();
+      allRewards.hide();
       reward.show(r);
     },
-    [product, reward],
+    [product.hide, allRewards.hide, reward.show],
   );
 
   return (
@@ -78,26 +80,44 @@ function MainApp() {
         <Home
           onOpenCode={() => code.show()}
           onOpenReward={openReward}
-          onOpenProduct={product.show}
-          onOpenActivity={() => history.show()}
-          onOpenOffers={() => offers.show()}
+          onOpenAllRewards={() => allRewards.show()}
+          onOpenTier={() => tier.show()}
+          onOpenBranches={() => branches.show()}
           onGoTab={goTab}
           onSimulate={() => simulate.show()}
         />
       )}
-      {tab === 'menu' && <Menu initialCategory={menuCategory} onOpenProduct={product.show} />}
-      {tab === 'rewards' && <Rewards onOpenReward={openReward} />}
-      {tab === 'profile' && <Profile onOpenActivity={() => history.show()} onSimulate={() => simulate.show()} />}
+      {tab === 'menu' && <Menu onOpenProduct={product.show} />}
+      {tab === 'club' && (
+        <Club
+          onOpenReward={openReward}
+          onOpenAllRewards={() => allRewards.show()}
+          onOpenHistory={() => history.show()}
+          onOpenHow={() => tier.show()}
+        />
+      )}
+      {tab === 'more' && (
+        <More
+          onEditProfile={() => editProfile.show()}
+          onOpenHistory={() => history.show()}
+          onOpenTier={() => tier.show()}
+          onOpenBranches={() => branches.show()}
+          onSimulate={() => simulate.show()}
+        />
+      )}
 
       <TabBar active={tab} onChange={goTab} onCode={() => code.show()} />
 
       <MemberCode open={code.open} onClose={code.hide} />
       <RewardSheet reward={reward.value} open={reward.open} onClose={reward.hide} />
+      <AllRewardsSheet open={allRewards.open} onClose={allRewards.hide} onOpenReward={openReward} />
       <ProductSheet product={product.value} open={product.open} onClose={product.hide} onOpenReward={openReward} />
-      <OffersSheet open={offers.open} onClose={offers.hide} />
       <Sheet open={history.open} onClose={history.hide} title="Puan geçmişi" tall>
         <ActivityList items={activity} grouped />
       </Sheet>
+      <TierSheet open={tier.open} onClose={tier.hide} />
+      <BranchesSheet open={branches.open} onClose={branches.hide} />
+      <EditProfileSheet open={editProfile.open} onClose={editProfile.hide} />
       <SimulateSheet open={simulate.open} onClose={simulate.hide} />
       <EarnSheet data={earned} onClose={() => setEarned(null)} />
     </div>

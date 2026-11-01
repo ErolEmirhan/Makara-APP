@@ -54,8 +54,8 @@ npm run sync:catalog        # önce Havzan (makara-16344), olmazsa Suriçi verit
 npm run sync:catalog -- --project makarasurici
 ```
 
-Betik kategorileri ve ürünleri okur, ürün fotoğraflarını (R2 adresi veya veritabanındaki
-base64) indirip 480 px WebP'ye küçültür. Ardından uygulamayı yeniden yayınlayın.
+Betik kategorileri ve ürünleri okur, ürün fotoğraflarını (kasanın da kullandığı `image_base64` alanından; yoksa
+görsel adresinden) alıp 480 px WebP'ye küçültür. Ardından uygulamayı yeniden yayınlayın.
 Fotoğrafı olmayan ürünlerde kategoriye uygun sade bir ikon gösterilir.
 
 ## Gerçek kullanıma alma (Firebase)

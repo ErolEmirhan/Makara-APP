@@ -67,9 +67,9 @@ function StaffLogin({ backend, mode, notice }) {
         <button className="btn btn-primary btn-block" style={{ marginTop: 18 }} disabled={busy}>
           {busy ? <span className="spinner" /> : 'Giriş yap'}
         </button>
-        <a className="link-btn" href="#/" style={{ display: 'block', marginTop: 16, textAlign: 'center', textDecoration: 'none' }}>
+        <button type="button" className="link-btn" onClick={() => (window.location.hash = '')} style={{ display: 'block', margin: '16px auto 0' }}>
           Müşteri uygulamasına dön
-        </a>
+        </button>
       </form>
     </div>
   );
@@ -261,6 +261,9 @@ export default function KasaApp() {
         </div>
         <div className="kasa-staff">
           <span className="muted">{staff.name || 'Kasa'}</span>
+          <button className="icon-btn" onClick={() => (window.location.hash = '')} aria-label="Müşteri uygulamasına dön">
+            <Icon name="home" size={17} stroke={2} />
+          </button>
           <button className="icon-btn" onClick={() => backend.staffSignOut()} aria-label="Çıkış">
             <Icon name="logout" size={17} stroke={2} />
           </button>

@@ -75,7 +75,6 @@ export default function Profile({ onOpenActivity, onSimulate }) {
   const { current, next, progress } = tierFor(member.lifetimePoints);
 
   const resetDemo = () => {
-    if (!window.confirm('Demo verileri silinsin mi?')) return;
     try {
       localStorage.removeItem('makara-club-demo-v1');
     } catch {
@@ -147,7 +146,7 @@ export default function Profile({ onOpenActivity, onSimulate }) {
           <p className="list-title">Demo araçları</p>
           <div className="list-group">
             <Row icon="bolt" color="#f59e0b" title="Alışveriş simüle et" subtitle="Kasada puan kazanmayı dene" onClick={onSimulate} />
-            <Row icon="qr" color="#0ea5e9" title="Kasa panelini aç" subtitle="Yeni sekmede · demo şifre 1234" href={`${window.location.pathname}#/kasa`} />
+            <Row icon="qr" color="#0ea5e9" title="Kasa panelini aç" subtitle="Demo şifre 1234" onClick={() => (window.location.hash = 'kasa')} />
             <Row icon="refresh" color="#6e6e73" title="Demo verisini sıfırla" onClick={resetDemo} />
           </div>
         </>

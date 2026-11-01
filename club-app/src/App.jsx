@@ -17,7 +17,8 @@ function useHashRoute() {
 
 export default function App() {
   const hash = useHashRoute();
-  const isKasa = hash.startsWith('#/kasa');
+  // #kasa (önerilen) ve eski #/kasa biçimi
+  const isKasa = hash === '#kasa' || hash.startsWith('#/kasa');
   return (
     <AppDataProvider>
       {isKasa ? (

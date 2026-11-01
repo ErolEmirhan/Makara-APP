@@ -19,7 +19,7 @@ Pembe-beyaz, Apple tarzı arayüz; tatlılar tarayıcıda gerçek zamanlı 3D ol
 - **Seviyeler**: Pembe → Gül (+%10) → Elmas (+%20)
 - Kasadan puan yüklendiği anda telefonda dönen 3D jeton + konfeti kutlaması
 
-**Kasa paneli** — aynı uygulamada `#/kasa` adresi (tablet / kasa bilgisayarı)
+**Kasa paneli** — aynı uygulamada `#kasa` adresi (tablet / kasa bilgisayarı)
 
 - Kamerayla QR okutma (iOS dahil), USB/Bluetooth el tipi okuyucu desteği, kod veya telefonla arama
 - Tutarı tuş takımıyla gir → kampanya ve seviye bonusu hesaplanmış puanı yükle
@@ -58,7 +58,7 @@ müşteri puanları korunamaz.
    ```
 6. **Kasa personeli**: Authentication → Users → personel için e-posta/şifre ile kullanıcı ekleyin,
    UID'sini kopyalayın. Firestore'da `staff/<UID>` belgesi oluşturun: `{ name: "Havzan Kasa" }`.
-   Yalnızca bu belgesi olan hesaplar `#/kasa` paneline girip puan yükleyebilir.
+   Yalnızca bu belgesi olan hesaplar `#kasa` paneline girip puan yükleyebilir.
 
 ### Güvenlik modeli (`firestore.rules`)
 

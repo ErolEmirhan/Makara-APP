@@ -41,10 +41,10 @@ export default function SimulateSheet({ open, onClose }) {
           <input id="sim-amount" inputMode="decimal" value={amount} onChange={(e) => setAmount(Number(e.target.value.replace(',', '.')) || 0)} />
         </div>
       </div>
-      <div className="detail-cost">
+      <div className="cost-row">
         <div>
           <p className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Kazanılacak</p>
-          <span className="num" style={{ color: 'var(--pink-600)' }}>+{formatPoints(earn.total)}</span>
+          <span className="num" style={{ color: 'var(--brand)' }}>+{formatPoints(earn.total)}</span>
         </div>
         <div style={{ textAlign: 'right', fontSize: 13 }} className="muted">
           {earn.multiplier > 1 && <div>{earn.multiplier}x kampanya</div>}

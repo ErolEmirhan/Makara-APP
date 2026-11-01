@@ -2,8 +2,15 @@ const nf = new Intl.NumberFormat('tr-TR');
 
 export const formatPoints = (n) => nf.format(Math.round(Number(n) || 0));
 
-export const formatTL = (n) =>
-  new Intl.NumberFormat('tr-TR', { style: 'currency', currency: 'TRY', maximumFractionDigits: 2 }).format(Number(n) || 0);
+export const formatTL = (n) => {
+  const v = Number(n) || 0;
+  return new Intl.NumberFormat('tr-TR', {
+    style: 'currency',
+    currency: 'TRY',
+    minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
+    maximumFractionDigits: 2,
+  }).format(v);
+};
 
 export function greeting(date = new Date()) {
   const h = date.getHours();

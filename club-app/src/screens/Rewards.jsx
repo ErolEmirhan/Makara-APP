@@ -1,92 +1,53 @@
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import SnapshotImage from '../components/SnapshotImage';
 import Icon from '../components/Icon';
+import ProductImage from '../components/ProductImage';
 import { useAppData } from '../data/AppData';
-import { REWARDS } from '../config/loyalty';
+import { useCatalog } from '../data/catalog';
 import { formatPoints } from '../lib/format';
 
-const CATEGORIES = ['Tümü', ...Array.from(new Set(REWARDS.map((r) => r.category)))];
-
+/** McDonald's tarzı: ödüller puan seviyelerine göre gruplanır. */
 export default function Rewards({ onOpenReward }) {
   const { member } = useAppData();
-  const [cat, setCat] = useState('Tümü');
-  const featured = REWARDS.find((r) => r.featured);
-  const list = REWARDS.filter((r) => (cat === 'Tümü' ? r !== featured : r.category === cat)).sort((a, b) => a.cost - b.cost);
+  const { rewards } = useCatalog();
+  const levels = [...new Set(rewards.map((r) => r.cost))].sort((a, b) => a - b);
 
   return (
     <div className="screen">
       <div className="topbar" style={{ justifyContent: 'flex-end' }}>
-        <span className="balance-pill num">
+        <span className="balance num">
           <Icon name="star" size={16} stroke={2.2} />
-          {formatPoints(member.points)}
+          {formatPoints(member.points)} puan
         </span>
       </div>
-      <h1 className="screen-title">Ödüller</h1>
-      <p className="screen-subtitle">Puanlarını en sevdiğin lezzetlere dönüştür.</p>
+      <h1 className="page-title">Ödüller</h1>
+      <p className="page-sub">Puanlarını menüdeki ürünlere dönüştür. Ödülü seç, kodunu kasada okut.</p>
 
-      <div className="chips" role="tablist">
-        {CATEGORIES.map((c) => (
-          <button key={c} role="tab" aria-selected={cat === c} className={`chip ${cat === c ? 'is-active' : ''}`} onClick={() => setCat(c)}>
-            {c}
-          </button>
-        ))}
-      </div>
-
-      <AnimatePresence mode="popLayout">
-        {cat === 'Tümü' && featured && (
-          <motion.button
-            key="featured"
-            className="featured pressable"
-            style={{ width: '100%', textAlign: 'left' }}
-            onClick={() => onOpenReward(featured)}
-            initial={{ opacity: 0, scale: 0.96 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.96 }}
-          >
-            <div className="featured-copy">
-              <p className="eyebrow">İmza lezzet</p>
-              <h3>{featured.name}</h3>
-              <p>{featured.blurb}</p>
-              <span className="cost num">{formatPoints(featured.cost)} puan</span>
-            </div>
-            <SnapshotImage model={featured.model} size={460} alt={featured.name} options={{ elevation: 30 }} />
-          </motion.button>
-        )}
-      </AnimatePresence>
-
-      <motion.div className="grid" layout>
-        <AnimatePresence mode="popLayout">
-          {list.map((r) => {
-            const pct = Math.min(1, member.points / r.cost);
-            const ok = pct >= 1;
-            return (
-              <motion.button
-                layout
-                key={r.id}
-                className="reward-card pressable"
-                style={{ textAlign: 'left' }}
-                onClick={() => onOpenReward(r)}
-                initial={{ opacity: 0, y: 12 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.94 }}
-                transition={{ type: 'spring', stiffness: 380, damping: 34 }}
-              >
-                <SnapshotImage model={r.model} variant={r.variant} alt={r.name} />
-                <span className="category">{r.category}</span>
-                <strong>{r.name}</strong>
-                <span className={`cost num ${ok ? '' : 'is-locked'}`}>
-                  {ok ? <Icon name="check" size={14} stroke={2.6} /> : <Icon name="lock" size={13} stroke={2.2} />}
-                  {formatPoints(r.cost)} puan
+      {levels.map((cost) => {
+        const ok = member.points >= cost;
+        return (
+          <section key={cost} className="level">
+            <div className="level-head">
+              <h2 className="num">{formatPoints(cost)} puan</h2>
+              {ok ? (
+                <span className="badge is-soft">
+                  <Icon name="check" size={13} stroke={2.6} /> Alınabilir
                 </span>
-                <div className="mini-bar">
-                  <i style={{ width: `${pct * 100}%` }} />
-                </div>
-              </motion.button>
-            );
-          })}
-        </AnimatePresence>
-      </motion.div>
+              ) : (
+                <span className="badge is-gray num">{formatPoints(cost - member.points)} puan kaldı</span>
+              )}
+            </div>
+            <div className="reward-grid">
+              {rewards
+                .filter((r) => r.cost === cost)
+                .map((r) => (
+                  <button key={r.id} className={`reward-card ${ok ? '' : 'is-locked'}`} onClick={() => onOpenReward(r)}>
+                    <ProductImage product={r.product} size={104} />
+                    <strong>{r.name}</strong>
+                  </button>
+                ))}
+            </div>
+          </section>
+        );
+      })}
     </div>
   );
 }

@@ -21,12 +21,16 @@ export default function CompleteProfile() {
   };
   return (
     <div className="app-shell">
-      <main className="intro" style={{ justifyContent: 'center' }}>
-        <img className="wordmark" style={{ height: 44, margin: '0 auto 26px' }} src={`${import.meta.env.BASE_URL}wordmark-pink.png`} alt="MAKARA" />
-        <h1 className="hero-title" style={{ fontSize: 32, textAlign: 'center' }}>Son bir adım</h1>
-        <p className="hero-sub" style={{ textAlign: 'center', marginBottom: 24 }}>Kasada seni bulabilmemiz için birkaç bilgi.</p>
+      <main className="welcome" style={{ justifyContent: 'center' }}>
+        <div className="welcome-top">
+          <img src={`${import.meta.env.BASE_URL}wordmark-pink.png`} alt="MAKARA" />
+        </div>
+        <div className="welcome-copy" style={{ marginBottom: 22 }}>
+          <h1>Son bir adım</h1>
+          <p>Kasada seni bulabilmemiz için birkaç bilgi.</p>
+        </div>
         <form onSubmit={submit}>
-          <div className="field-group" style={{ background: '#fff' }}>
+          <div className="field-group">
             <div className="field">
               <label htmlFor="c-name">Ad Soyad</label>
               <input id="c-name" value={form.name} onChange={set('name')} autoComplete="name" />

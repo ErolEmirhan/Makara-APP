@@ -11,11 +11,9 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    chunkSizeWarningLimit: 900,
     rollupOptions: {
       output: {
         manualChunks: {
-          three: ['three'],
           motion: ['framer-motion'],
         },
       },

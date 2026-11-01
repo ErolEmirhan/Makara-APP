@@ -61,7 +61,7 @@ export default function AuthSheet({ mode, onModeChange, onClose }) {
   };
 
   return (
-    <Sheet open={Boolean(mode)} onClose={onClose} title={isSignup ? 'MAKARA Club’a katıl' : 'Tekrar hoş geldin'}>
+    <Sheet open={Boolean(mode)} onClose={onClose} title={isSignup ? 'Üye ol' : 'Giriş yap'}>
       <div className="segmented" role="tablist">
         <motion.span
           className="segmented-thumb"
@@ -105,12 +105,12 @@ export default function AuthSheet({ mode, onModeChange, onClose }) {
           />
           {isSignup && <Field id="birthday" label="Doğum günü" type="date" value={form.birthday} onChange={set('birthday')} />}
         </div>
-        {isSignup && <p className="form-hint">Doğum gününü eklersen o gün sana özel bir sürprizimiz olacak.</p>}
+        {isSignup && <p className="form-hint">Doğum günü isteğe bağlıdır; o gün sana özel bir hediyemiz olur.</p>}
         {error && <p className="form-error" role="alert">{error}</p>}
         {info && <p className="form-hint">{info}</p>}
 
         <button className="btn btn-primary btn-block" style={{ marginTop: 20 }} disabled={app.busy}>
-          {app.busy ? <span className="spinner" /> : isSignup ? 'Üyeliği Başlat' : 'Giriş Yap'}
+          {app.busy ? <span className="spinner" /> : isSignup ? 'Üye ol' : 'Giriş yap'}
         </button>
       </form>
 

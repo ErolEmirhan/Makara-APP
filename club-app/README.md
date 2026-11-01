@@ -1,23 +1,22 @@
 # MAKARA Club — müşteri sadakat uygulaması
 
-McDonald's / Starbucks uygulamalarındaki gibi: müşteri kasada QR kartını okutur, harcadığı
-her ₺ için puan kazanır, puanlarını makara, kahve, tatlı gibi ödüllere çevirir.
-Pembe-beyaz, Apple tarzı arayüz; tatlılar tarayıcıda gerçek zamanlı 3D olarak (three.js)
-çizilir, dışarıdan model dosyası gerekmez.
+McDonald's / Starbucks uygulamalarındaki gibi: müşteri kasada kodunu okutur, harcadığı
+her ₺ için puan kazanır, puanlarını menüdeki ürünlere çevirir. Sade, ürün odaklı arayüz;
+menü, fiyatlar, içerikler ve ürün fotoğrafları POS veritabanından gelir.
 
 ## Neler var
 
 **Müşteri uygulaması** (telefon, PWA — "Ana Ekrana Ekle" ile uygulama gibi açılır)
 
-- Sinematik giriş: parmakla çevrilebilen 3D pembe glazürlü makara, parıltılar
 - Üyelik: ad, telefon, e-posta, şifre, doğum günü · üye olana 250 puan hediye
-- Ana sayfa: sayarak artan puan, sıradaki ödüle ilerleme çubuğu, kampanyalar, ödül rafı, son hareketler
-- **Kartım**: Apple Wallet tarzı eğilen kart; QR + 8 haneli üye kodu
-- **Ödüller**: kategori filtreli 3D ödül kataloğu, detayda çevrilebilir model,
-  "Ödülü Kullan" → 10 dakika geçerli, tek kullanımlık QR
-- **Kampanyalar**: Çarşamba 2x puan, hafta içi 08–11 1.5x puan, doğum günü hediyesi (kasada otomatik uygulanır)
+- **Ana Sayfa**: puan kartı, sıradaki ödüle ilerleme, kampanyalar, ödüller, menü kategorileri, son hareketler
+- **Menü**: gerçek kategoriler ve ürünler; arama, fiyat, kalori, içindekiler, alerjenler
+- **Kodum**: kasada okutulan QR + 8 haneli üye kodu
+- **Ödüller**: puan seviyelerine göre gruplanmış ürünler; "Ödülü kullan" → 10 dakika geçerli,
+  tek kullanımlık QR
+- **Kampanyalar**: Çarşamba 2x puan, hafta içi 08–11 1,5x puan, doğum günü hediyesi (kasada otomatik uygulanır)
 - **Seviyeler**: Pembe → Gül (+%10) → Elmas (+%20)
-- Kasadan puan yüklendiği anda telefonda dönen 3D jeton + konfeti kutlaması
+- Kasadan puan yüklendiği anda telefonda onay ekranı
 
 **Kasa paneli** — aynı uygulamada `#kasa` adresi (tablet / kasa bilgisayarı)
 
@@ -35,9 +34,25 @@ npm run dev          # http://localhost:5175
 ```
 
 Firebase ayarı girilmediği sürece uygulama **demo modunda** çalışır: veriler yalnızca o
-tarayıcıda saklanır. Üye ol → ana sayfadaki "Simüle et" ile alışveriş yap ya da
+tarayıcıda saklanır. Üye ol → ana sayfadaki "Alışveriş yap" ile puan kazan ya da
 Hesabım → "Kasa panelini aç" (şifre `1234`) ile ikinci sekmede gerçek kasa akışını dene;
 iki sekme anlık senkronlanır.
+
+## Menü ve ürün fotoğrafları
+
+Menü, uygulamaya gömülü bir katalogdan gelir (`public/catalog/`). Müşteri telefonları POS
+veritabanına hiç bağlanmaz; böylece Firestore okuma kotanız tükenmez ve menü hızlı açılır.
+Menü, fiyat veya fotoğraf değiştiğinde:
+
+```bash
+cd club-app
+npm run sync:catalog        # önce Havzan (makara-16344), olmazsa Suriçi veritabanını okur
+npm run sync:catalog -- --project makarasurici
+```
+
+Betik kategorileri ve ürünleri okur, ürün fotoğraflarını (R2 adresi veya veritabanındaki
+base64) indirip 480 px WebP'ye küçültür. Ardından uygulamayı yeniden yayınlayın.
+Fotoğrafı olmayan ürünlerde kategoriye uygun sade bir ikon gösterilir.
 
 ## Gerçek kullanıma alma (Firebase)
 
@@ -87,7 +102,7 @@ Tüm iş kuralları tek dosyada: [`src/config/loyalty.js`](src/config/loyalty.js
 - `PROGRAM.pointsPerTL` — 1 ₺ başına puan (varsayılan 1)
 - `PROGRAM.welcomeBonus` — hoş geldin puanı (değiştirirseniz `firestore.rules` içindeki `welcomeBonus()` ile eşleyin)
 - `TIERS` — seviye eşikleri ve bonusları
-- `REWARDS` — ödüller, puan bedelleri ve 3D modeli (`roll`, `cup`, `macaron`, `croissant`, `prag`, `gift`)
+- `REWARDS` — ödüller ve puan bedelleri; `match` ile menüdeki ürüne bağlanır (ad, fotoğraf, içerik oradan gelir)
 - `OFFERS` — kampanyalar; `multiplier` + `days` / `hours` olanlar kasada otomatik uygulanır
 - `BRANCHES` — şubeler ve harita bağlantıları
 
@@ -98,12 +113,12 @@ Tüm iş kuralları tek dosyada: [`src/config/loyalty.js`](src/config/loyalty.js
 ```
 club-app/
 ├── firestore.rules          Firestore güvenlik kuralları
+├── scripts/sync-catalog.mjs menüyü POS veritabanından çeker
 ├── src/
 │   ├── config/              loyalty.js (kurallar), firebase.js (ortam değişkenleri)
-│   ├── data/                demo (localStorage) ve Firebase arka uçları, QR/kod yardımcıları
-│   ├── three/               prosedürel 3D modeller, stüdyo ışığı, canlı sahne, ödül fotoğrafları
+│   ├── data/                katalog, demo (localStorage) ve Firebase arka uçları, QR/kod yardımcıları
 │   ├── screens/             müşteri ekranları
 │   ├── kasa/                kasa paneli ve QR tarayıcı
-│   └── components/          tab bar, alt sayfa, QR, sayaç, kutlama…
-└── public/                  logo, ikonlar, manifest, service worker
+│   └── components/          tab bar, alt sayfa, QR, ürün görseli…
+└── public/                  logo, ikonlar, manifest, service worker, catalog/ (menü + fotoğraflar)
 ```

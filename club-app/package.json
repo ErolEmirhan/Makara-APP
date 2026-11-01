@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vite build",
     "build:hosting": "vite build --outDir ../public/club --emptyOutDir",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "sync:catalog": "node scripts/sync-catalog.mjs"
   },
   "dependencies": {
     "firebase": "10.14.1",
@@ -16,11 +17,11 @@
     "jsqr": "1.4.0",
     "qrcode": "1.5.4",
     "react": "18.3.1",
-    "react-dom": "18.3.1",
-    "three": "0.170.0"
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "4.3.4",
+    "sharp": "^0.33.5",
     "vite": "5.4.21"
   }
 }

@@ -3,8 +3,9 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { useAppData } from '../data/AppData';
 import Scanner from './Scanner';
 import Icon from '../components/Icon';
-import SnapshotImage from '../components/SnapshotImage';
-import { BRANCHES, calculateEarn, rewardById, tierFor } from '../config/loyalty';
+import ProductImage from '../components/ProductImage';
+import { useCatalog } from '../data/catalog';
+import { BRANCHES, calculateEarn, tierFor } from '../config/loyalty';
 import { formatMemberCode, formatPhone, parseQr } from '../data/codes';
 import { formatPoints, formatTL, initials, timeOf } from '../lib/format';
 
@@ -108,6 +109,7 @@ function useCountdown(until) {
 
 export default function KasaApp() {
   const { backend, mode } = useAppData();
+  const catalog = useCatalog();
   const [staff, setStaff] = useState(undefined);
   const [notice, setNotice] = useState('');
   const [branchId, setBranchId] = useState(readBranch);
@@ -179,7 +181,7 @@ export default function KasaApp() {
       if (!found) throw new Error('Bu koda ait üye bulunamadı.');
       setMember(found);
       if (parsed.kind === 'reward') {
-        const reward = rewardById(parsed.rewardId);
+        const reward = catalog.rewardById(parsed.rewardId);
         if (!reward) throw new Error('Ödül tanınmadı.');
         setTicket({ ...parsed, reward });
         setStep('reward');
@@ -328,9 +330,11 @@ export default function KasaApp() {
           <AnimatePresence mode="wait">
             {step === 'idle' && (
               <motion.div key="idle" className="kasa-empty" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-                <SnapshotImage model="roll" />
+                <span className="kasa-empty-icon">
+                  <Icon name="qr" size={38} stroke={1.8} />
+                </span>
                 <h3>Müşterinin kartını okutun</h3>
-                <p className="muted">Uygulamadaki pembe QR butonu üyelik kartını açar. Ödül kodları da buradan onaylanır.</p>
+                <p className="muted">Müşteri uygulamada “Kodum” sekmesini açar. Ödül kodları da buradan onaylanır.</p>
               </motion.div>
             )}
 
@@ -380,12 +384,12 @@ export default function KasaApp() {
                 {step === 'reward' && ticket && (
                   <>
                     <div className="kasa-reward">
-                      <SnapshotImage model={ticket.reward.model} variant={ticket.reward.variant} />
+                      <ProductImage product={ticket.reward.product} size={150} />
                       <div>
                         <p className="eyebrow">Ödül kullanımı</p>
                         <h3>{ticket.reward.name}</h3>
-                        <p className="num" style={{ fontWeight: 750, color: 'var(--pink-600)' }}>{formatPoints(ticket.reward.cost)} puan</p>
-                        <p className={`offer-status ${left > 0 ? 'is-active' : ''}`}>
+                        <p className="num" style={{ fontWeight: 700, color: 'var(--brand)' }}>{formatPoints(ticket.reward.cost)} puan</p>
+                        <p className={`kasa-status ${left > 0 ? 'is-active' : ''}`}>
                           <Icon name="clock" size={15} stroke={2.2} />
                           {left > 0
                             ? `${String(Math.floor(left / 60000)).padStart(2, '0')}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')} geçerli`

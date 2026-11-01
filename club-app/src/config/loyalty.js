@@ -15,133 +15,80 @@ export const PROGRAM = {
   website: 'https://www.makara.network',
 };
 
-/** Seviyeler: son kazanılan toplam puana (lifetimePoints) göre. */
+/** Seviyeler: kazanılan toplam puana (lifetimePoints) göre. */
 export const TIERS = [
   {
     key: 'pembe',
     name: 'Pembe',
     min: 0,
     bonus: 0,
-    tint: ['#FFD3E6', '#FF8CC0'],
-    perks: ['Her 1 ₺ = 1 puan', 'Hoş geldin hediyesi', 'Doğum günü sürprizi'],
+    perks: ['Her 1 ₺ harcamaya 1 puan', 'Üyelikte 250 puan hediye', 'Doğum günü hediyesi'],
   },
   {
     key: 'gul',
     name: 'Gül',
     min: 5000,
     bonus: 0.1,
-    tint: ['#FF9CC8', '#E8338A'],
-    perks: ['Tüm alışverişlerde +%10 puan', 'Yeni lezzetlere erken erişim', 'Doğum günü makarası'],
+    perks: ['Tüm alışverişlerde +%10 puan', 'Yeni ürünlerden ilk sen haberdar ol', 'Doğum günü hediyesi'],
   },
   {
     key: 'elmas',
     name: 'Elmas',
     min: 15000,
     bonus: 0.2,
-    tint: ['#F5E6FF', '#B44CF0'],
-    perks: ['Tüm alışverişlerde +%20 puan', 'Ayda bir ücretsiz kahve', 'Özel etkinlik davetleri'],
+    perks: ['Tüm alışverişlerde +%20 puan', 'Özel kampanyalar', 'Doğum günü hediyesi'],
   },
 ];
 
 /**
- * Ödül kataloğu. `model` alanı 3D sahnedeki tatlıyı belirler:
- * roll · cup · macaron · croissant · prag · gift
+ * Ödüller menüdeki gerçek ürünlere bağlıdır: `match` içindeki ilk eşleşen ürünün
+ * adı, fotoğrafı ve içerik bilgisi kullanılır (katalog: public/catalog/catalog.json).
+ * `name` yalnızca ürün menüde bulunamazsa gösterilir. Puan bedelleri örnektir.
  */
 export const REWARDS = [
-  {
-    id: 'turk-kahvesi',
-    name: 'Türk Kahvesi',
-    cost: 900,
-    category: 'İçecek',
-    model: 'cup',
-    variant: 'turkish',
-    blurb: 'Geleneksel tadıyla, bol köpüklü.',
-  },
-  {
-    id: 'latte',
-    name: 'Latte',
-    cost: 1500,
-    category: 'İçecek',
-    model: 'cup',
-    variant: 'latte',
-    blurb: 'Espresso ve kadife gibi süt köpüğü.',
-  },
-  {
-    id: 'macaron',
-    name: 'Macaron',
-    cost: 1200,
-    category: 'Tatlı',
-    model: 'macaron',
-    blurb: 'Paris usulü, çıtır kabuk ve yumuşacık ganaj.',
-  },
-  {
-    id: 'sade-kruvasan',
-    name: 'Tereyağlı Kruvasan',
-    cost: 1600,
-    category: 'Fırın',
-    model: 'croissant',
-    blurb: 'Kat kat, çıtır ve tereyağlı.',
-  },
-  {
-    id: 'klasik-prag',
-    name: 'Klasik Prag',
-    cost: 2400,
-    category: 'Tatlı',
-    model: 'prag',
-    blurb: 'Çikolatalı, yumuşacık ve parlak ganajlı.',
-  },
-  {
-    id: 'lotuslu-makara',
-    name: 'Lotuslu Makara',
-    cost: 3000,
-    category: 'İmza',
-    model: 'roll',
-    featured: true,
-    blurb: 'İmza lezzetimiz: tarçınlı makara, lotus kreması.',
-  },
-  {
-    id: 'surpriz-kutu',
-    name: 'Sürpriz Kutu',
-    cost: 6000,
-    category: 'Özel',
-    model: 'gift',
-    blurb: 'Şefin seçtiği tatlılar, pembe kutusunda.',
-  },
+  { id: 'turk-kahvesi', name: 'Türk Kahvesi', cost: 1500, match: ['Türk Kahvesi'] },
+  { id: 'filtre-kahve', name: 'Filtre Kahve', cost: 1500, match: ['Filtre Kahve'] },
+  { id: 'americano', name: 'Americano', cost: 1500, match: ['Americano'] },
+  { id: 'latte', name: 'Latte', cost: 2000, match: ['Latte'] },
+  { id: 'sicak-cikolata', name: 'Sıcak Çikolata', cost: 2000, match: ['Sıcak Çikolata'] },
+  { id: 'milkshake', name: 'Çilekli Milkshake', cost: 2500, match: ['Çilekli Milkshake'] },
+  { id: 'kruvasan', name: 'Antep Fıstıklı Kruvasan', cost: 2500, match: ['Antep Fıstıklı Kruvasan'] },
+  { id: 'san-sebastian', name: 'San Sebastian', cost: 3500, match: ['San Sebastian'] },
+  { id: 'fransiz-pasta', name: 'Antep Fıstığı Fransız Pasta', cost: 3500, match: ['Antep Fıstığı Fransız Pasta'] },
+  { id: 'makara', name: 'Çilekli Makara', cost: 4000, match: ['Çilekli Makara', 'Lotuslu Makara'], featured: true },
 ];
 
 /**
- * Kampanyalar. `multiplier` olanlar kasada puan hesaplarken otomatik uygulanır.
+ * Kampanyalar. `multiplier` olanlar kasada puan hesaplanırken otomatik uygulanır.
  * days: 0=Pazar … 6=Cumartesi · hours: [başlangıç, bitiş) 24 saat
+ * `match`: kartta fotoğrafı gösterilecek ürün.
  */
 export const OFFERS = [
   {
     id: 'makara-carsamba',
     title: 'Makara Çarşambası',
     subtitle: 'Her çarşamba tüm alışverişlerde 2 kat puan.',
-    badge: '2x PUAN',
+    badge: '2x puan',
     multiplier: 2,
     days: [3],
-    model: 'roll',
-    tone: 'rose',
+    match: ['Çilekli Makara', 'Antep Fıstıklı Makara'],
   },
   {
     id: 'sabah-kahvesi',
     title: 'Günaydın Saatleri',
-    subtitle: 'Hafta içi 08:00 – 11:00 arası 1.5 kat puan.',
-    badge: '1.5x PUAN',
+    subtitle: 'Hafta içi 08:00 – 11:00 arası 1,5 kat puan.',
+    badge: '1,5x puan',
     multiplier: 1.5,
     days: [1, 2, 3, 4, 5],
     hours: [8, 11],
-    model: 'cup',
-    tone: 'cream',
+    match: ['Latte', 'Filtre Kahve'],
   },
   {
     id: 'dogum-gunu',
-    title: 'Doğum Günün Kutlu Olsun',
-    subtitle: 'Doğum gününde kasada kartını göster, makaran bizden.',
-    badge: 'HEDİYE',
-    model: 'gift',
-    tone: 'lilac',
+    title: 'Doğum günü hediyesi',
+    subtitle: 'Doğum gününde kodunu kasada okut, tatlın bizden.',
+    badge: 'Hediye',
+    match: ['Antep Fıstığı Fransız Pasta', 'San Sebastian'],
   },
 ];
 

@@ -1,16 +1,15 @@
-import { motion } from 'framer-motion';
 import Icon from './Icon';
 import { haptic } from '../lib/format';
 
 const TABS = [
   { key: 'home', label: 'Ana Sayfa', icon: 'home' },
-  { key: 'rewards', label: 'Ödüller', icon: 'gift' },
+  { key: 'menu', label: 'Menü', icon: 'menu' },
   null,
-  { key: 'offers', label: 'Kampanyalar', icon: 'sparkles' },
+  { key: 'rewards', label: 'Ödüller', icon: 'gift' },
   { key: 'profile', label: 'Hesabım', icon: 'person' },
 ];
 
-export default function TabBar({ active, onChange, onCard }) {
+export default function TabBar({ active, onChange, onCode }) {
   return (
     <nav className="tabbar" aria-label="Ana menü">
       {TABS.map((t) =>
@@ -24,21 +23,23 @@ export default function TabBar({ active, onChange, onCard }) {
             }}
             aria-current={active === t.key ? 'page' : undefined}
           >
-            {active === t.key && <motion.span layoutId="tab-dot" className="tab-dot" transition={{ type: 'spring', stiffness: 500, damping: 36 }} />}
-            <Icon name={t.icon} size={25} stroke={active === t.key ? 2.1 : 1.8} />
+            <Icon name={t.icon} size={24} stroke={active === t.key ? 2.1 : 1.8} />
             {t.label}
           </button>
         ) : (
           <button
-            key="qr"
-            className="tab-qr"
+            key="code"
+            className="tab-code"
             onClick={() => {
-              haptic(12);
-              onCard();
+              haptic(10);
+              onCode();
             }}
-            aria-label="Üyelik kartımı göster"
+            aria-label="Üyelik kodumu göster"
           >
-            <Icon name="qr" size={28} stroke={2} />
+            <span>
+              <Icon name="qr" size={24} stroke={2} />
+            </span>
+            <span>Kodum</span>
           </button>
         ),
       )}

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
 import Sheet from '../components/Sheet';
-import Stage3D from '../three/Stage3D';
+import ProductImage from '../components/ProductImage';
 import QRCode from '../components/QRCode';
 import ProgressRing from '../components/ProgressRing';
 import Icon from '../components/Icon';
@@ -33,7 +32,7 @@ export default function RewardSheet({ reward, open, onClose }) {
     setDone(false);
   }, [open, reward?.id]);
 
-  // Kasa ödülü onayladığında puan düşer → başarı ekranı
+  // Kasa ödülü onayladığında puan düşer → onay ekranı
   useEffect(() => {
     if (ticket && pointsAtStart.current !== null && member.points < pointsAtStart.current) {
       setDone(true);
@@ -60,94 +59,84 @@ export default function RewardSheet({ reward, open, onClose }) {
   };
 
   return (
-    <Sheet open={open} onClose={onClose} title="" tall>
-      {reward && (
-        <AnimatePresence mode="wait">
-          {done ? (
-            <motion.div key="done" className="redeem-box" initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} style={{ paddingTop: 40 }}>
-              <div className="avatar is-xl">
-                <Icon name="check" size={46} stroke={2.6} />
+    <Sheet open={open} onClose={onClose} title={ticket ? 'Ödül kodun' : ''} tall>
+      {reward &&
+        (done ? (
+          <div className="earned" style={{ paddingTop: 40 }}>
+            <span className="avatar is-xl is-success">
+              <Icon name="check" size={40} stroke={2.6} />
+            </span>
+            <h2 style={{ fontSize: 26 }}>Afiyet olsun</h2>
+            <p>{reward.name} ödülün kasada onaylandı. {formatPoints(reward.cost)} puan kullanıldı.</p>
+            <button className="btn btn-primary btn-block" style={{ marginTop: 18 }} onClick={onClose}>
+              Tamam
+            </button>
+          </div>
+        ) : ticket ? (
+          <div className="redeem-box">
+            <ProductImage product={reward.product} size={72} />
+            <h2 className="detail-title" style={{ marginTop: 0 }}>{reward.name}</h2>
+            {left > 0 ? (
+              <>
+                <div className="qr-frame">
+                  <QRCode value={payload} size={240} />
+                </div>
+                <span className="countdown num">
+                  <ProgressRing value={left / windowMs} size={22} stroke={3} colors={['#d6156f', '#d6156f']} track="#e9e9ee" />
+                  {mm}:{ss} içinde kasada okut
+                </span>
+                <p className="muted" style={{ fontSize: 14 }}>
+                  Puanın kasa onayladığında düşer. Kod tek kullanımlıktır.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="muted">Kodun süresi doldu. Puanından bir şey eksilmedi.</p>
+                <button className="btn btn-primary btn-block" onClick={activate}>
+                  Yeni kod oluştur
+                </button>
+              </>
+            )}
+            <button className="link-btn" style={{ marginTop: 6 }} onClick={() => setTicket(null)}>
+              Vazgeç
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="detail-photo">
+              <ProductImage product={reward.product} size={210} eager />
+            </div>
+            <p className="eyebrow" style={{ marginTop: 18 }}>Ödül</p>
+            <h2 className="detail-title" style={{ marginTop: 4 }}>{reward.name}</h2>
+            {reward.product?.ingredients && <p className="muted" style={{ marginTop: 6, fontSize: 14.5 }}>{reward.product.ingredients}</p>}
+            <div className="cost-row">
+              <div>
+                <p className="muted" style={{ fontSize: 13 }}>Gerekli</p>
+                <span className="num">{formatPoints(reward.cost)}</span>
               </div>
-              <h2 className="detail-title">Afiyet olsun!</h2>
-              <p className="detail-blurb">{reward.name} ödülün kasada onaylandı. {formatPoints(reward.cost)} puan kullanıldı.</p>
-              <button className="btn btn-primary btn-block" style={{ marginTop: 18 }} onClick={onClose}>
-                Harika
-              </button>
-            </motion.div>
-          ) : ticket ? (
-            <motion.div key="ticket" className="redeem-box" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}>
-              <p className="eyebrow">Ödül kodun hazır</p>
-              <h2 className="detail-title" style={{ marginTop: 0 }}>{reward.name}</h2>
-              {left > 0 ? (
-                <>
-                  <div className="qr-frame">
-                    <QRCode value={payload} size={236} />
-                  </div>
-                  <ProgressRing value={left / windowMs} size={46} stroke={5}>
-                    <Icon name="clock" size={18} />
-                  </ProgressRing>
-                  <span className="countdown num">
-                    {mm}:{ss} içinde kasada okut
-                  </span>
-                  <p className="muted" style={{ fontSize: 14 }}>
-                    Puanın, kasa onayladığında düşer. Kod tek kullanımlıktır.
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p className="detail-blurb">Kodun süresi doldu. Puanından bir şey eksilmedi.</p>
-                  <button className="btn btn-primary btn-block" onClick={activate}>
-                    <Icon name="refresh" size={18} stroke={2.2} /> Yeni kod oluştur
-                  </button>
-                </>
-              )}
-              <button className="link-btn" style={{ marginTop: 8 }} onClick={() => setTicket(null)}>
-                Vazgeç
-              </button>
-            </motion.div>
-          ) : (
-            <motion.div key="detail" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
-              <div className="detail-stage">
-                <Stage3D model={reward.model} variant={reward.variant} elevation={28} zoom={0.92} spin={0.22} />
-                <span className="detail-hint">
-                  <Icon name="refresh" size={14} /> Çevirmek için sürükle
+              <div style={{ textAlign: 'right' }}>
+                <p className="muted" style={{ fontSize: 13 }}>Puanın</p>
+                <span className="num" style={{ color: enough ? 'var(--brand)' : 'var(--ink-3)' }}>
+                  {formatPoints(member.points)}
                 </span>
               </div>
-              <p className="eyebrow" style={{ marginTop: 14 }}>
-                {reward.category}
-              </p>
-              <h2 className="detail-title">{reward.name}</h2>
-              <p className="detail-blurb">{reward.blurb}</p>
-              <div className="detail-cost">
-                <div>
-                  <p className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Gerekli</p>
-                  <span className="num">{formatPoints(reward.cost)}</span>
+            </div>
+            {enough ? (
+              <button className="btn btn-primary btn-block" onClick={activate}>
+                Ödülü kullan
+              </button>
+            ) : (
+              <>
+                <div className="bar">
+                  <i style={{ width: `${(member.points / reward.cost) * 100}%` }} />
                 </div>
-                <div style={{ textAlign: 'right' }}>
-                  <p className="muted" style={{ fontSize: 13, fontWeight: 600 }}>Puanın</p>
-                  <span className="num" style={{ color: enough ? 'var(--pink-600)' : 'var(--ink-3)' }}>
-                    {formatPoints(member.points)}
-                  </span>
-                </div>
-              </div>
-              {enough ? (
-                <button className="btn btn-primary btn-block" onClick={activate}>
-                  <Icon name="gift" size={20} stroke={2} /> Ödülü Kullan
+                <button className="btn btn-secondary btn-block" style={{ marginTop: 14 }} disabled>
+                  {formatPoints(reward.cost - member.points)} puan daha gerekli
                 </button>
-              ) : (
-                <>
-                  <div className="bar" style={{ height: 10 }}>
-                    <i style={{ width: `${(member.points / reward.cost) * 100}%` }} />
-                  </div>
-                  <button className="btn btn-secondary btn-block" style={{ marginTop: 16 }} disabled>
-                    {formatPoints(reward.cost - member.points)} puan daha biriktir
-                  </button>
-                </>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      )}
+              </>
+            )}
+          </>
+        ))}
     </Sheet>
   );
 }

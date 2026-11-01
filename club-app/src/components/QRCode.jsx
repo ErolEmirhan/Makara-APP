@@ -6,7 +6,7 @@ import QR from 'qrcode';
  * Hata düzeltme seviyesi H (%30) — ortadaki rozet okunabilirliği bozmaz.
  * Köşe (bulucu) kareleri tam koyu tutulur; açık tonlu pembe okuyucuları şaşırtır.
  */
-export default function QRCode({ value, size = 220, color = '#2A0A1C', accent = '#EA368D', badge = true }) {
+export default function QRCode({ value, size = 220, color = '#121214', accent = '#D6156F', badge = true }) {
   const qr = useMemo(() => {
     try {
       return QR.create(value, { errorCorrectionLevel: 'H' });

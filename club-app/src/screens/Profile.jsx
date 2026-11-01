@@ -7,11 +7,11 @@ import { formatMemberCode, formatPhone } from '../data/codes';
 import { formatPoints, initials, memberSince } from '../lib/format';
 import { useToast } from '../components/Toast';
 
-function Row({ icon, color, title, subtitle, onClick, href, danger }) {
+function Row({ icon, title, subtitle, onClick, href, danger }) {
   const Tag = href ? 'a' : 'button';
   return (
     <Tag className={`row ${danger ? 'is-danger' : ''}`} onClick={onClick} href={href} target={href ? '_blank' : undefined} rel={href ? 'noreferrer' : undefined}>
-      <span className="row-icon" style={color ? { background: color } : undefined}>
+      <span className="row-icon">
         <Icon name={icon} size={17} stroke={2.1} />
       </span>
       <span className="row-main">
@@ -85,20 +85,19 @@ export default function Profile({ onOpenActivity, onSimulate }) {
 
   return (
     <div className="screen">
+      <h1 className="page-title">Hesabım</h1>
       <div className="profile-head">
         <div className="avatar is-xl">{initials(member.name)}</div>
-        <h1>{member.name}</h1>
-        <p className="muted" style={{ fontSize: 14.5 }}>
-          {memberSince(member.createdAt)} tarihinden beri üye · {member.visits || 0} ziyaret
-        </p>
-        <span className="badge is-soft num" style={{ letterSpacing: '0.12em', marginTop: 4 }}>
-          {formatMemberCode(member.memberCode)}
-        </span>
+        <div>
+          <h1>{member.name}</h1>
+          <p>{memberSince(member.createdAt)} tarihinden beri üye · {member.visits || 0} ziyaret</p>
+          <p className="num" style={{ marginTop: 2, letterSpacing: '0.08em', fontWeight: 600 }}>{formatMemberCode(member.memberCode)}</p>
+        </div>
       </div>
 
       <section className="tier-card">
-        <p className="eyebrow" style={{ color: 'rgba(255,255,255,.85)' }}>Seviyen</p>
-        <h3>{current.name} Üye</h3>
+        <p className="eyebrow">Seviyen</p>
+        <h3>{current.name} üye</h3>
         <ul>
           {current.perks.map((p) => (
             <li key={p}>
@@ -119,44 +118,44 @@ export default function Profile({ onOpenActivity, onSimulate }) {
             </div>
           </>
         ) : (
-          <p style={{ marginTop: 14, fontWeight: 650 }}>En yüksek seviyedesin. Teşekkürler!</p>
+          <p style={{ marginTop: 14, fontWeight: 600 }}>En yüksek seviyedesin.</p>
         )}
       </section>
 
       <p className="list-title">Hesap</p>
       <div className="list-group">
         <Row icon="edit" title="Kişisel bilgiler" subtitle={formatPhone(member.phone)} onClick={() => setEditing(true)} />
-        <Row icon="list" color="#8b5cf6" title="Puan geçmişi" subtitle={`Toplam ${formatPoints(member.lifetimePoints)} puan kazandın`} onClick={onOpenActivity} />
+        <Row icon="list" title="Puan geçmişi" subtitle={`Toplam ${formatPoints(member.lifetimePoints)} puan kazandın`} onClick={onOpenActivity} />
       </div>
 
       <p className="list-title">Şubelerimiz</p>
       <div className="list-group">
         {BRANCHES.map((b) => (
-          <Row key={b.id} icon="pin" color="#ff6fb1" title={b.name} subtitle={b.area} href={b.maps} />
+          <Row key={b.id} icon="pin" title={b.name} subtitle={b.area} href={b.maps} />
         ))}
       </div>
 
       <p className="list-title">MAKARA</p>
       <div className="list-group">
-        <Row icon="globe" color="#1d1d1f" title="makara.network" subtitle="Web sitemiz" href={PROGRAM.website} />
+        <Row icon="globe" title="makara.network" subtitle="Web sitemiz" href={PROGRAM.website} />
       </div>
 
       {mode === 'demo' && (
         <>
           <p className="list-title">Demo araçları</p>
           <div className="list-group">
-            <Row icon="bolt" color="#f59e0b" title="Alışveriş simüle et" subtitle="Kasada puan kazanmayı dene" onClick={onSimulate} />
-            <Row icon="qr" color="#0ea5e9" title="Kasa panelini aç" subtitle="Demo şifre 1234" onClick={() => (window.location.hash = 'kasa')} />
-            <Row icon="refresh" color="#6e6e73" title="Demo verisini sıfırla" onClick={resetDemo} />
+            <Row icon="bolt" title="Alışveriş simüle et" subtitle="Kasada puan kazanmayı dene" onClick={onSimulate} />
+            <Row icon="qr" title="Kasa panelini aç" subtitle="Demo şifre 1234" onClick={() => (window.location.hash = 'kasa')} />
+            <Row icon="refresh" title="Demo verisini sıfırla" onClick={resetDemo} />
           </div>
         </>
       )}
 
       <div className="list-group">
-        <Row icon="logout" color="#d70f4b" title="Çıkış yap" onClick={signOut} danger />
+        <Row icon="logout" title="Çıkış yap" onClick={signOut} danger />
       </div>
 
-      <p className="footer-note">MAKARA Club · {mode === 'demo' ? 'Demo modu' : 'Bulut senkron'}</p>
+      <p className="footer-note">MAKARA Club{mode === 'demo' ? ' · Demo modu' : ''}</p>
       <EditProfileSheet open={editing} onClose={() => setEditing(false)} />
     </div>
   );

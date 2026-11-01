@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import { AppDataProvider } from './data/AppData';
+import { CatalogProvider } from './data/catalog';
 import CustomerApp from './screens/CustomerApp';
 import Splash from './components/Splash';
 
@@ -21,13 +22,15 @@ export default function App() {
   const isKasa = hash === '#kasa' || hash.startsWith('#/kasa');
   return (
     <AppDataProvider>
-      {isKasa ? (
-        <Suspense fallback={<Splash />}>
-          <KasaApp />
-        </Suspense>
-      ) : (
-        <CustomerApp />
-      )}
+      <CatalogProvider>
+        {isKasa ? (
+          <Suspense fallback={<Splash />}>
+            <KasaApp />
+          </Suspense>
+        ) : (
+          <CustomerApp />
+        )}
+      </CatalogProvider>
     </AppDataProvider>
   );
 }

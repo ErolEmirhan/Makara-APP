@@ -229,8 +229,10 @@ function App() {
         clearTimeout(catalogSyncHideTimerRef.current);
         catalogSyncHideTimerRef.current = null;
       }
-      setCatalogSyncProgress(data);
-      if (data?.phase === 'done' || (data?.percent != null && data.percent >= 100)) {
+      const isDone = data?.phase === 'done' || (data?.percent != null && data.percent >= 100);
+      // Çubuk görünmüyorken gelen "bitti" boş yere %100 çubuk göstermesin
+      setCatalogSyncProgress((prev) => (isDone && !prev ? prev : data));
+      if (isDone) {
         catalogSyncHideTimerRef.current = setTimeout(() => {
           setCatalogSyncProgress(null);
           catalogSyncHideTimerRef.current = null;

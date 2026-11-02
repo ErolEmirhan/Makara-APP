@@ -64,9 +64,22 @@ async function fetchCollection(project, apiKey, collection) {
 
 const clean = (s = '') => String(s).replace(/\s+/g, ' ').trim();
 
+/** ";Atıştırmalıklar;" → "Atıştırmalıklar", "KOKTEYLLER" → "Kokteyller" */
+function tidyLabel(raw = '') {
+  const s = clean(raw).replace(/^[;:,.\-\s]+|[;:,.\-\s]+$/g, '');
+  if (s.length > 3 && s === s.toLocaleUpperCase('tr-TR') && /[A-ZÇĞİÖŞÜ]/.test(s)) {
+    return s
+      .toLocaleLowerCase('tr-TR')
+      .split(' ')
+      .map((w) => w.charAt(0).toLocaleUpperCase('tr-TR') + w.slice(1))
+      .join(' ');
+  }
+  return s;
+}
+
 /** "Çilekli Makara(Çilek-Muz İçerir)" → { name: "Çilekli Makara", note: "Çilek-Muz İçerir" } */
 function splitName(raw) {
-  const name = clean(raw);
+  const name = tidyLabel(raw);
   const m = name.match(/^(.*?)\s*\(\s*([^()]*?)\s*\)$/);
   const base = m && m[1] ? m[1] : name;
   const pretty = base.charAt(0).toLocaleUpperCase('tr-TR') + base.slice(1);
@@ -114,11 +127,28 @@ try {
   console.warn('! sharp yok: görseller küçültülmeden kopyalanacak');
 }
 
+/** POS'ta fotoğrafı olmayan ürünlere konan MAKARA logosu: çoğunlukla beyaz + pembe. */
+async function isLogoPlaceholder(bytes) {
+  const { data, info } = await sharp(bytes).resize(64, 64, { fit: 'cover' }).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  let opaque = 0;
+  let white = 0;
+  let pink = 0;
+  for (let i = 0; i < data.length; i += info.channels) {
+    const [r, g, b, a] = [data[i], data[i + 1], data[i + 2], data[i + 3]];
+    if (a < 200) continue;
+    opaque++;
+    if (r > 235 && g > 235 && b > 235) white++;
+    else if (r > 200 && g < 120 && b > 90) pink++;
+  }
+  return opaque > 0 && white / opaque > 0.5 && pink / opaque > 0.08;
+}
+
 async function saveImage(id, bytes) {
   if (sharp) {
     // Boş / tek renk görselleri (ör. beyaz yer tutucu) ürün fotoğrafı sayma
     const { channels } = await sharp(bytes).stats();
     if (channels.slice(0, 3).every((c) => c.stdev < 6)) throw new Error('boş görsel');
+    if (await isLogoPlaceholder(bytes)) throw new Error('logo yer tutucu');
     const file = `${id}.webp`;
     await sharp(bytes).resize(IMAGE_SIZE, IMAGE_SIZE, { fit: 'cover' }).webp({ quality: 82 }).toFile(path.join(imgDir, file));
     return `catalog/img/${file}`;
@@ -163,7 +193,7 @@ async function main() {
   if (!source) throw new Error('Hiçbir kaynaktan menü okunamadı.');
 
   const categories = rawCategories
-    .map((c) => ({ id: Number(c.id ?? c._id), name: clean(c.name), order: Number(c.order_index ?? 999) }))
+    .map((c) => ({ id: Number(c.id ?? c._id), name: tidyLabel(c.name), order: Number(c.order_index ?? 999) }))
     .filter((c) => c.name && c.id !== 999999 && !HIDDEN_CATEGORIES.includes(c.name.toLocaleLowerCase('tr-TR')))
     .sort((a, b) => a.order - b.order || a.id - b.id);
   const visible = new Set(categories.map((c) => c.id));

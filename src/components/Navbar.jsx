@@ -447,7 +447,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
             <h1 className="truncate text-[15px] font-black tracking-tight text-slate-900 dark:text-[#f5f5f7] lg:text-base">
               {systemTitle}
             </h1>
-            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-300">v550.0.0</span>
+            <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold tabular-nums text-slate-500 dark:bg-white/10 dark:text-slate-300">v553.0.1</span>
           </div>
         </div>
         <div className="ml-1 hidden items-center gap-2 rounded-full bg-slate-50 py-1 pl-1.5 pr-3 ring-1 ring-slate-200 md:flex dark:bg-white/[0.04] dark:ring-white/10">

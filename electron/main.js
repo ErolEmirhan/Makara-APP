@@ -12,6 +12,7 @@ const os = require('os');
 const { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } = require('@aws-sdk/client-s3');
 
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { initRemoteUi, loadMainUi, guardNavigation, startRemoteUiUpdateWatcher } = require('./remoteUi');
 
 // Firebase entegrasyonu
 let firebaseApp = null;
@@ -1828,12 +1829,17 @@ function createWindow() {
     }
   });
 
-  if (process.env.NODE_ENV === 'development' || !app.isPackaged) {
+  guardNavigation(mainWindow);
+
+  if ((process.env.NODE_ENV === 'development' || !app.isPackaged) && !process.env.MAKARA_UI_URL) {
     mainWindow.loadURL('http://localhost:5173');
     // Konsol kapalı başlatılsın
     // mainWindow.webContents.openDevTools(); // Kaldırıldı
   } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+    // Vercel'deki güncel arayüz; ulaşılamazsa paketteki dist
+    loadMainUi(mainWindow).catch((error) => {
+      writeLog(`Kasa arayüzü yüklenemedi: ${error.message}`);
+    });
   }
 
   // Pencere kapatıldığında
@@ -7617,7 +7623,11 @@ app.whenReady().then(() => {
   loadBranchSettings();
   initDatabase();
   enableLaunchAtStartup();
+  initRemoteUi({ logger: writeLog });
   createWindow();
+  if (app.isPackaged || process.env.MAKARA_UI_URL) {
+    startRemoteUiUpdateWatcher(() => mainWindow);
+  }
   prewarmPrintWindow();
   startAPIServer();
 

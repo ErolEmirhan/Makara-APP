@@ -1,5 +1,21 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Arayüz file:// yerine Vercel'den açılınca eski localStorage ayarları bir kez taşınır
+// (sayfa betiklerinden önce çalışır; main yalnızca Vercel kaynağına veri döner).
+if (location.protocol === 'https:') {
+  try {
+    if (!localStorage.getItem('__makaraFileStorageMigrated')) {
+      const seed = ipcRenderer.sendSync('ui-storage-seed');
+      if (seed && typeof seed === 'object') {
+        for (const [key, value] of Object.entries(seed)) {
+          if (localStorage.getItem(key) === null) localStorage.setItem(key, value);
+        }
+        localStorage.setItem('__makaraFileStorageMigrated', '1');
+      }
+    }
+  } catch (_) {}
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   checkInternetConnectivity: () => ipcRenderer.invoke('check-internet-connectivity'),
   /** Launcher kapandıktan sonra POS için tam ekran/kiosk */

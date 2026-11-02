@@ -265,7 +265,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
     try {
       const result = await window.electronAPI.syncStaffToFirestore();
       if (result?.success) {
-        showToast(`${result.count ?? 0} personel Firestore'a yazıldı`, 'success');
+        showToast(result.message || `${result.count ?? 0} personel Firestore'a yazıldı`, 'success');
         await loadStaff({ preferCache: false });
       } else {
         showToast(result?.error || 'Firestore güncellenemedi', 'error');
@@ -908,7 +908,7 @@ const Navbar = ({ currentView, setCurrentView, totalItems, userType, setUserType
                   onClick={handleSyncStaffToFirestore}
                   disabled={staffSyncing || staffLoading}
                   className="inline-flex items-center gap-2 rounded-2xl border border-white/20 bg-white/10 px-4 py-3 text-sm font-bold text-white transition hover:bg-white/15 disabled:cursor-not-allowed disabled:opacity-50 sm:px-5 sm:py-3.5 sm:text-[14px]"
-                  title="Yerel personeli mevcut şifreleriyle Firestore'a yazar"
+                  title={isMakaraHavzanDesktop ? "Personel listesini Firestore'dan yeniden çeker" : "Yerel personeli mevcut şifreleriyle Firestore'a yazar"}
                 >
                   {staffSyncing ? (
                     <>

@@ -430,6 +430,7 @@ async function initializeFirebaseForBranch(branchKey) {
   try { stopMakaraTablesFirestorePullListener(); } catch (_) {}
   try { stopMobileOrdersFirestoreListener(); } catch (_) {}
   try { stopMobileActionsFirestoreListener(); } catch (_) {}
+  try { stopHavzanStaffListener(); } catch (_) {}
   categoriesRealtimeUnsubscribe = null;
   productsRealtimeUnsubscribe = null;
   broadcastsRealtimeUnsubscribe = null;
@@ -509,7 +510,11 @@ async function initializeFirebaseForBranch(branchKey) {
     } else {
       stopMakaraTablesFirestorePullListener();
     }
-    syncAllStaffToFirestore().catch((e) => console.warn('Personel Firestore senkronu:', e.message));
+    if (branch.key === 'makara') {
+      startHavzanStaffListener();
+    } else {
+      syncAllStaffToFirestore().catch((e) => console.warn('Personel Firestore senkronu:', e.message));
+    }
     startMobileOrdersFirestoreListener();
     startMobileActionsFirestoreListener();
     return true;
@@ -518,6 +523,7 @@ async function initializeFirebaseForBranch(branchKey) {
     try { stopMakaraTablesFirestorePullListener(); } catch (_) {}
     try { stopMobileOrdersFirestoreListener(); } catch (_) {}
   try { stopMobileActionsFirestoreListener(); } catch (_) {}
+    try { stopHavzanStaffListener(); } catch (_) {}
     firestore = null;
     firebaseWriteBatch = null;
     storage = null;
@@ -19843,6 +19849,236 @@ async function deleteStaffFromFirestore(staffId) {
   }
 }
 
+// ── Makara Havzan personeli: tek doğru kaynak Firestore `staff` ─────────────
+// db.staff şubeler arasında ortak olduğu için Havzan ona yazmaz. Kasa kendi yerel
+// listesini Firestore'a basarsa personelmakara'dan silineni diriltir, PWA'da
+// değişen şifreyi geri alır ve yeni personele çakışan numara verir.
+let havzanStaffDocs = [];
+let havzanDeletionDocs = [];
+let havzanStaffById = new Map();
+let havzanStaffDeletions = { byId: new Set(), byPassword: new Set() };
+let havzanStaffUnsubscribe = null;
+let havzanDeletionsUnsubscribe = null;
+
+function isHavzanStaffBranch() {
+  return activeBranchKey === 'makara';
+}
+
+function parseHavzanStaffFlag(value) {
+  return value === true || value === 1 || value === '1' || value === 'true';
+}
+
+/** personelmakara fetchStaffDeletionMap ile aynı kural */
+function rebuildHavzanStaffCache() {
+  const byId = new Set();
+  const byPassword = new Set();
+  for (const d of havzanDeletionDocs) {
+    byId.add(String(d.id));
+    const data = d.data() || {};
+    if (data.staffId != null) byId.add(String(data.staffId));
+    if (data.password) byPassword.add(String(data.password));
+  }
+  havzanStaffDeletions = { byId, byPassword };
+
+  const map = new Map();
+  for (const d of havzanStaffDocs) {
+    const data = d.data() || {};
+    if (data.branchKey && data.branchKey !== 'makara') continue;
+    if (data.deleted === true) continue;
+    if (byId.has(String(d.id))) continue;
+    if (data.password && byPassword.has(String(data.password))) continue;
+    const idNum = Number(d.id);
+    const id = Number.isFinite(idNum) ? idNum : d.id;
+    map.set(String(id), {
+      id,
+      name: data.name || '',
+      surname: data.surname || '',
+      password: data.password != null ? String(data.password) : '',
+      is_manager: parseHavzanStaffFlag(data.is_manager) || parseHavzanStaffFlag(data.isManager),
+      is_chef: parseHavzanStaffFlag(data.is_chef) || parseHavzanStaffFlag(data.isChef),
+      is_admin: parseHavzanStaffFlag(data.is_admin) || parseHavzanStaffFlag(data.isAdmin),
+      is_boss: parseHavzanStaffFlag(data.is_boss) || parseHavzanStaffFlag(data.isBoss),
+      profile_image_base64: data.profile_image_base64 || data.image_base64 || data.profileImage || null
+    });
+  }
+  havzanStaffById = map;
+}
+
+async function refreshHavzanStaff() {
+  if (!firestore || !firebaseCollection || !firebaseGetDocs) {
+    throw new Error('Firestore bağlantısı hazır değil');
+  }
+  const [staffSnap, deletionsSnap] = await Promise.all([
+    firebaseGetDocs(firebaseCollection(firestore, 'staff')),
+    firebaseGetDocs(firebaseCollection(firestore, 'staff_deletions'))
+  ]);
+  havzanStaffDocs = staffSnap.docs;
+  havzanDeletionDocs = deletionsSnap.docs;
+  rebuildHavzanStaffCache();
+  return [...havzanStaffById.values()];
+}
+
+function startHavzanStaffListener() {
+  stopHavzanStaffListener();
+  if (!firestore || !firebaseOnSnapshot || !firebaseCollection) return;
+  const onError = (err) => console.warn('Havzan personel dinleyici:', err.message || err);
+  havzanStaffUnsubscribe = firebaseOnSnapshot(firebaseCollection(firestore, 'staff'), (snap) => {
+    havzanStaffDocs = snap.docs;
+    rebuildHavzanStaffCache();
+  }, onError);
+  havzanDeletionsUnsubscribe = firebaseOnSnapshot(firebaseCollection(firestore, 'staff_deletions'), (snap) => {
+    havzanDeletionDocs = snap.docs;
+    rebuildHavzanStaffCache();
+  }, onError);
+}
+
+function stopHavzanStaffListener() {
+  try { havzanStaffUnsubscribe?.(); } catch (_) {}
+  try { havzanDeletionsUnsubscribe?.(); } catch (_) {}
+  havzanStaffUnsubscribe = null;
+  havzanDeletionsUnsubscribe = null;
+  havzanStaffDocs = [];
+  havzanDeletionDocs = [];
+  havzanStaffById = new Map();
+  havzanStaffDeletions = { byId: new Set(), byPassword: new Set() };
+}
+
+function toHavzanStaffListEntry(s) {
+  return {
+    id: s.id,
+    name: s.name,
+    surname: s.surname,
+    is_manager: s.is_manager,
+    is_chef: s.is_chef,
+    profileImageSrc: normalizeStaffProfileImage(s.profile_image_base64) || null
+  };
+}
+
+/** personelmakara aynı şifreyi iki kayıtta ya da silinmiş hesapta görürse girişi reddeder */
+function validateHavzanStaffPassword(password, exceptStaffId = null) {
+  const pwd = String(password);
+  if (havzanStaffDeletions.byPassword.has(pwd)) {
+    return 'Bu şifre silinmiş bir personele ait; personelmakara bu şifreyle girişe izin vermez. Farklı bir şifre seçin.';
+  }
+  const clash = havzanStaffDocs.some(
+    (d) => String(d.id) !== String(exceptStaffId) && String(d.data()?.password ?? '') === pwd
+  );
+  if (clash) {
+    return 'Bu şifre başka bir personel tarafından kullanılıyor. Her personelin şifresi farklı olmalı.';
+  }
+  return null;
+}
+
+/** Silinen numaralar personelmakara'da kalıcı engelli; yeni numara hepsinin üstünden başlar */
+function nextHavzanStaffIdCandidate() {
+  let max = 0;
+  const bump = (v) => {
+    const n = Number(v);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  };
+  for (const d of havzanStaffDocs) {
+    bump(d.id);
+    bump(d.data()?.id);
+  }
+  for (const id of havzanStaffDeletions.byId) bump(id);
+  return max + 1;
+}
+
+async function createHavzanStaff({ name, surname, password }) {
+  await refreshHavzanStaff();
+  const pwdError = validateHavzanStaffPassword(password);
+  if (pwdError) return { success: false, error: pwdError };
+
+  const now = new Date().toISOString();
+  let candidate = nextHavzanStaffIdCandidate();
+  // İki kasa aynı anda eklerse aynı numarayı almasın
+  for (let attempt = 0; attempt < 5; attempt += 1, candidate += 1) {
+    const id = String(candidate);
+    const staffRef = firebaseDoc(firestore, 'staff', id);
+    const tombstoneRef = firebaseDoc(firestore, 'staff_deletions', id);
+    const record = {
+      id: candidate,
+      name,
+      surname,
+      password,
+      is_manager: false,
+      is_chef: false,
+      is_admin: false,
+      is_boss: false,
+      branchKey: 'makara',
+      createdAt: now,
+      updatedAt: now
+    };
+    const created = await firebaseRunTransaction(firestore, async (tx) => {
+      const staffSnap = await tx.get(staffRef);
+      const tombstoneSnap = await tx.get(tombstoneRef);
+      if (staffSnap.exists() || tombstoneSnap.exists()) return false;
+      tx.set(staffRef, record);
+      return true;
+    });
+    if (created) {
+      return { success: true, staff: { id: candidate, name, surname, is_manager: false, is_chef: false } };
+    }
+  }
+  return { success: false, error: 'Personel numarası ayrılamadı, tekrar deneyin' };
+}
+
+/** personelmakara deleteStaffMember ile aynı iz: tombstone + staff/presence/push kayıtları */
+async function deleteHavzanStaff(staffId) {
+  const id = String(staffId);
+  const staffRef = firebaseDoc(firestore, 'staff', id);
+  const snap = await firebaseGetDoc(staffRef);
+  if (!snap.exists()) return { success: false, error: 'Personel bulunamadı' };
+  const data = snap.data() || {};
+  const idNum = Number(id);
+  await firebaseSetDoc(firebaseDoc(firestore, 'staff_deletions', id), {
+    staffId: Number.isFinite(idNum) ? idNum : id,
+    password: data.password ? String(data.password) : null,
+    branchKey: 'makara',
+    deletedAt: new Date().toISOString(),
+    deletedBy: 'desktop'
+  }, { merge: true });
+  await firebaseDeleteDoc(staffRef);
+  for (const col of ['staff_presence', 'staff_push_tokens']) {
+    await firebaseDeleteDoc(firebaseDoc(firestore, col, id)).catch(() => {});
+  }
+  return { success: true };
+}
+
+async function updateHavzanStaffPassword(staffId, newPassword) {
+  await refreshHavzanStaff();
+  const staff = havzanStaffById.get(String(staffId));
+  if (!staff) return { success: false, error: `Personel bulunamadı (ID: ${staffId})` };
+  const pwd = newPassword.toString();
+  const pwdError = validateHavzanStaffPassword(pwd, staff.id);
+  if (pwdError) return { success: false, error: pwdError };
+  await firebaseUpdateDoc(firebaseDoc(firestore, 'staff', String(staff.id)), {
+    password: pwd,
+    updatedAt: new Date().toISOString()
+  });
+  return { success: true, staff: { id: staff.id, name: staff.name, surname: staff.surname } };
+}
+
+/** Yalnızca rol alanları yazılır; PWA'da değişen ad/şifre ezilmez */
+async function updateHavzanStaffRoles(staffId, roles) {
+  const id = String(staffId);
+  const ref = firebaseDoc(firestore, 'staff', id);
+  const snap = await firebaseGetDoc(ref);
+  if (!snap.exists()) return { success: false, error: 'Personel bulunamadı' };
+  await firebaseUpdateDoc(ref, { ...roles, updatedAt: new Date().toISOString() });
+  try {
+    const presenceRef = firebaseDoc(firestore, 'staff_presence', id);
+    const presenceSnap = await firebaseGetDoc(presenceRef);
+    if (presenceSnap.exists()) await firebaseUpdateDoc(presenceRef, roles);
+  } catch (_) {}
+  return { success: true };
+}
+
+function havzanStaffErrorResult(error, fallback) {
+  console.error('Havzan personel Firestore hatası:', error);
+  return { success: false, error: `${fallback}: ${error?.message || 'Firestore\'a ulaşılamadı'}` };
+}
+
 async function syncAllStaffToFirestore(options = {}) {
   if (!firestore || !db.staff) {
     if (options.throwOnError) {
@@ -20221,7 +20457,12 @@ function isMobileQueueAction(data) {
 }
 
 function findStaffById(staffId) {
-  if (staffId == null || !db.staff) return null;
+  if (staffId == null) return null;
+  if (isHavzanStaffBranch()) {
+    const remote = havzanStaffById.get(String(staffId));
+    if (remote) return remote;
+  }
+  if (!db.staff) return null;
   return db.staff.find((s) => String(s.id) === String(staffId)) || null;
 }
 
@@ -20428,6 +20669,17 @@ ipcMain.handle('create-staff', async (event, staffData) => {
   if (!name || !surname || !password) {
     return { success: false, error: 'Tüm alanları doldurun' };
   }
+  if (isHavzanStaffBranch()) {
+    try {
+      return await createHavzanStaff({
+        name: name.trim(),
+        surname: surname.trim(),
+        password: password.toString()
+      });
+    } catch (error) {
+      return havzanStaffErrorResult(error, 'Personel Firestore\'a yazılamadı');
+    }
+  }
   if (!db.staff) db.staff = [];
   const newId = allocateStaffId();
   const newStaff = {
@@ -20452,6 +20704,20 @@ ipcMain.handle('create-staff', async (event, staffData) => {
 });
 
 ipcMain.handle('delete-staff', async (event, staffId) => {
+  if (isHavzanStaffBranch()) {
+    try {
+      const result = await deleteHavzanStaff(staffId);
+      if (result.success && io) {
+        io.emit('staff-deleted', {
+          staffId,
+          message: 'Hesabınız silindi. Lütfen tekrar giriş yapın.'
+        });
+      }
+      return result;
+    } catch (error) {
+      return havzanStaffErrorResult(error, 'Personel silinemedi');
+    }
+  }
   if (!db.staff) db.staff = [];
   const index = db.staff.findIndex((s) => String(s.id) === String(staffId));
   if (index === -1) {
@@ -20478,7 +20744,22 @@ ipcMain.handle('delete-staff', async (event, staffId) => {
   return { success: true };
 });
 
-ipcMain.handle('update-staff-password', (event, staffId, newPassword) => {
+ipcMain.handle('update-staff-password', async (event, staffId, newPassword) => {
+  if (isHavzanStaffBranch()) {
+    if (!staffId) return { success: false, error: 'Personel ID gerekli' };
+    if (!newPassword || newPassword.toString().trim() === '') {
+      return { success: false, error: 'Yeni şifre gerekli' };
+    }
+    try {
+      const result = await updateHavzanStaffPassword(staffId, newPassword);
+      if (result.success && io) {
+        io.emit('staff-password-updated', { staffId: result.staff.id, message: 'Şifreniz güncellendi' });
+      }
+      return result;
+    } catch (error) {
+      return havzanStaffErrorResult(error, 'Şifre güncellenemedi');
+    }
+  }
   try {
     console.log('🔐 Şifre güncelleme isteği:', { staffId, newPasswordLength: newPassword?.length });
     
@@ -20537,6 +20818,17 @@ ipcMain.handle('update-staff-password', (event, staffId, newPassword) => {
 });
 
 ipcMain.handle('get-staff', async () => {
+  if (isHavzanStaffBranch()) {
+    let list;
+    try {
+      list = await refreshHavzanStaff();
+    } catch (error) {
+      console.error('Havzan personel listesi Firestore\'dan alınamadı:', error);
+      if (!havzanStaffById.size) throw error;
+      list = [...havzanStaffById.values()];
+    }
+    return list.map(toHavzanStaffListEntry);
+  }
   if (!db.staff) db.staff = [];
   const list = db.staff.map((s) => ({
     id: s.id,
@@ -20559,6 +20851,10 @@ ipcMain.handle('get-staff', async () => {
 
 ipcMain.handle('sync-staff-to-firestore', async () => {
   try {
+    if (isHavzanStaffBranch()) {
+      const list = await refreshHavzanStaff();
+      return { success: true, count: list.length, message: `${list.length} personel Firestore'dan yenilendi` };
+    }
     if (!db.staff || db.staff.length === 0) {
       return { success: false, error: 'Yerel personel kaydı bulunamadı' };
     }
@@ -20571,7 +20867,17 @@ ipcMain.handle('sync-staff-to-firestore', async () => {
 });
 
 // Müdür atama/kaldırma — sayı sınırı yok, şifre gerekmez
-ipcMain.handle('set-staff-manager', (event, staffId, isManager) => {
+ipcMain.handle('set-staff-manager', async (event, staffId, isManager) => {
+  if (isHavzanStaffBranch()) {
+    try {
+      return await updateHavzanStaffRoles(
+        staffId,
+        isManager ? { is_manager: true, is_chef: false } : { is_manager: false }
+      );
+    } catch (error) {
+      return havzanStaffErrorResult(error, 'Müdür ataması kaydedilemedi');
+    }
+  }
   if (!db.staff) db.staff = [];
   const staff = db.staff.find(s => s.id === staffId);
   if (!staff) {
@@ -20589,24 +20895,18 @@ ipcMain.handle('set-staff-manager', (event, staffId, isManager) => {
 });
 
 /** Makara Havzan: garson ile aynı işlemler + mevcut sipariş satırı iptali */
-ipcMain.handle('set-staff-chef', (event, staffId, isChef) => {
+ipcMain.handle('set-staff-chef', async (event, staffId, isChef) => {
   if (activeBranchKey !== 'makara') {
     return { success: false, error: 'Şef ataması yalnızca Makara Havzan şubesinde kullanılır' };
   }
-  if (!db.staff) db.staff = [];
-  const staff = db.staff.find((s) => s.id === staffId);
-  if (!staff) {
-    return { success: false, error: 'Personel bulunamadı' };
+  try {
+    return await updateHavzanStaffRoles(
+      staffId,
+      isChef ? { is_chef: true, is_manager: false } : { is_chef: false }
+    );
+  } catch (error) {
+    return havzanStaffErrorResult(error, 'Şef ataması kaydedilemedi');
   }
-  if (isChef) {
-    staff.is_chef = true;
-    staff.is_manager = false;
-  } else {
-    staff.is_chef = false;
-  }
-  saveDatabase();
-  syncStaffMemberToFirestore(staff).catch(() => {});
-  return { success: true, staff };
 });
 
 ipcMain.handle('get-manager-ops-password-configured', () => ({

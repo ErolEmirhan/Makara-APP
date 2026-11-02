@@ -822,7 +822,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                   type="button"
                   onClick={() => { setTransferStep(1); setTransferQuantities({}); setSelectedTargetTableId(null); setShowTransferItemsModal(true); }}
                   disabled={showPartialPay}
-                  className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/25 disabled:cursor-not-allowed"
+                  className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm ring-1 transition disabled:cursor-not-allowed bg-sky-50 text-sky-700 ring-sky-200 hover:bg-sky-100"
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
@@ -835,7 +835,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                 type="button"
                 onClick={onAddItems}
                 disabled={showPartialPay}
-                className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/25 disabled:cursor-not-allowed"
+                className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm ring-1 transition disabled:cursor-not-allowed bg-emerald-50 text-emerald-700 ring-emerald-200 hover:bg-emerald-100"
               >
                 <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
@@ -850,7 +850,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                     setGiftQtyByGroupKey({});
                     setShowGiftSelectModal(true);
                   }}
-                  className="inline-flex items-center gap-2 rounded-2xl bg-white/15 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-white/25"
+                  className="relative inline-flex items-center gap-2 overflow-hidden rounded-2xl px-4 py-2.5 text-sm font-semibold shadow-sm ring-1 transition disabled:cursor-not-allowed bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100"
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v13m0-13V6a2 2 0 112 2h-2zm0 0V5.5A2.5 2.5 0 109.5 8H12zm-7 4h14M5 12a2 2 0 110-4h14a2 2 0 110 4M5 12v7a2 2 0 002 2h10a2 2 0 002-2v-7" />

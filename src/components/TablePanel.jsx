@@ -2431,8 +2431,9 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                 title="Dolu masalar"
                 centered
               />
-              <div className="flex items-start justify-between gap-8">
-              <div className="shrink-0">
+              {/* Izgaralar akışkan: kartlar ekran genişliğine göre ölçeklenir, paket blok her kasada sığar */}
+              <div className="flex items-start gap-4 xl:gap-6">
+              <div className="min-w-0 flex-1">
                 <TablesSectionBlock
                   title="İç salon"
                   filled={havzanFloorStats.inside.filled}
@@ -2443,7 +2444,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                     </svg>
                   }
                 >
-                  <div className="grid w-max grid-cols-[repeat(10,8.75rem)] gap-3">
+                  <div className="grid grid-cols-10 gap-2 xl:gap-3">
                     {insideTables.map((table) => (
                       <TableGridCard
                         key={table.id}
@@ -2469,7 +2470,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                         </svg>
                       }
                     >
-                      <div className="grid w-max grid-cols-[repeat(10,8.75rem)] gap-3">
+                      <div className="grid grid-cols-10 gap-2 xl:gap-3">
                         {outsideTables.map((table) => (
                           <TableGridCard
                             key={table.id}
@@ -2485,7 +2486,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                 )}
               </div>
 
-              <aside className="ml-auto w-max shrink-0 sticky top-3 self-start max-h-[calc(100vh-7.5rem)] overflow-y-auto">
+              <aside className="w-[clamp(17rem,19vw,19rem)] shrink-0 sticky top-3 self-start max-h-[calc(100vh-7.5rem)] overflow-y-auto">
                 <TablesSectionBlock
                   title="Paket masaları"
                   filled={havzanFloorStats.package.filled}
@@ -2497,7 +2498,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                     </svg>
                   }
                 >
-                  <div className="grid grid-cols-[repeat(2,8.75rem)] gap-3">
+                  <div className="grid grid-cols-2 gap-2 xl:gap-3">
                     {packageTables.map((table) => (
                       <TableGridCard
                         key={table.id}

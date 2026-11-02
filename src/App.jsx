@@ -18,7 +18,7 @@ import LauncherScreen from './components/LauncherScreen';
 import SupportNoticeModal, { SUPPORT_NOTICE_STORAGE_KEY } from './components/SupportNoticeModal';
 import CatalogSyncProgressBar from './components/CatalogSyncProgressBar';
 import ExitSplash from './components/ExitSplash';
-import UpdateModal from './components/UpdateModal';
+import KasaUpdateNotice, { useKasaUpdates } from './components/KasaUpdateNotice';
 import ExpenseModal from './components/ExpenseModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
@@ -77,8 +77,7 @@ function App() {
   const [activeRoleSplash, setActiveRoleSplash] = useState(null);
   const [saleSuccessInfo, setSaleSuccessInfo] = useState(null);
   const [printToast, setPrintToast] = useState(null); // { status: 'printing' | 'success' | 'error', message: string }
-  const [updateInfo, setUpdateInfo] = useState(null);
-  const [updateDownloadProgress, setUpdateDownloadProgress] = useState(null);
+  const kasaUpdates = useKasaUpdates(cart.length);
   const [tableRefreshTrigger, setTableRefreshTrigger] = useState(0);
   const [autoOpenOrderId, setAutoOpenOrderId] = useState(null);
   const [autoOpenTableId, setAutoOpenTableId] = useState(null);
@@ -249,24 +248,7 @@ function App() {
   }, []);
 
   useEffect(() => {
-    // Update event listeners
     if (window.electronAPI) {
-      window.electronAPI.onUpdateAvailable((info) => {
-        setUpdateInfo({ ...info, downloaded: false });
-      });
-      
-      window.electronAPI.onUpdateDownloaded((info) => {
-        setUpdateInfo({ ...info, downloaded: true });
-      });
-      
-      window.electronAPI.onUpdateError((error) => {
-        console.error('Update error:', error);
-      });
-      
-      window.electronAPI.onUpdateProgress((progress) => {
-        setUpdateDownloadProgress(progress);
-      });
-
       // Broadcast message listener
       if (window.electronAPI.onBroadcastMessage) {
         const cleanup = window.electronAPI.onBroadcastMessage((data) => {
@@ -1201,13 +1183,19 @@ function App() {
   };
 
   if (!launcherPassed) {
-    return <LauncherScreen onPassed={() => setLauncherPassed(true)} />;
+    return (
+      <>
+        <LauncherScreen onPassed={() => setLauncherPassed(true)} />
+        <KasaUpdateNotice {...kasaUpdates} />
+      </>
+    );
   }
 
   if (!isBranchReady && !branchGateResolved) {
     return (
       <>
         <CatalogSyncProgressBar progress={catalogSyncProgress} />
+        <KasaUpdateNotice {...kasaUpdates} />
         {showExitSplash && (
           <ExitSplash onComplete={handleExitComplete} />
         )}
@@ -1224,6 +1212,7 @@ function App() {
     return (
       <>
         <CatalogSyncProgressBar progress={catalogSyncProgress} />
+        <KasaUpdateNotice {...kasaUpdates} />
         {showExitSplash && (
           <ExitSplash onComplete={handleExitComplete} />
         )}
@@ -1598,26 +1587,7 @@ function App() {
         onClose={() => setPrintToast(null)}
         autoHideDuration={printToast?.status === 'printing' ? null : 2500}
       />
-      {updateInfo && (
-        <UpdateModal
-          updateInfo={updateInfo}
-          downloadProgress={updateDownloadProgress}
-          onDownload={async () => {
-            if (window.electronAPI) {
-              await window.electronAPI.downloadUpdate();
-            }
-          }}
-          onInstall={() => {
-            if (window.electronAPI) {
-              window.electronAPI.installUpdate();
-            }
-          }}
-          onClose={() => {
-            setUpdateInfo(null);
-            setUpdateDownloadProgress(null);
-          }}
-        />
-      )}
+      <KasaUpdateNotice {...kasaUpdates} />
 
       {/* Minimize Button - Sol Alt Köşe */}
       <button

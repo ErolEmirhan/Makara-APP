@@ -70,11 +70,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   downloadUpdate: () => ipcRenderer.invoke('download-update'),
   installUpdate: () => ipcRenderer.invoke('install-update'),
+  getDownloadedUpdate: () => ipcRenderer.invoke('get-downloaded-update'),
   onUpdateAvailable: (callback) => ipcRenderer.on('update-available', (event, info) => callback(info)),
   onUpdateDownloaded: (callback) => ipcRenderer.on('update-downloaded', (event, info) => callback(info)),
   onUpdateError: (callback) => ipcRenderer.on('update-error', (event, error) => callback(error)),
   onUpdateProgress: (callback) => ipcRenderer.on('update-download-progress', (event, progress) => callback(progress)),
   /** Katalog (kategori/ürün) Firebase senkronu ilerlemesi — activateBranch sırasında */
+  registerRemoteUiUpdates: () => ipcRenderer.invoke('remote-ui-register'),
+  applyRemoteUiUpdate: () => ipcRenderer.invoke('remote-ui-apply'),
+  onRemoteUiUpdate: (callback) => {
+    const channel = 'remote-ui-update-available';
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on(channel, listener);
+    return () => {
+      ipcRenderer.removeListener(channel, listener);
+    };
+  },
   onCatalogSyncProgress: (callback) => {
     const channel = 'catalog-sync-progress';
     const listener = (_event, data) => callback(data);

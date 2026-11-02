@@ -1,0 +1,45 @@
+# Kasa uygulamasının kabuğu (electron/) değişince release'i kendisi çıkarır; kasalar otomatik güncellenir.
+# Arayüz (src/) değişiklikleri buna gerek duymaz, Vercel deploy eder.
+name: Kasa release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'electron/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: kasa-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Sürüm numarası
+        run: node scripts/next-release-version.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - run: npx vite build
+
+      - name: Build ve GitHub release
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

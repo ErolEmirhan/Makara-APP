@@ -6122,9 +6122,12 @@ ipcMain.handle('select-image-file', async (event, productId = null) => {
 // Auto Updater Configuration
 const GITHUB_RELEASES_FEED =
   'https://github.com/ErolEmirhan/Makara-APP/releases/latest/download/';
-const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+// Release'ler GitHub Actions'tan otomatik çıkıyor; kasalar yarım saatte bir bakar
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
 let updateCheckInFlight = false;
 let lastUpdateCheckAt = 0;
+/** Arayüz geç açılsa da indirilmiş güncellemeyi sorup öğrenebilsin */
+let downloadedUpdateInfo = null;
 
 let semver;
 try {
@@ -6271,8 +6274,11 @@ autoUpdater.on('download-progress', (progressObj) => {
 autoUpdater.on('update-downloaded', (info) => {
   writeLog(`Güncelleme indirildi: ${info.version}`);
   console.log('✅ Güncelleme indirildi');
+  downloadedUpdateInfo = { version: info.version };
   sendUpdateEvent('update-downloaded', info);
 });
+
+ipcMain.handle('get-downloaded-update', () => downloadedUpdateInfo);
 
 ipcMain.handle('check-for-updates', async () => runUpdateCheck('ipc'));
 
@@ -6285,8 +6291,10 @@ ipcMain.handle('download-update', async () => {
   }
 });
 
+// Sessiz kurulum (kurulum sihirbazı açılmaz) ve kurulumdan sonra uygulama yeniden açılır
 ipcMain.handle('install-update', () => {
-  autoUpdater.quitAndInstall(false, true);
+  writeLog(`Güncelleme kuruluyor: ${downloadedUpdateInfo?.version || '-'}`);
+  autoUpdater.quitAndInstall(true, true);
 });
 
 // Print Receipt Handler

@@ -11,13 +11,16 @@ const REMOTE_UI_ORIGIN = new URL(REMOTE_UI_URL).origin;
 const LOCAL_UI_FILE = path.join(__dirname, '../dist/index.html');
 const STORAGE_BRIDGE_FILE = path.join(__dirname, 'storage-bridge.html');
 const PROBE_TIMEOUT_MS = 6000;
-const UPDATE_CHECK_MS = 5 * 60 * 1000;
+const UPDATE_CHECK_MS = 2 * 60 * 1000;
 
 let current = { mode: null, build: null };
 let log = (msg) => console.log(msg);
 let updatePromptOpen = false;
 let dismissedBuild = null;
 let storageSnapshotPath = null;
+/** Arayüz kendi güncelleme bildirimini gösteriyorsa (remote-ui-register) diyalog açılmaz */
+let rendererHandlesUpdates = false;
+let pendingUpdate = null;
 
 function compareVersions(a, b) {
   const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
@@ -104,20 +107,27 @@ async function showLocalUi(win, reason) {
   current = { mode: 'local', build: null };
 }
 
-async function loadMainUi(win) {
-  const probe = await probeRemoteUi();
-  if (!probe.ok) return showLocalUi(win, probe.reason);
+async function openRemoteUiOrFallback(win, build) {
   await ensureFileStorageSnapshot();
   try {
-    await showRemoteUi(win, probe.build);
-    log(`Kasa arayüzü Vercel'den açıldı: ${probe.build}`);
+    await showRemoteUi(win, build);
+    log(`Kasa arayüzü Vercel'den açıldı: ${build}`);
   } catch (error) {
     if (!win.isDestroyed()) await showLocalUi(win, error.message);
   }
 }
 
+async function loadMainUi(win) {
+  const probe = await probeRemoteUi();
+  if (!probe.ok) return showLocalUi(win, probe.reason);
+  await openRemoteUiOrFallback(win, probe.build);
+}
+
 /** Uzak sayfa kasa penceresini başka siteye götüremesin; dış linkler tarayıcıda açılır */
 function guardNavigation(win) {
+  win.webContents.on('did-navigate', () => {
+    rendererHandlesUpdates = false;
+  });
   win.webContents.on('will-navigate', (event, url) => {
     if (url.startsWith('file:') || url.startsWith('http://localhost')) return;
     let origin = null;
@@ -136,8 +146,15 @@ async function checkForRemoteUiUpdate(win) {
   if (!probe.ok) return;
   const recovering = current.mode === 'local';
   if (!recovering && probe.build === current.build) return;
-  if (probe.build === dismissedBuild) return;
 
+  if (rendererHandlesUpdates) {
+    if (pendingUpdate?.build === probe.build) return;
+    pendingUpdate = { build: probe.build, recovering };
+    win.webContents.send('remote-ui-update-available', pendingUpdate);
+    return;
+  }
+
+  if (probe.build === dismissedBuild) return;
   updatePromptOpen = true;
   try {
     const { response } = await dialog.showMessageBox(win, {
@@ -155,9 +172,7 @@ async function checkForRemoteUiUpdate(win) {
       dismissedBuild = probe.build;
       return;
     }
-    await ensureFileStorageSnapshot();
-    await showRemoteUi(win, probe.build);
-    log(`Kasa arayüzü yenilendi: ${probe.build}`);
+    await openRemoteUiOrFallback(win, probe.build);
   } catch (error) {
     log(`Kasa arayüzü yenilenemedi: ${error.message}`);
   } finally {
@@ -175,6 +190,21 @@ function initRemoteUi({ logger } = {}) {
       origin = new URL(event.senderFrame.url).origin;
     } catch (_) {}
     event.returnValue = origin === REMOTE_UI_ORIGIN ? readStorageSnapshot() : null;
+  });
+  ipcMain.handle('remote-ui-register', (event) => {
+    // Sayfa değişirken eski sayfadan geç gelen kayıt yeni sayfaya sayılmasın
+    if (!event.senderFrame || event.senderFrame.url !== event.sender.getURL()) return null;
+    rendererHandlesUpdates = true;
+    return pendingUpdate;
+  });
+  // Arayüz sepet boş ve kasa boştayken ya da "Şimdi güncelle" ile çağırır
+  ipcMain.handle('remote-ui-apply', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || !pendingUpdate) return false;
+    const { build } = pendingUpdate;
+    pendingUpdate = null;
+    await openRemoteUiOrFallback(win, build);
+    return true;
   });
 }
 

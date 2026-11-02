@@ -22,9 +22,12 @@ import KasaUpdateNotice, { useKasaUpdates } from './components/KasaUpdateNotice'
 import ExpenseModal from './components/ExpenseModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
+import { takeHotResume } from './utils/hotResume';
 import SettingsModal from './components/SettingsModal';
 
 const BRANCH_ONBOARDING_KEY = 'makara_pos_branch_onboarded';
+/** Arayüz güncellemesiyle yenilendiyse kaldığı yer (sayfa başına bir kez okunur) */
+const HOT_RESUME = takeHotResume();
 /** Son seçilen şube — localStorage anahtarı */
 const LAST_BRANCH_SPLASH_KEY = 'makara_pos_splash_branch_key';
 
@@ -41,7 +44,7 @@ function filterYanUrunlerCategoriesForSultan(cats) {
 
 function App() {
   /** İnternet kapısı geçilmeden ana içerik render edilmez */
-  const [launcherPassed, setLauncherPassed] = useState(false);
+  const [launcherPassed, setLauncherPassed] = useState(Boolean(HOT_RESUME));
   const [selectedBranchKey, setSelectedBranchKey] = useState('');
   const [activeBranch, setActiveBranch] = useState(null);
   const [isActivatingBranch, setIsActivatingBranch] = useState(false);
@@ -56,28 +59,32 @@ function App() {
     }
   });
   const [branchBootstrapKey, setBranchBootstrapKey] = useState(0);
-  const [currentView, setCurrentView] = useState('pos'); // 'pos', 'sales', or 'tables'
+  const [currentView, setCurrentView] = useState(HOT_RESUME?.view || 'pos'); // 'pos', 'sales', or 'tables'
   const [categories, setCategories] = useState([]);
   const [products, setProducts] = useState([]);
   const [allProducts, setAllProducts] = useState([]); // Tüm kategorilerden ürünler (arama için)
-  const [selectedCategory, setSelectedCategory] = useState(null);
+  const [selectedCategory, setSelectedCategory] = useState(HOT_RESUME?.selectedCategory || null);
   const [yanUrunler, setYanUrunler] = useState([]); // Yan Ürünler listesi
   const [showYanUrunlerModal, setShowYanUrunlerModal] = useState(false); // Yan Ürünler yönetim modalı
   const YAN_URUNLER_CATEGORY_ID = -999; // Özel kategori ID'si
   /** Sanal kategori: tüm katalog (getProducts(null)); IPC'de -998 = tümü */
   const ALL_PRODUCTS_CATEGORY_ID = -998;
-  const [cart, setCart] = useState([]);
-  const [orderNote, setOrderNote] = useState('');
+  const [cart, setCart] = useState(() => (Array.isArray(HOT_RESUME?.cart) ? HOT_RESUME.cart : []));
+  const [orderNote, setOrderNote] = useState(HOT_RESUME?.orderNote || '');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [showSplitPaymentModal, setShowSplitPaymentModal] = useState(false);
   const [showReceiptModal, setShowReceiptModal] = useState(false);
   const [receiptData, setReceiptData] = useState(null);
-  const [selectedTable, setSelectedTable] = useState(null); // Masa seçimi
-  const [userType, setUserType] = useState('Admin'); // 'Admin' or 'Personel'
+  const [selectedTable, setSelectedTable] = useState(HOT_RESUME?.selectedTable || null); // Masa seçimi
+  const [userType, setUserType] = useState(HOT_RESUME?.userType || 'Admin'); // 'Admin' or 'Personel'
   const [activeRoleSplash, setActiveRoleSplash] = useState(null);
   const [saleSuccessInfo, setSaleSuccessInfo] = useState(null);
   const [printToast, setPrintToast] = useState(null); // { status: 'printing' | 'success' | 'error', message: string }
-  const kasaUpdates = useKasaUpdates(cart.length);
+  const hotResumePendingRef = useRef(HOT_RESUME);
+  /** Arayüz güncellemesinden hemen önce kaydedilir; yenilenen sayfa buradan devam eder */
+  const resumeSnapshotRef = useRef(null);
+  resumeSnapshotRef.current = () => ({ view: currentView, cart, orderNote, selectedTable, userType, selectedCategory });
+  const kasaUpdates = useKasaUpdates(cart.length, resumeSnapshotRef, { inLauncher: !launcherPassed });
   const [tableRefreshTrigger, setTableRefreshTrigger] = useState(0);
   const [autoOpenOrderId, setAutoOpenOrderId] = useState(null);
   const [autoOpenTableId, setAutoOpenTableId] = useState(null);
@@ -110,6 +117,10 @@ function App() {
     setActiveRoleSplash(role);
     setTimeout(() => setActiveRoleSplash(null), 1300);
   };
+
+  useEffect(() => {
+    if (HOT_RESUME) showToast('Kasa arayüzü güncellendi', 'success');
+  }, []);
 
   const [catalogSyncProgress, setCatalogSyncProgress] = useState(null);
   const [broadcastMessage, setBroadcastMessage] = useState(null);
@@ -207,8 +218,11 @@ function App() {
             localStorage.setItem(LAST_BRANCH_SPLASH_KEY, key);
           } catch (_) {}
           setIsBranchReady(true);
-          setCurrentView(key === 'makarasur' || key === 'sultansomati' ? 'tables' : 'pos');
-          if (key === 'makara') setUserType('Admin');
+          const resume = hotResumePendingRef.current;
+          hotResumePendingRef.current = null;
+          setCurrentView(resume?.view || (key === 'makarasur' || key === 'sultansomati' ? 'tables' : 'pos'));
+          if (resume?.userType) setUserType(resume.userType);
+          else if (key === 'makara') setUserType('Admin');
         }
       } catch (e) {
         console.error('Otomatik şube bağlantısı:', e);
@@ -1192,6 +1206,10 @@ function App() {
   }
 
   if (!isBranchReady && !branchGateResolved) {
+    // Güncelleme yenilemesi: şube anında bağlanır, araya spinner girmesin
+    if (hotResumePendingRef.current) {
+      return <div className="min-h-screen w-full bg-gradient-to-br from-[#f0f4ff] via-[#e0e7ff] to-[#fce7f3]" />;
+    }
     return (
       <>
         <CatalogSyncProgressBar progress={catalogSyncProgress} />

@@ -1,10 +1,13 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { saveHotResume } from '../utils/hotResume';
 
-// Arayüz yenilemesi hafif (sayfa yenilenir), kasa güncellemesi uygulamayı yeniden başlatır.
-const UI_IDLE_MS = 15000;
+// Arayüz güncellemesi: sayfa kaldığı yerden yenilenir (sepet, ekran, masa korunur), sormadan uygulanır.
+// Kasa güncellemesi: uygulama yeniden başlar; sepet boş ve kasa boştayken uygulanır.
+const UI_IDLE_MS = 4000;
 const SHELL_IDLE_MS = 60000;
-const APPLY_DELAY_MS = 1400;
+const SHELL_APPLY_DELAY_MS = 1400;
+const UI_CHECK_MS = 20000;
 
 function isTyping() {
   const el = document.activeElement;
@@ -12,18 +15,39 @@ function isTyping() {
   return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable;
 }
 
+/** Açık modal (ödeme, masa, ayarlar…) varken yenilenmez; tıklanamayan katmanlar sayılmaz */
+function isModalOpen() {
+  return [...document.querySelectorAll('.fixed.inset-0')].some(
+    (el) => !el.classList.contains('pointer-events-none') && !el.closest('[data-kasa-update]')
+  );
+}
+
+function readBuildId(text) {
+  const m = text && text.match(/assets\/index-[\w-]+\.js/);
+  return m ? m[0] : null;
+}
+
+/** Bu sayfanın yüklendiği paket; aynı paket için gelen "yeni sürüm" yok sayılır */
+function readOwnBuild() {
+  const el = document.querySelector('script[type="module"][src*="assets/index-"]');
+  return readBuildId(el?.getAttribute('src'));
+}
+
 /**
- * Vercel'de yeni arayüz ya da GitHub'da yeni kasa sürümü hazır olunca: sepet boş, yazı yazılmıyor ve
- * kasa bir süredir boştaysa sormadan uygular. Sepette ürün varsa bekler (gönderilmemiş sipariş kaybolmasın).
  * App'in tepesinde çağrılır ki açılış ekranındayken gelen haber kaçmasın.
+ * snapshotRef.current() güncellemeden hemen önce kaldığı yeri verir. Açılış ekranındayken
+ * kaybolacak bir şey olmadığından arayüz güncellemesi beklemeden uygulanır.
  */
-export function useKasaUpdates(cartCount) {
+export function useKasaUpdates(cartCount, snapshotRef, { inLauncher = false } = {}) {
   const [uiUpdate, setUiUpdate] = useState(null);
   const [shellUpdate, setShellUpdate] = useState(null);
   const [applying, setApplying] = useState(null);
   const lastInputRef = useRef(Date.now());
   const cartRef = useRef(cartCount);
   cartRef.current = cartCount;
+  const inLauncherRef = useRef(inLauncher);
+  inLauncherRef.current = inLauncher;
+  const ownBuildRef = useRef(readOwnBuild());
 
   const api = window.electronAPI;
   // Eski kasa sürümleri kurulum sihirbazını görünür açar; onlarda kendiliğinden kurmayız
@@ -31,14 +55,32 @@ export function useKasaUpdates(cartCount) {
 
   useEffect(() => {
     if (!api) return undefined;
+    const acceptUi = (u) => {
+      if (u?.build && u.build !== ownBuildRef.current) setUiUpdate(u);
+    };
     const offs = [];
-    if (api.onRemoteUiUpdate) offs.push(api.onRemoteUiUpdate((u) => u && setUiUpdate(u)));
-    api.registerRemoteUiUpdates?.().then((u) => u && setUiUpdate(u)).catch(() => {});
+    if (api.onRemoteUiUpdate) offs.push(api.onRemoteUiUpdate(acceptUi));
+    api.registerRemoteUiUpdates?.().then(acceptUi).catch(() => {});
     api.onUpdateDownloaded?.((info) => setShellUpdate({ version: info?.version }));
     api.getDownloadedUpdate?.().then((info) => info && setShellUpdate(info)).catch(() => {});
     api.onUpdateError?.((error) => console.error('Update error:', error));
     return () => offs.forEach((off) => off?.());
   }, [api]);
+
+  // Vercel'den açıldıysa yeni deploy'u kabuğu beklemeden kendisi fark eder
+  useEffect(() => {
+    if (location.protocol !== 'https:' || !ownBuildRef.current) return undefined;
+    const check = async () => {
+      try {
+        const res = await fetch(`/?ui-check=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const build = readBuildId(await res.text());
+        if (build && build !== ownBuildRef.current) setUiUpdate({ build });
+      } catch (_) {}
+    };
+    const id = setInterval(check, UI_CHECK_MS);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     const mark = () => {
@@ -49,41 +91,50 @@ export function useKasaUpdates(cartCount) {
     return () => events.forEach((e) => window.removeEventListener(e, mark, { capture: true }));
   }, []);
 
-  const apply = useCallback((kind) => {
-    setApplying(kind);
-    setTimeout(async () => {
-      try {
-        if (kind === 'shell') {
-          await window.electronAPI.installUpdate();
-        } else if (!(await window.electronAPI.applyRemoteUiUpdate())) {
-          setApplying(null);
-        }
-      } catch {
-        setApplying(null);
-      }
-    }, APPLY_DELAY_MS);
+  const applyUi = useCallback(() => {
+    setApplying('ui');
+    saveHotResume(snapshotRef?.current?.());
+    // Paketteki yedek arayüzdeyken (internet sonradan geldi) Vercel'e kabuk geçirir
+    if (location.protocol === 'file:' && window.electronAPI?.applyRemoteUiUpdate) {
+      window.electronAPI.applyRemoteUiUpdate().then((ok) => {
+        if (!ok) setApplying(null);
+      }).catch(() => setApplying(null));
+    } else {
+      location.reload();
+    }
+  }, [snapshotRef]);
+
+  const applyShell = useCallback(() => {
+    setApplying('shell');
+    setTimeout(() => {
+      window.electronAPI.installUpdate().catch(() => setApplying(null));
+    }, SHELL_APPLY_DELAY_MS);
   }, []);
 
   useEffect(() => {
     if ((!uiUpdate && !shellUpdate) || applying) return undefined;
     const id = setInterval(() => {
-      if (cartRef.current > 0 || isTyping()) return;
+      if (uiUpdate && !shellUpdate && inLauncherRef.current) {
+        applyUi();
+        return;
+      }
+      if (isTyping() || isModalOpen()) return;
       const idle = Date.now() - lastInputRef.current;
       if (shellUpdate) {
-        if (shellSilent && idle >= SHELL_IDLE_MS) apply('shell');
+        if (shellSilent && cartRef.current === 0 && idle >= SHELL_IDLE_MS) applyShell();
       } else if (idle >= UI_IDLE_MS) {
-        apply('ui');
+        applyUi();
       }
     }, 1000);
     return () => clearInterval(id);
-  }, [uiUpdate, shellUpdate, applying, apply, shellSilent]);
+  }, [uiUpdate, shellUpdate, applying, applyUi, applyShell, shellSilent]);
 
   const applyNow = useCallback(() => {
     if (cartRef.current > 0) return;
-    apply(shellUpdate ? 'shell' : 'ui');
-  }, [apply, shellUpdate]);
+    applyShell();
+  }, [applyShell]);
 
-  return { uiUpdate, shellUpdate, applying, applyNow, cartCount, autoApplies: !shellUpdate || shellSilent };
+  return { shellUpdate, applying, applyNow, cartCount, autoApplies: shellSilent };
 }
 
 function RefreshGlyph({ className }) {
@@ -94,8 +145,8 @@ function RefreshGlyph({ className }) {
   );
 }
 
-export default function KasaUpdateNotice({ uiUpdate, shellUpdate, applying, applyNow, cartCount, autoApplies }) {
-  if (!applying && !uiUpdate && !shellUpdate) return null;
+export default function KasaUpdateNotice({ shellUpdate, applying, applyNow, cartCount, autoApplies }) {
+  if (applying === 'ui' || (!applying && !shellUpdate)) return null;
 
   const styles = (
     <style>{`
@@ -108,9 +159,9 @@ export default function KasaUpdateNotice({ uiUpdate, shellUpdate, applying, appl
   );
 
   if (applying) {
-    const isShell = applying === 'shell';
     return createPortal(
       <div
+        data-kasa-update
         className="fixed inset-0 z-[100001] flex items-center justify-center bg-slate-950/60 backdrop-blur-md px-4"
         style={{ animation: 'kasa-upd-fade .25s ease-out' }}
         role="status"
@@ -136,10 +187,10 @@ export default function KasaUpdateNotice({ uiUpdate, shellUpdate, applying, appl
             </div>
           </div>
           <p className="text-xl font-extrabold tracking-tight text-white">
-            {isShell ? 'Kasa güncelleniyor' : 'Güncelleniyor'}
+            Kasa güncelleniyor
           </p>
           <p className="mt-1.5 text-sm font-medium text-slate-400">
-            {isShell ? 'Birkaç saniye içinde yeniden açılacak' : 'Yeni sürüm yükleniyor…'}
+            Birkaç saniye içinde yeniden açılacak
           </p>
           <div className="relative mx-auto mt-6 h-1 w-40 overflow-hidden rounded-full bg-white/10">
             <div
@@ -153,7 +204,6 @@ export default function KasaUpdateNotice({ uiUpdate, shellUpdate, applying, appl
     );
   }
 
-  const isShell = !!shellUpdate;
   const subtitle = cartCount > 0
     ? 'Sepet boşalınca kendiliğinden güncellenecek'
     : autoApplies
@@ -162,6 +212,7 @@ export default function KasaUpdateNotice({ uiUpdate, shellUpdate, applying, appl
 
   return createPortal(
     <div
+      data-kasa-update
       className="fixed bottom-6 left-1/2 z-[99990] w-[min(92vw,34rem)]"
       style={{ transform: 'translateX(-50%)', animation: 'kasa-upd-in .4s cubic-bezier(0.22, 1, 0.36, 1)' }}
       role="status"
@@ -174,7 +225,7 @@ export default function KasaUpdateNotice({ uiUpdate, shellUpdate, applying, appl
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-[15px] font-bold tracking-tight text-white">
-            {isShell ? 'Kasa güncellemesi hazır' : 'Yeni sürüm hazır'}
+            Kasa güncellemesi hazır
           </p>
           <p className="truncate text-[12.5px] font-medium text-slate-400">{subtitle}</p>
         </div>

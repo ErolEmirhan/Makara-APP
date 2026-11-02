@@ -12,6 +12,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:ital,wght@0,500;0,600;0,700;0,800;0,900;1,900&display=swap" rel="stylesheet">
   <script>
     (function(){try{if(localStorage.getItem('makara_pos_ui_theme')==='dark')document.documentElement.classList.add('dark');}catch(e){}})();
+    // Güncelleme yenilemesinde şeffaf pencere bir an masaüstünü göstermesin
+    (function(){try{if(sessionStorage.getItem('makara_hot_resume'))document.documentElement.style.background=document.documentElement.classList.contains('dark')?'#141416':'#eef1fb';}catch(e){}})();
   </script>
 </head>
 <body>

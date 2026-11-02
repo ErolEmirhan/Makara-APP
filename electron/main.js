@@ -6666,12 +6666,23 @@ function resolvePrinterDeviceName(printerName) {
   return partial || printerName;
 }
 
-let sharedPrintWindow = null;
-let sharedPrintQueue = Promise.resolve();
+// Her yazıcının kendi gizli fiş penceresi ve sırası var: farklı yazıcılar (mutfak, bar…) aynı anda basar,
+// aynı yazıcıya giden fişler yine sırayla gider. Tek ortak kuyrukta yazıcılar birbirini bekliyordu.
+const printLanes = new Map();
 
-function getSharedPrintWindow() {
-  if (sharedPrintWindow && !sharedPrintWindow.isDestroyed()) return sharedPrintWindow;
-  sharedPrintWindow = new BrowserWindow({
+function getPrintLane(printerName) {
+  const key = String(printerName || '__default__');
+  let lane = printLanes.get(key);
+  if (!lane) {
+    lane = { win: null, queue: Promise.resolve() };
+    printLanes.set(key, lane);
+  }
+  return lane;
+}
+
+function getLaneWindow(lane) {
+  if (lane.win && !lane.win.isDestroyed()) return lane.win;
+  const win = new BrowserWindow({
     show: false,
     x: -3200,
     y: -3200,
@@ -6685,31 +6696,44 @@ function getSharedPrintWindow() {
       backgroundThrottling: false
     }
   });
-  sharedPrintWindow.webContents.setBackgroundThrottling(false);
-  sharedPrintWindow.on('closed', () => { sharedPrintWindow = null; });
-  return sharedPrintWindow;
+  win.webContents.setBackgroundThrottling(false);
+  win.on('closed', () => {
+    if (lane.win === win) lane.win = null;
+  });
+  lane.win = win;
+  return win;
 }
 
+/** Atanmış yazıcıların pencereleri açılışta hazırlanır; ilk sipariş pencere açılmasını beklemez */
 function prewarmPrintWindow() {
   try {
-    const win = getSharedPrintWindow();
-    const url = win.webContents.getURL();
-    if (!url || url === '') win.loadURL('about:blank').catch(() => {});
+    const names = new Set([null]);
+    for (const a of db.printerAssignments || []) {
+      if (a?.printerName) names.add(a.printerName);
+    }
+    for (const name of names) {
+      const win = getLaneWindow(getPrintLane(name));
+      const url = win.webContents.getURL();
+      if (!url || url === '') win.loadURL('about:blank').catch(() => {});
+    }
   } catch (_) {}
   refreshPrinterNameCache();
 }
 
+/**
+ * options.go: verilirse fiş pencereye yüklenip ölçülür, basmak için bu söz beklenir
+ * (PWA kilidi sunucudan dönerken hazırlık yapılır); false gelirse basılmaz.
+ */
 function enqueueHtmlPrint(printerName, html, options = {}) {
-  const job = sharedPrintQueue.then(
-    () => printHtmlNow(printerName, html, options),
-    () => printHtmlNow(printerName, html, options)
-  );
-  sharedPrintQueue = job.then(() => {}, () => {});
+  const lane = getPrintLane(printerName);
+  const run = () => printHtmlNow(lane, printerName, html, options);
+  const job = lane.queue.then(run, run);
+  lane.queue = job.then(() => {}, () => {});
   return job;
 }
 
-async function printHtmlNow(printerName, html, options = {}) {
-  const win = getSharedPrintWindow();
+async function printHtmlNow(lane, printerName, html, options = {}) {
+  const win = getLaneWindow(lane);
   await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
   let scrollHeight = 400;
   try {
@@ -6728,6 +6752,7 @@ async function printHtmlNow(printerName, html, options = {}) {
   const height = Math.min(2400, Math.max(240, (Number(scrollHeight) || 400) + 24));
   win.setSize(302, height);
   await new Promise((r) => setTimeout(r, 16));
+  if (options.go && !(await options.go)) return false;
   const deviceName = resolvePrinterDeviceName(printerName);
   const printOnce = (opts) => new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Yazdırma timeout')), 12000);
@@ -6756,10 +6781,11 @@ async function printHtmlNow(printerName, html, options = {}) {
     if (options.fallbackDefault && printOptions.deviceName) {
       delete printOptions.deviceName;
       await printOnce(printOptions);
-      return;
+      return true;
     }
     throw err;
   }
+  return true;
 }
 
 // Metin belgesi olarak yazdır - temp .txt + PowerShell (yol/kaçış güvenli: -File script)
@@ -17640,7 +17666,11 @@ async function printPreloadedJob(printJobId) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** PWA / Firestore siparişleri — mobil LAN API ile aynı yazdırma yolu */
-async function printPwaOrderReceipts(itemsWithStaff, adisyonData) {
+/**
+ * options.go: fişler yazıcı pencerelerine şimdiden yüklenir, kilit gelince (true) hepsi aynı anda basılır.
+ * Kasadaki sepetin hazır fişine (preloadPrintWindows) dokunmaz.
+ */
+async function printPwaOrderReceipts(itemsWithStaff, adisyonData, options = {}) {
   console.log('\n🖨️ [PWA] Adisyon yazdırma başlıyor...');
   const enriched = enrichPwaOrderItemsForPrint(itemsWithStaff);
   const printData = { ...adisyonData, items: enriched };
@@ -17663,17 +17693,14 @@ async function printPwaOrderReceipts(itemsWithStaff, adisyonData) {
   console.log(`[PWA print] Yazıcılar: [${printerNames.join(', ') || 'yok'}]`);
 
   if (printerNames.length > 0) {
-    const printJobId = preloadPrintWindows(htmlReceipts);
-    if (printJobId && preloadedPrintJobs.has(printJobId)) {
-      console.log(`[PWA print] Hazır pencere ile yazdırılıyor (jobId=${printJobId})`);
-      await printPreloadedJob(printJobId);
-      return true;
-    }
-    console.log('[PWA print] preload başarısız, HTML fallback');
-    await printPreparedHtmlReceipts(htmlReceipts);
-    return true;
+    await Promise.all(printerNames.map((printerName) =>
+      enqueueHtmlPrint(printerName, htmlReceipts[printerName], { go: options.go })
+        .catch((err) => console.error(`[PWA print] ${printerName}:`, err?.message || err))
+    ));
+    return options.go ? options.go : true;
   }
 
+  if (options.go && !(await options.go)) return false;
   console.warn('[PWA print] Kategori yazıcısı bulunamadı, printAdisyonByCategory deneniyor');
   await printAdisyonByCategory(enriched, printData);
   return false;
@@ -20116,6 +20143,7 @@ async function syncAllStaffToFirestore(options = {}) {
 // ── PWA sipariş kuyruğu (Firestore mobile_orders → yazdır + yerel db) ───────
 const mobileOrdersProcessing = new Set();
 const MOBILE_QUEUE_OWNER = `${os.hostname()}-${process.pid}`;
+const PWA_PRINT_ARM_TIMEOUT_MS = 8000;
 
 /** İki kasa aynı PWA kaydını birden işlemesin. Yalnızca bekleyen kaydı alan kasa true döner. */
 async function claimMobileQueueDoc(ref) {
@@ -20140,19 +20168,16 @@ async function claimMobileQueueDoc(ref) {
   }
 }
 
-async function processMobileOrderPayload(payload) {
+/** PWA siparişinin fiş verisi; kilitten önce hazırlanabilir, yerel kayıt da aynı saat damgasını kullanır */
+function buildPwaOrderPrintPlan(payload) {
   const actionType = String(payload?.type || payload?.action || '').trim();
   if (payload?.queueKind === 'action' || MOBILE_ACTION_TYPES.has(actionType)) {
     throw new Error('Ürün aktarımı sipariş olarak kaydedilemez');
   }
-  const { items, tableId, tableName, tableType, orderNote, staffId, staffName } = payload;
+  const { items, tableName, tableType, orderNote, staffId, staffName } = payload;
   if (!items || !Array.isArray(items) || items.length === 0) {
     throw new Error('Ürün listesi gerekli');
   }
-
-  const totalAmount = payload.totalAmount != null
-    ? Number(payload.totalAmount)
-    : items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0);
 
   const staff = staffId && db.staff ? db.staff.find((s) => s.id === staffId) : null;
   const resolvedStaffName = staffName || (staff ? `${staff.name} ${staff.surname}` : null);
@@ -20176,9 +20201,23 @@ async function processMobileOrderPayload(payload) {
     sale_time: adisyonTime,
     staff_name: resolvedStaffName || null
   };
+  return { resolvedStaffName, adisyonDate, adisyonTime, enrichedForPrint, adisyonDataForPrint };
+}
+
+/** prepared: { plan, printedOk? } — printedOk varsa fiş kilitle birlikte zaten basıldı, tekrar basılmaz */
+async function processMobileOrderPayload(payload, prepared = null) {
+  const plan = prepared?.plan || buildPwaOrderPrintPlan(payload);
+  const { items, tableId, tableName, tableType, orderNote, staffId } = payload;
+  const { resolvedStaffName, adisyonDate, adisyonTime, enrichedForPrint, adisyonDataForPrint } = plan;
+
+  const totalAmount = payload.totalAmount != null
+    ? Number(payload.totalAmount)
+    : items.reduce((s, i) => s + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0);
 
   // Yazdırmayı ÖNCE ve await ile tetikle (mobil LAN API ile aynı)
-  const printedOk = await printPwaOrderReceipts(enrichedForPrint, adisyonDataForPrint);
+  const printedOk = typeof prepared?.printedOk === 'boolean'
+    ? prepared.printedOk
+    : await printPwaOrderReceipts(enrichedForPrint, adisyonDataForPrint);
 
   for (const item of enrichedForPrint) {
     if (!item.isGift) {
@@ -20367,13 +20406,35 @@ async function handleFirestoreMobileOrder(docSnap) {
       throw new Error('Firestore mobile_orders güncellemesi hazır değil');
     }
     const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
-    const claimed = await claimMobileQueueDoc(ref);
+    const isAction = isMobileQueueAction(data);
+
+    // Sipariş: kilit sunucuya giderken fişler yazıcı pencerelerine yüklenir, kilit gelince hepsi aynı anda basılır.
+    // Kilit alınamazsa basılmaz (iki kasada çift fiş olmaz).
+    let plan = null;
+    let armed = null;
+    let releasePrint = () => {};
+    if (!isAction) {
+      try {
+        plan = buildPwaOrderPrintPlan(data);
+        const go = new Promise((resolve) => { releasePrint = resolve; });
+        armed = printPwaOrderReceipts(plan.enrichedForPrint, plan.adisyonDataForPrint, { go });
+      } catch (_) {
+        plan = null;
+      }
+    }
+
+    const claimPromise = claimMobileQueueDoc(ref);
+    // Kilit takılırsa yazıcı sıraları (kasanın kendi fişleri) beklemesin
+    const early = await Promise.race([claimPromise, sleep(PWA_PRINT_ARM_TIMEOUT_MS).then(() => null)]);
+    releasePrint(early === true);
+    const claimed = early === null ? await claimPromise : early;
+    const armedResult = armed ? await armed.catch(() => false) : false;
     if (!claimed) {
       console.log(`PWA sipariş başka kasada işleniyor: ${docId}`);
       return;
     }
 
-    if (isMobileQueueAction(data)) {
+    if (isAction) {
       const result = await processMobileActionPayload(data);
 
       if (result?.requiresReason) {
@@ -20390,7 +20451,8 @@ async function handleFirestoreMobileOrder(docSnap) {
       await markMobileActionProcessed(ref, result);
       console.log(`✅ PWA işlem tamamlandı: ${docId} (${data.type})`);
     } else {
-      await processMobileOrderPayload(data);
+      const printedWithClaim = early === true && plan;
+      await processMobileOrderPayload(data, printedWithClaim ? { plan, printedOk: armedResult } : null);
 
       await firebaseUpdateDoc(ref, {
         status: 'processed',

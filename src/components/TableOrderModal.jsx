@@ -874,7 +874,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
           )}
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <div className="grid min-h-0 flex-1 grid-cols-1 grid-rows-[minmax(0,1fr)_auto] lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-1">
           <section className="flex min-h-0 flex-col border-b border-slate-100 lg:border-b-0 lg:border-r">
             <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4 sm:px-5">
               {itemsLoading ? (
@@ -1090,7 +1090,56 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                 <p className="text-xs text-slate-400 line-through">₺{originalTotalAmount.toFixed(2)}</p>
               )}
             </div>
-            {order.status === 'pending' ? (
+            {order.status === 'pending' && showPartialPay ? (
+              <div className="flex min-h-0 flex-1 flex-col gap-2">
+                <div className="shrink-0 rounded-2xl bg-white px-4 py-3 text-center">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">Seçilen tutar</p>
+                  <p className={`mt-0.5 text-4xl font-black tracking-tight ${selectedPartialAmount > 0.009 ? 'text-emerald-600' : 'text-slate-300'}`}>
+                    ₺{selectedPartialAmount.toFixed(2)}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {selectedPartialAmount > 0.009 ? 'Ödemesi alınacak ürünler seçildi' : 'Soldan ödemesi alınacak ürünleri seçin'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={partialProcessing || selectedPartialAmount <= 0.009}
+                  onClick={() => {
+                    if (partialProcessing) return;
+                    if (selectedPartialAmount <= 0.009) {
+                      showToast('Önce soldan ürün seçin', 'warning');
+                      return;
+                    }
+                    setPartialMethodOpen(true);
+                  }}
+                  className={`flex min-h-[8rem] flex-1 flex-col items-center justify-center gap-2 rounded-2xl px-3 text-white shadow-sm transition ${
+                    selectedPartialAmount > 0.009 && !partialProcessing
+                      ? 'bg-emerald-500 hover:bg-emerald-600 active:scale-[0.99]'
+                      : 'cursor-not-allowed bg-slate-300'
+                  }`}
+                >
+                  {partialProcessing ? (
+                    <span className="h-8 w-8 animate-spin rounded-full border-4 border-white/40 border-t-white" />
+                  ) : (
+                    <svg className="h-9 w-9" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                  )}
+                  <span className="text-[30px] font-black leading-none tracking-tight [text-shadow:0_1px_2px_rgba(0,0,0,0.35)]">
+                    {partialProcessing ? 'Ödeme alınıyor…' : 'Ödeme al'}
+                  </span>
+                  {selectedPartialAmount > 0.009 && !partialProcessing && (
+                    <span className="text-lg font-bold text-white/90">₺{selectedPartialAmount.toFixed(2)}</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  disabled={partialProcessing}
+                  onClick={exitPartialPay}
+                  className="h-14 shrink-0 rounded-2xl bg-white text-base font-semibold text-slate-600 ring-1 ring-slate-200 transition hover:bg-slate-100 disabled:opacity-40"
+                >
+                  Vazgeç · Siparişe dön
+                </button>
+              </div>
+            ) : order.status === 'pending' ? (
               <div className="flex min-h-0 flex-1 flex-col gap-2">
                 <button type="button" onClick={onRequestAdisyon} disabled={showPartialPay} className={`relative flex items-stretch overflow-hidden rounded-2xl bg-amber-500 text-white shadow-sm transition hover:bg-amber-600 disabled:cursor-not-allowed ${showPartialPay ? 'h-[4.5rem] shrink-0' : 'min-h-0 flex-1'}`}>
                   <span className="relative flex aspect-[1/2] shrink-0 items-center justify-center self-stretch">

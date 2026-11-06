@@ -910,6 +910,7 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                 const qtyLeft = isGift ? qtyWas : units.filter((unit) => !unit.paid && unit.due > 0.009).length;
                 const qtyChanged = !isGift && qtyLeft < qtyWas;
                 const splitCard = showPartialPay && units.length > 0;
+                const parcelName = item.product_name || 'Ürün';
                 const renderParcel = (unit, index, edge) => {
                   const settled = unit.paid || unit.due <= 0.009;
                   const picked = !settled && partialKeys.has(unit.key);
@@ -923,8 +924,8 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                         if (settled || selectableIndex < 0) return;
                         selectPartialPrefix(selectableUnits, selectableIndex);
                       }}
-                      title={settled ? 'Ödendi' : `₺${unit.due.toFixed(2)}`}
-                      className={`flex min-w-0 items-center justify-center text-sm font-black leading-none ${
+                      title={settled ? `${parcelName} · Ödendi` : `${parcelName} · ₺${unit.due.toFixed(2)}`}
+                      className={`flex min-w-0 items-center justify-center overflow-hidden px-0.5 text-center font-black ${
                         edge === 'row' ? 'h-12' : 'flex-1'
                       } ${edge === 'row' && index % 10 !== 0 ? 'border-l' : ''} ${
                         edge !== 'row' ? 'border-l' : ''
@@ -937,12 +938,12 @@ const TableOrderModal = ({ order, items, itemsLoading = false, customerMode = fa
                       }`}
                     >
                       {settled ? (
-                        <span className="flex flex-col items-center gap-0.5">
-                          <span className="text-[10px] leading-none line-through">{index + 1}</span>
+                        <span className="flex min-w-0 max-w-full flex-col items-center gap-0.5">
+                          <span className="max-w-full truncate text-[10px] leading-none line-through">{parcelName}</span>
                           <span className="text-[8px] font-black uppercase leading-none tracking-tight">Ödendi</span>
                         </span>
                       ) : (
-                        index + 1
+                        <span className="line-clamp-2 max-w-full break-words text-[11px] leading-tight">{parcelName}</span>
                       )}
                     </button>
                   );

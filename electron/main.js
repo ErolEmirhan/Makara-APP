@@ -51,6 +51,7 @@ let storageDeleteObject = null;
 const firebaseAppModule = require('firebase/app');
 const firebaseFirestoreModule = require('firebase/firestore');
 const firebaseStorageModule = require('firebase/storage');
+const { MAKARA_RECEIPT_LOGO_DATA_URL } = require('./receipt-logo');
 
 // Havzan ile ortak: kategori/ürün/görsel/broadcast (makara-16344) + masalar/stok (makaramasalar)
 const FIREBASE_MAKARA_MAIN = {
@@ -7194,98 +7195,35 @@ ${noteHTML}
 </body></html>`;
 }
 
+function formatReceiptMoney(value) {
+  return '₺' + (Number(value) || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/** Kasa yazıcısından çıkan fiyatlı adisyon — termal 58 mm, siyah-beyaz, sade. Notlar basılmaz. */
 function generateMinimalAdisyonReceiptHTML(receiptData) {
+  const esc = escapeReceiptHtml;
+  const money = formatReceiptMoney;
   const brand = getReceiptBrandTitle();
-  const isSuriciBranch = activeBranchKey === 'makarasur';
-  const isSultanMinimal = activeBranchKey === 'sultansomati';
-  /** Sultan Somatı: 58 mm termalde okunabilirlik için bir kademe daha büyük puntolar */
-  const fs = isSultanMinimal
-    ? {
-        body: 12,
-        title: 15,
-        subtitle: 10,
-        mid: 11,
-        meta: 10,
-        row: 12,
-        rowNote: 10,
-        discount: 10,
-        orderNote: 11,
-        addr: 10,
-        qrCaption: 9,
-        total: 13,
-        bodyPad: '7px 9px 12px',
-        qrSize: 108
-      }
-    : {
-        body: 10,
-        title: 13,
-        subtitle: 9,
-        mid: 9,
-        meta: 8,
-        row: 10,
-        rowNote: 8,
-        discount: 9,
-        orderNote: 9,
-        addr: 8,
-        qrCaption: 7,
-        total: 11,
-        bodyPad: '6px 8px 10px',
-        qrSize: 100
-      };
-  const entityLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
-  const dateStr = receiptData.sale_date || new Date().toLocaleDateString('tr-TR');
-  const timeStr = receiptData.sale_time || getFormattedTime(new Date());
+  const logo = activeBranchKey === 'sultansomati' ? '' : MAKARA_RECEIPT_LOGO_DATA_URL;
+  const isOnline = receiptData.tableType === 'online';
+  const tableName = String(receiptData.tableName || '').replace('Online Sipariş Müşteri: ', '').trim();
+  const time = String(receiptData.sale_time || getFormattedTime(new Date())).split(':').slice(0, 2).join(':');
+  const date = receiptData.sale_date || new Date().toLocaleDateString('tr-TR');
   const items = receiptData.items || [];
 
-  const tableLine = (() => {
-    if (receiptData.tableType === 'online') {
-      const name = (receiptData.tableName || '').replace('Online Sipariş Müşteri: ', '').trim();
-      const bits = ['Online'];
-      if (name) bits.push(name);
-      if (receiptData.customer_phone) bits.push(receiptData.customer_phone);
-      return bits.join(' · ');
-    }
-    if (receiptData.tableName) return `${entityLabel} ${receiptData.tableName}`;
-    return '';
-  })();
+  const row = (item) => {
+    const qty = Number(item.quantity) || 0;
+    const line = item.isGift ? 0 : (Number(item.price) || 0) * qty;
+    return `<div class="it"><span class="n"><b>${esc(qty)}×</b> ${esc(item.name)}</span><span class="p">${item.isGift ? 'İkram' : money(line)}</span></div>`;
+  };
 
-  const itemsHTML = Array.isArray(receiptData.paymentGroups) && receiptData.paymentGroups.length
-    ? receiptData.paymentGroups.map((group) => {
-        const title = `${group.index}. ödeme${group.label ? ` · ${group.label}` : ''}${group.method ? ` · ${group.method}` : ''}`;
-        const lines = (group.items || []).map((item) => {
-          const qty = Number(item.quantity) || 0;
-          const line = item.isGift ? 0 : (Number(item.price) || 0) * qty;
-          return `<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin:1px 0;font-size:${fs.row}px;line-height:1.28;">
-            <span style="flex:1;min-width:0;word-break:break-word;">${qty}× ${item.name || ''}${item.isGift ? ' · İKRAM' : ''}</span>
-            <span style="white-space:nowrap;font-weight:600;">₺${line.toFixed(2)}</span>
-          </div>`;
-        }).join('');
-        const amount = Number(group.amount) || 0;
-        const payLine = `<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin:4px 0 0;padding-top:3px;border-top:1px solid #000;font-size:${fs.total + 5}px;font-weight:900;line-height:1.1;letter-spacing:-0.01em;">
-            <span>Ödeme ${group.index}</span>
-            <span style="white-space:nowrap;">₺${amount.toFixed(2)}</span>
-          </div>`;
-        const body = lines ? `${lines}${payLine}` : payLine;
-        return `<div style="margin:0 0 7px;">
-          <div style="font-size:${fs.meta}px;font-weight:700;letter-spacing:0.02em;margin:0 0 2px;">${title}</div>
-          ${body}
-        </div>`;
-      }).join('')
-    : items.map((item) => {
-    const isGift = item.isGift || false;
-    const qty = item.quantity || 0;
-    const lineTotal = isGift ? 0 : (item.price * item.quantity);
-    const name = item.name || '';
-    const extra = item.extraNote
-      ? `<div style="font-size:${fs.rowNote}px;color:#444;margin:0 0 3px 0;padding-left:1px;line-height:1.3;">${item.extraNote}</div>`
-      : '';
-    return `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;margin:2px 0;font-size:${fs.row}px;line-height:1.28;">
-        <span style="flex:1;min-width:0;word-break:break-word;">${qty}× ${name}${isGift ? ' · İKRAM' : ''}</span>
-        <span style="white-space:nowrap;font-weight:600;">${isGift ? '₺0' : '₺' + lineTotal.toFixed(2)}</span>
-      </div>
-      ${extra}`;
-  }).join('');
+  const groups = Array.isArray(receiptData.paymentGroups) && receiptData.paymentGroups.length ? receiptData.paymentGroups : null;
+  const itemsHTML = groups
+    ? groups.map((g) => `
+      <div class="grp">${esc(g.index)}. ödeme${g.label ? ` · ${esc(g.label)}` : ''}${g.method ? ` · ${esc(g.method)}` : ''}</div>
+      ${(g.items || []).map(row).join('')}
+      <div class="gt"><span>Ödeme ${esc(g.index)}</span><span>${money(g.amount)}</span></div>`).join('')
+    : items.map(row).join('');
 
   const subtotal = receiptData.subtotal !== undefined
     ? receiptData.subtotal
@@ -7293,52 +7231,52 @@ function generateMinimalAdisyonReceiptHTML(receiptData) {
   const finalTotal = receiptData.finalTotal !== undefined ? receiptData.finalTotal : subtotal;
   const hasDisc = receiptData.discountInfo && receiptData.discountInfo.applied === true;
 
-  const discountBlock = hasDisc ? `
-    <div style="display:flex;justify-content:space-between;font-size:${fs.discount}px;color:#555;margin-top:4px;">
-      <span>Ara</span><span>₺${Number(subtotal).toFixed(2)}</span>
-    </div>
-    <div style="display:flex;justify-content:space-between;font-size:${fs.discount}px;color:#b91c1c;">
-      <span>İnd.%${receiptData.discountInfo.discountPercent || 0}</span><span>-₺${(receiptData.discountAmount || 0).toFixed(2)}</span>
-    </div>` : '';
-
-  const noteBlock = receiptData.orderNote
-    ? `<div style="margin-top:6px;padding-top:5px;border-top:1px dashed #999;font-size:${fs.orderNote}px;line-height:1.35;"><span style="font-weight:600;">Not:</span> ${receiptData.orderNote}</div>`
-    : '';
-
-  const onlineAddr = (receiptData.tableType === 'online' && receiptData.customer_address)
-    ? `<div style="font-size:${fs.addr}px;color:#333;margin:3px 0 0;line-height:1.35;word-break:break-word;">${receiptData.customer_address}</div>`
-    : '';
-
-  const qrBlock = (receiptData.qrCodeDataURL && receiptData.tableType === 'online')
-    ? `<div style="text-align:center;margin-top:8px;padding-top:6px;border-top:1px solid #000;">
-        <img src="${receiptData.qrCodeDataURL}" alt="" style="width:${fs.qrSize}px;height:${fs.qrSize}px;image-rendering:pixelated;" />
-        <div style="font-size:${fs.qrCaption}px;margin-top:2px;color:#444;">Adres</div>
-      </div>`
-    : '';
-
   return `<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
+<html lang="tr"><head><meta charset="UTF-8">
 <style>
-  @media print { @page { size: 58mm auto; margin: 0; } body { margin: 0; padding: ${fs.bodyPad}; } }
-  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; width: 58mm; max-width: 58mm; margin: 0; padding: ${fs.bodyPad}; font-size: ${fs.body}px; color: #000; }
-  .t { font-weight: 700; font-size: ${fs.title}px; letter-spacing: 0.02em; text-align: center; margin: 0 0 2px; }
-  .s { font-size: ${fs.subtitle}px; text-align: center; color: #444; margin: 0 0 5px; text-transform: uppercase; letter-spacing: 0.05em; }
-  .m { font-size: ${fs.mid}px; text-align: center; margin: 0 0 2px; line-height: 1.3; word-break: break-word; }
-  .meta { font-size: ${fs.meta}px; text-align: center; color: #666; margin: 0 0 5px; }
-  hr { border: none; border-top: 1px solid #000; margin: 5px 0; }
-  .tot { display: flex; justify-content: space-between; font-weight: 700; font-size: ${fs.total}px; margin-top: 5px; padding-top: 4px; border-top: 2px solid #000; }
-</style></head><body>
-  <p class="t">${brand}</p>
-  <p class="s">Adisyon</p>
-  ${tableLine ? `<p class="m">${tableLine}</p>` : ''}
-  ${onlineAddr}
-  <p class="meta">${dateStr} · ${timeStr}</p>
-  <hr/>
+  @page { size: 58mm auto; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { background: #fff; }
+  body { width: 58mm; max-width: 58mm; padding: 3mm 3mm 7mm; font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  .head { text-align: center; }
+  .brand { display: flex; align-items: center; justify-content: center; gap: 7px; }
+  .logo { width: 13mm; height: 13mm; }
+  .bt { text-align: ${logo ? 'left' : 'center'}; }
+  .b { font-size: 15px; font-weight: 900; letter-spacing: 3px; line-height: 1; }
+  .k { font-size: 9px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; margin-top: 3px; }
+  .t { font-size: ${tableName.length > 14 ? 18 : 24}px; font-weight: 900; letter-spacing: -.4px; line-height: 1.1; margin-top: 6px; word-break: break-word; }
+  .s { font-size: 10px; font-weight: 600; margin-top: 3px; }
+  .a { font-size: 10px; font-weight: 600; margin-top: 3px; line-height: 1.35; word-break: break-word; }
+  hr { border: 0; border-top: 1px solid #000; margin: 8px 0 6px; }
+  .it { display: flex; justify-content: space-between; gap: 6px; font-size: 13px; line-height: 1.25; padding-top: 4px; }
+  .it .n { font-weight: 700; word-break: break-word; }
+  .it .p { font-weight: 800; white-space: nowrap; }
+  .grp { font-size: 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; margin-top: 8px; }
+  .gt { display: flex; justify-content: space-between; font-size: 12px; font-weight: 900; border-top: 1px dashed #000; margin-top: 4px; padding-top: 3px; }
+  .sum { display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; margin-top: 3px; }
+  .tot { display: flex; justify-content: space-between; align-items: center; background: #000; border-radius: 6px; padding: 7px 9px; margin-top: 9px; }
+  .tot * { color: #fff !important; }
+  .tot .l { font-size: 11px; font-weight: 900; letter-spacing: 2px; }
+  .tot .v { font-size: 19px; font-weight: 900; letter-spacing: -.3px; }
+  .qr { text-align: center; margin-top: 10px; }
+  .qr img { width: 34mm; height: 34mm; image-rendering: pixelated; }
+  .qr div { font-size: 9px; font-weight: 700; letter-spacing: 1px; }
+  .end { text-align: center; font-size: 10px; font-weight: 600; margin-top: 10px; }
+</style></head>
+<body>
+  <div class="head">
+    <div class="brand">${logo ? `<img class="logo" src="${logo}" alt="">` : ''}<div class="bt"><div class="b">${esc(brand)}</div><div class="k">Adisyon</div></div></div>
+    ${tableName ? `<div class="t">${esc(tableName)}</div>` : ''}
+    ${isOnline && receiptData.customer_phone ? `<div class="s">${esc(receiptData.customer_phone)}</div>` : ''}
+    ${isOnline && receiptData.customer_address ? `<div class="a">${esc(receiptData.customer_address)}</div>` : ''}
+    <div class="s">${esc(date)} · ${esc(time)}</div>
+  </div>
+  <hr>
   ${itemsHTML}
-  ${discountBlock}
-  <div class="tot"><span>TOPLAM</span><span>₺${Number(finalTotal).toFixed(2)}</span></div>
-  ${noteBlock}
-  ${qrBlock}
+  ${hasDisc ? `<hr><div class="sum"><span>Ara toplam</span><span>${money(subtotal)}</span></div><div class="sum"><span>İndirim %${esc(receiptData.discountInfo.discountPercent || 0)}</span><span>−${money(receiptData.discountAmount)}</span></div>` : ''}
+  <div class="tot"><span class="l">TOPLAM</span><span class="v">${money(finalTotal)}</span></div>
+  ${receiptData.qrCodeDataURL && isOnline ? `<div class="qr"><img src="${receiptData.qrCodeDataURL}" alt=""><div>ADRES</div></div>` : ''}
+  <div class="end">Afiyet olsun</div>
 </body></html>`;
 }
 
@@ -8737,307 +8675,71 @@ function generateAdisyonText(items, adisyonData) {
 }
 
 // Modern ve profesyonel adisyon HTML formatı
+function escapeReceiptHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+
+/** Kategori (mutfak/bar) fişi — termal 58 mm, yalnızca siyah, sade. */
 function generateAdisyonHTML(items, adisyonData) {
-  const isSuriciBranch = activeBranchKey === 'makarasur';
-  const entityLabel = isSuriciBranch ? 'Müşteri' : 'Masa';
-  // Garson ismini adisyonData'dan al (eğer yoksa items'dan al)
+  const esc = escapeReceiptHtml;
   const staffName = adisyonData.staff_name || (items.length > 0 && items[0].staff_name ? items[0].staff_name : null);
-  
-  // Eğer kategori bilgisi varsa, kategorilere göre grupla
-  const hasCategories = adisyonData.categories && adisyonData.categories.length > 0;
-  
-  let itemsHTML = '';
-  
-  if (hasCategories) {
-    // Kategorilere göre gruplanmış format
-    adisyonData.categories.forEach((category, catIndex) => {
-      // Kategori başlığı
-      itemsHTML += `
-        <div style="margin: ${catIndex > 0 ? '16px' : '0'} 0 10px 0; padding: 6px 10px; background: linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%); border-radius: 6px; box-shadow: 0 2px 4px rgba(59,130,246,0.3);">
-          <h3 style="margin: 0; font-size: 11px; font-weight: 900; color: white; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;">
-            📦 ${category.categoryName}
-          </h3>
-        </div>
-      `;
-      
-      // Kategori ürünleri
-      category.items.forEach(item => {
-        const isGift = item.isGift || false;
-        
-        if (isGift) {
-          itemsHTML += `
-          <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 3px solid #16a34a; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <div style="display: flex; align-items: center; gap: 4px; flex: 1;">
-                <span style="font-weight: 900; font-size: 12px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
-                <span style="font-size: 7px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 2px 5px; border-radius: 10px; font-weight: 900; box-shadow: 0 1px 3px rgba(22,163,74,0.3);">İKRAM</span>
-              </div>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 10px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
-            </div>
-            ${item.extraNote ? `
-            <div style="margin-top: 4px; padding: 4px; background: white; border-radius: 3px; border-left: 2px solid #fbbf24;">
-              <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
-            </div>
-            ` : ''}
-          </div>
-        `;
-        } else {
-          itemsHTML += `
-          <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 3px solid #3b82f6; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-              <span style="font-weight: 900; font-size: 12px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-              <span style="font-size: 10px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
-            </div>
-            ${item.extraNote ? `
-            <div style="margin-top: 4px; padding: 4px; background: #fef3c7; border-radius: 3px; border-left: 2px solid #f59e0b;">
-              <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
-            </div>
-            ` : ''}
-          </div>
-        `;
-        }
-      });
-    });
-  } else {
-    // Kategori bilgisi yoksa eski format (geriye dönük uyumluluk)
-    itemsHTML = items.map(item => {
-      const isGift = item.isGift || false;
-      
-      if (isGift) {
-        return `
-        <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%); border-left: 3px solid #16a34a; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <div style="display: flex; align-items: center; gap: 4px; flex: 1;">
-              <span style="font-weight: 900; font-size: 12px; color: #166534; font-family: 'Montserrat', sans-serif; text-decoration: line-through; opacity: 0.6;">${item.name}</span>
-              <span style="font-size: 7px; background: linear-gradient(135deg, #16a34a, #22c55e); color: white; padding: 2px 5px; border-radius: 10px; font-weight: 900; box-shadow: 0 1px 3px rgba(22,163,74,0.3);">İKRAM</span>
-            </div>
-          </div>
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-size: 10px; color: #166534; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
-          </div>
-          ${item.extraNote ? `
-          <div style="margin-top: 4px; padding: 4px; background: white; border-radius: 3px; border-left: 2px solid #fbbf24;">
-            <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
-          </div>
-          ` : ''}
-        </div>
-      `;
-      }
-      
-      return `
-        <div style="margin-bottom: 8px; padding: 8px; background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%); border-left: 3px solid #3b82f6; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
-            <span style="font-weight: 900; font-size: 12px; color: #1e293b; font-family: 'Montserrat', sans-serif;">${item.name}</span>
-          </div>
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <span style="font-size: 10px; color: #475569; font-weight: 700; font-family: 'Montserrat', sans-serif;">${item.quantity} adet</span>
-          </div>
-          ${item.extraNote ? `
-          <div style="margin-top: 4px; padding: 4px; background: #fef3c7; border-radius: 3px; border-left: 2px solid #f59e0b;">
-            <p style="font-size: 8px; color: #92400e; font-weight: 700; margin: 0; font-family: 'Montserrat', sans-serif;">📝 ${item.extraNote}</p>
-          </div>
-          ` : ''}
-        </div>
-      `;
-    }).join('');
-  }
+  const isOnline = adisyonData.tableType === 'online';
+  const tableName = String(adisyonData.tableName || '').replace('Online Sipariş Müşteri: ', '');
+  const time = String(adisyonData.sale_time || getFormattedTime(new Date())).split(':').slice(0, 2).join(':');
+  const groups = adisyonData.categories && adisyonData.categories.length > 0
+    ? adisyonData.categories
+    : [{ categoryName: null, items }];
 
-  return `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="UTF-8">
-      <style>
-        @media print {
-          @page {
-            size: 58mm auto;
-            margin: 0;
-            min-height: 100%;
-          }
-          body {
-            margin: 0;
-            padding: 8px 8px 12px 8px;
-            height: auto;
-            min-height: 100%;
-            color: #000 !important;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-          * {
-            color: #000 !important;
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-        }
-        * {
-          box-sizing: border-box;
-          font-family: 'Montserrat', sans-serif;
-        }
-        body {
-          font-family: 'Montserrat', sans-serif;
-          width: 58mm;
-          max-width: 58mm;
-          padding: 8px 8px 15px 8px;
-          margin: 0;
-          font-size: 12px;
-          min-height: 100%;
-          height: auto;
-          overflow: visible;
-          color: #000;
-          background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-          -webkit-font-smoothing: antialiased;
-          -moz-osx-font-smoothing: grayscale;
-          text-rendering: optimizeLegibility;
-        }
-        html {
-          height: auto;
-          min-height: 100%;
-        }
-        .info {
-          background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
-          border-radius: 8px;
-          padding: 10px;
-          margin: 0 0 10px 0;
-          box-shadow: 0 1px 4px rgba(0,0,0,0.1);
-        }
-        .info div {
-          display: flex;
-          justify-content: space-between;
-          margin: 3px 0;
-          font-size: 9px;
-          font-weight: 700;
-          color: #475569;
-          font-family: 'Montserrat', sans-serif;
-        }
-        .info div span:last-child {
-          color: #1e293b;
-          font-weight: 900;
-        }
-        .info .table-row {
-          display: block;
-          margin: 0 0 8px 0;
-          padding: 0;
-        }
-        .info .table-row .table-label {
-          font-size: 9px;
-          font-weight: 700;
-          color: #475569;
-          margin-bottom: 4px;
-        }
-        .info .table-row .table-value {
-          font-size: 18px;
-          font-weight: 900;
-          color: #1e293b;
-          font-family: 'Montserrat', sans-serif;
-          line-height: 1.2;
-        }
-        .info .staff-row {
-          display: block;
-          margin: 6px 0 0 0;
-          padding: 6px 8px;
-          background: rgba(139, 92, 246, 0.1);
-          border-radius: 4px;
-          border-left: 2px solid #8b5cf6;
-        }
-        .info .staff-row .staff-label {
-          font-size: 8px;
-          font-weight: 700;
-          color: #6d28d9;
-          margin-bottom: 2px;
-        }
-        .info .staff-row .staff-value {
-          font-size: 10px;
-          font-weight: 900;
-          color: #6d28d9;
-          font-family: 'Montserrat', sans-serif;
-        }
-        .items {
-          margin: 10px 0;
-        }
-        .footer {
-          text-align: center;
-          margin-top: 24px;
-          padding-top: 16px;
-          border-top: 3px solid #e2e8f0;
-          font-size: 11px;
-          font-weight: 700;
-          color: #64748b;
-          font-family: 'Montserrat', sans-serif;
-        }
-        .footer p {
-          margin: 4px 0;
-          font-weight: 900;
-          color: #1e293b;
-        }
-      </style>
-    </head>
-    <body>
-      ${adisyonData.transferFromTableName && adisyonData.transferToTableName ? `
-      <div style="margin: 0 0 12px 0; padding: 10px 12px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border: 2px solid #f59e0b; border-radius: 8px; text-align: center; box-shadow: 0 2px 6px rgba(245,158,11,0.4);">
-        <p style="font-size: 9px; font-weight: 900; color: #92400e; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif; text-transform: uppercase; letter-spacing: 0.5px;">🔄 Aktarım</p>
-        <p style="font-size: 12px; font-weight: 900; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif; line-height: 1.3;">${adisyonData.transferFromTableName} ${isSuriciBranch ? 'müşterisinden' : 'masasından'}<br/><strong>${adisyonData.transferToTableName}</strong> ${isSuriciBranch ? 'müşterisine' : 'masasına'} aktarıldı</p>
-      </div>
-      ` : ''}
-      <div class="info">
-        ${adisyonData.tableName ? (adisyonData.tableType === 'online' ? `
-        <div class="table-row" style="margin-bottom: 14px; padding-bottom: 12px; border-bottom: 2px solid #e2e8f0;">
-          <div class="table-label" style="font-size: 9px; font-weight: 700; color: #6366f1; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.8px;">Online Sipariş Müşteri:</div>
-          <div class="table-value" style="font-size: 17px; font-weight: 900; color: #1e293b; line-height: 1.4; letter-spacing: 0.3px;">${adisyonData.tableName.replace('Online Sipariş Müşteri: ', '')}</div>
-        </div>
-        ` : `
-        <div class="table-row">
-          <div class="table-label">${entityLabel}:</div>
-          <div class="table-value">${adisyonData.tableName}</div>
-        </div>
-        `) : ''}
-        ${staffName ? `
-        <div class="staff-row">
-          <div class="staff-label">👤 Garson:</div>
-          <div class="staff-value">${staffName}</div>
-        </div>
-        ` : ''}
-        <div>
-          <span>Tarih:</span>
-          <span>${adisyonData.sale_date || new Date().toLocaleDateString('tr-TR')}</span>
-        </div>
-        <div>
-          <span>Saat:</span>
-          <span>${adisyonData.sale_time || getFormattedTime(new Date())}</span>
-        </div>
-      </div>
+  const itemHTML = (item) => `
+      <div class="it"><span class="q">${esc(item.quantity)}×</span><span class="n">${esc(item.name)}${item.isGift ? ' · İkram' : ''}</span></div>
+      ${item.extraNote ? `<div class="x">${esc(item.extraNote)}</div>` : ''}`;
 
-      <div class="items">
-        ${itemsHTML}
-      </div>
-      
-      ${adisyonData.orderNote ? `
-      <div style="margin: 10px 0; padding: 8px; background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 6px; border-left: 3px solid #f59e0b; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-        <p style="font-size: 9px; font-weight: 900; color: #92400e; margin: 0 0 4px 0; font-family: 'Montserrat', sans-serif;">📝 Sipariş Notu:</p>
-        <p style="font-size: 9px; font-weight: 700; color: #78350f; margin: 0; font-family: 'Montserrat', sans-serif;">${adisyonData.orderNote}</p>
-      </div>
-      ` : ''}
-      
-      ${adisyonData.qrCodeDataURL && adisyonData.tableType === 'online' ? `
-      <div style="text-align: center; margin-top: 15px; padding-top: 15px; border-top: 2px solid #000;">
-        <div style="font-size: 9px; font-weight: 900; font-style: italic; color: #000; margin-bottom: 8px; font-family: 'Montserrat', sans-serif;">
-          ADRES İÇİN QR KOD
-        </div>
-        <div style="display: flex; justify-content: center; align-items: center; margin-bottom: 6px;">
-          <img src="${adisyonData.qrCodeDataURL}" alt="QR Code" style="width: 180px; height: 180px; min-width: 180px; min-height: 180px; border: 3px solid #000; padding: 6px; background: #fff; image-rendering: crisp-edges;" />
-        </div>
-        <div style="font-size: 8px; font-weight: 700; font-style: italic; color: #000; font-family: 'Montserrat', sans-serif; line-height: 1.2;">
-          QR kodu okutarak<br/>adresi Google Maps'te açın
-        </div>
-      </div>
-      ` : ''}
+  const itemsHTML = groups.map((g) => `
+      ${g.categoryName ? `<div class="cat">${esc(g.categoryName)}</div>` : ''}
+      ${(g.items || []).map(itemHTML).join('')}`).join('');
 
-    </body>
-    </html>
-  `;
+  const transfer = adisyonData.transferFromTableName && adisyonData.transferToTableName
+    ? `<div class="tr">Aktarım: ${esc(adisyonData.transferFromTableName)} → ${esc(adisyonData.transferToTableName)}</div>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="tr"><head><meta charset="UTF-8">
+<style>
+  @page { size: 58mm auto; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; color: #000; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { background: #fff; }
+  body { width: 58mm; max-width: 58mm; padding: 3mm 3mm 7mm; font-family: 'Montserrat', 'Segoe UI', Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+  .head { text-align: center; }
+  .k { font-size: 10px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; margin-bottom: 2px; }
+  .t { font-size: ${tableName.length > 14 ? 20 : 28}px; font-weight: 900; letter-spacing: -.5px; line-height: 1.05; word-break: break-word; }
+  .s { font-size: 10px; font-weight: 600; margin-top: 4px; }
+  .tr { font-size: 11px; font-weight: 800; margin-top: 5px; }
+  hr { border: 0; border-top: 1px solid #000; margin: 9px 0 0; }
+  .cat { background: #000; color: #fff !important; border-radius: 6px; padding: 5px 8px; font-size: 12px; font-weight: 900; letter-spacing: 1.5px; text-transform: uppercase; margin: 12px 0 6px; }
+  .it { display: flex; gap: 6px; font-size: 15px; padding: 2px 0; line-height: 1.2; }
+  hr + .it { margin-top: 8px; }
+  .q { font-weight: 900; min-width: 22px; }
+  .n { font-weight: 700; word-break: break-word; }
+  .x { font-size: 12px; font-weight: 600; padding-left: 28px; margin-bottom: 2px; word-break: break-word; }
+  .note { font-size: 12px; font-weight: 600; margin-top: 10px; line-height: 1.35; word-break: break-word; }
+  .qr { text-align: center; margin-top: 12px; }
+  .qr .k { margin-bottom: 5px; }
+  .qr img { width: 40mm; height: 40mm; image-rendering: pixelated; }
+</style></head>
+<body>
+  <div class="head">
+    ${isOnline ? '<div class="k">Online sipariş</div>' : ''}
+    ${tableName ? `<div class="t">${esc(tableName)}</div>` : ''}
+    <div class="s">${esc(time)}${staffName ? ` · ${esc(staffName)}` : ''}</div>
+    ${transfer}
+  </div>
+  <hr>
+  ${itemsHTML}
+  ${adisyonData.orderNote ? `<hr><div class="note">${esc(adisyonData.orderNote)}</div>` : ''}
+  ${adisyonData.qrCodeDataURL && isOnline ? `<div class="qr"><div class="k">Adres için QR</div><img src="${adisyonData.qrCodeDataURL}" alt=""></div>` : ''}
+</body></html>`;
 }
 
 // İptal fişi metin (termal RAW)

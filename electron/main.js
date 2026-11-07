@@ -1,4 +1,12 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog, webContents, net } = require('electron');
+
+// Tek kopya: kasa zaten açıksa ikinci açılış hiçbir şey başlatmadan hemen kapanır
+// (aksi halde aynı sunucu portunu açmaya çalışıp "JavaScript error" veriyordu).
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.exit(0);
+  process.exit(0);
+}
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
@@ -7688,19 +7696,17 @@ app.whenReady().then(() => {
   });
 });
 
-// Single instance - sadece bir pencere açık olsun
-const gotTheLock = app.requestSingleInstanceLock();
-
-if (!gotTheLock) {
-  app.quit();
-} else {
-  app.on('second-instance', () => {
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
-}
+// İkinci açılış denemesinde açık olan kasa penceresini öne getir
+app.on('second-instance', () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.setAlwaysOnTop(true);
+  mainWindow.focus();
+  setTimeout(() => {
+    try { if (!mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(false); } catch (_) {}
+  }, 400);
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -19464,6 +19470,10 @@ self.addEventListener('fetch', (event) => {
     }
   });
 
+  server.on('error', (err) => {
+    // Port doluysa uygulama çökmesin; mobil LAN API bu açılışta kapalı kalır
+    console.error('API Server başlatılamadı:', err?.code || err?.message || err);
+  });
   server.listen(serverPort, () => {
     console.log(`\n🚀 API Server başlatıldı: ${serverURL}`);
     console.log(`📱 Mobil cihazlardan erişim için: ${serverURL}/mobile\n`);

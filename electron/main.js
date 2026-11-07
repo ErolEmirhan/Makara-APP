@@ -20144,27 +20144,74 @@ async function syncAllStaffToFirestore(options = {}) {
 const mobileOrdersProcessing = new Set();
 const MOBILE_QUEUE_OWNER = `${os.hostname()}-${process.pid}`;
 const PWA_PRINT_ARM_TIMEOUT_MS = 8000;
+/** Kilit bu sürede gelmezse (kota dolu, ağ yok) sipariş yine de bu kasada işlenir. */
+const PWA_CLAIM_TIMEOUT_MS = 6000;
+/** Bundan eski bekleyen kayıtlar otomatik işlenmez: geç açılan/kotası dönen kasa eski siparişleri basmasın. */
+const PWA_STALE_MS = 20 * 60 * 1000;
+const PWA_DONE_IDS_LIMIT = 1000;
 
-/** İki kasa aynı PWA kaydını birden işlemesin. Yalnızca bekleyen kaydı alan kasa true döner. */
+/**
+ * Firestore'a yazılamasa da (kota dolu) aynı kayıt bu kasada ikinci kez işlenmesin diye
+ * işlenen kuyruk kimlikleri yerel veritabanında tutulur.
+ */
+function isPwaDocDoneLocally(docId) {
+  const ids = db.settings?.pwaProcessedDocIds;
+  return Array.isArray(ids) && ids.includes(docId);
+}
+
+function markPwaDocDoneLocally(docId) {
+  if (!db.settings) db.settings = {};
+  const ids = Array.isArray(db.settings.pwaProcessedDocIds) ? db.settings.pwaProcessedDocIds : [];
+  if (!ids.includes(docId)) ids.push(docId);
+  db.settings.pwaProcessedDocIds = ids.slice(-PWA_DONE_IDS_LIMIT);
+  try { saveDatabase(); } catch (_) {}
+}
+
+function pwaDocCreatedMs(data) {
+  const c = data?.createdAt;
+  if (!c) return null;
+  if (typeof c.toMillis === 'function') return c.toMillis();
+  const t = Date.parse(c);
+  return Number.isNaN(t) ? null : t;
+}
+
+/** Firestore yazımı kotada takılırsa SDK sonsuza dek yeniden dener; bekleme süresi sınırlı olsun. */
+function updateQueueDocBestEffort(ref, data, label) {
+  const write = firebaseUpdateDoc(ref, data).catch((err) => {
+    console.warn(`PWA kuyruk durumu yazılamadı (${label}):`, err?.message || err);
+  });
+  return Promise.race([write, sleep(4000)]);
+}
+
+/**
+ * İki kasa aynı PWA kaydını birden işlemesin.
+ * 'claimed': bu kasa aldı · 'taken': başka kasa aldı / artık bekleyen değil ·
+ * 'error': kilit yazılamadı (kota dolu, ağ yok) — sipariş yine de yerelde işlenir.
+ */
 async function claimMobileQueueDoc(ref) {
-  if (!tablesFirestore || !firebaseRunTransaction) return false;
+  if (!tablesFirestore || !firebaseRunTransaction) return 'error';
   try {
-    return await firebaseRunTransaction(tablesFirestore, async (tx) => {
-      const snap = await tx.get(ref);
-      if (!snap.exists()) return false;
-      const data = snap.data() || {};
-      if (data.status !== 'pending') return false;
-      if (data.branchKey && data.branchKey !== activeBranchKey) return false;
-      tx.update(ref, {
-        status: 'processing',
-        processingAt: new Date().toISOString(),
-        claimedBy: MOBILE_QUEUE_OWNER,
-      });
-      return true;
-    });
+    const result = await Promise.race([
+      firebaseRunTransaction(tablesFirestore, async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists()) return 'taken';
+        const data = snap.data() || {};
+        if (data.status !== 'pending') return 'taken';
+        if (data.branchKey && data.branchKey !== activeBranchKey) return 'taken';
+        tx.update(ref, {
+          status: 'processing',
+          processingAt: new Date().toISOString(),
+          claimedBy: MOBILE_QUEUE_OWNER,
+        });
+        return 'claimed';
+      }),
+      sleep(PWA_CLAIM_TIMEOUT_MS).then(() => 'error'),
+    ]);
+    if (result === 'error') console.warn('PWA kuyruk kilidi zaman aşımı; sipariş yerelde işlenecek');
+    return result;
   } catch (err) {
-    console.warn('PWA kuyruk kilidi alınamadı:', err.message || err);
-    return false;
+    console.warn('PWA kuyruk kilidi alınamadı; sipariş yerelde işlenecek:', err.message || err);
+    return 'error';
   }
 }
 
@@ -20385,6 +20432,32 @@ async function handleFirestoreMobileOrder(docSnap) {
   const data = docSnap.data();
   if (!data || data.status !== 'pending') return;
 
+  if (isPwaDocDoneLocally(docId)) {
+    // Daha önce işlendi ama durum Firestore'a yazılamamıştı (kota): yalnızca durumu düzelt
+    if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
+      mobileOrdersProcessing.add(docId);
+      const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
+      updateQueueDocBestEffort(ref, { status: 'processed', processedAt: new Date().toISOString() }, docId)
+        .finally(() => mobileOrdersProcessing.delete(docId));
+    }
+    return;
+  }
+
+  const createdMs = pwaDocCreatedMs(data);
+  if (createdMs != null && Date.now() - createdMs > PWA_STALE_MS) {
+    if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc && !mobileOrdersProcessing.has(docId)) {
+      mobileOrdersProcessing.add(docId);
+      const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
+      console.warn(`⚠️ PWA kaydı çok eski, otomatik işlenmedi: ${docId}`);
+      updateQueueDocBestEffort(ref, {
+        status: 'failed',
+        error: 'Zaman aşımı: kasa siparişi zamanında alamadı, otomatik işlenmedi',
+        failedAt: new Date().toISOString(),
+      }, docId).finally(() => mobileOrdersProcessing.delete(docId));
+    }
+    return;
+  }
+
   if (data.branchKey && data.branchKey !== activeBranchKey) {
     try {
       if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
@@ -20426,10 +20499,11 @@ async function handleFirestoreMobileOrder(docSnap) {
     const claimPromise = claimMobileQueueDoc(ref);
     // Kilit takılırsa yazıcı sıraları (kasanın kendi fişleri) beklemesin
     const early = await Promise.race([claimPromise, sleep(PWA_PRINT_ARM_TIMEOUT_MS).then(() => null)]);
-    releasePrint(early === true);
-    const claimed = early === null ? await claimPromise : early;
+    // Kilit yazılamadıysa (kota/ağ) da bas: sipariş bu kasada işlenecek
+    releasePrint(early === 'claimed' || early === 'error');
+    const claim = early === null ? await claimPromise : early;
     const armedResult = armed ? await armed.catch(() => false) : false;
-    if (!claimed) {
+    if (claim === 'taken') {
       console.log(`PWA sipariş başka kasada işleniyor: ${docId}`);
       return;
     }
@@ -20438,38 +20512,40 @@ async function handleFirestoreMobileOrder(docSnap) {
       const result = await processMobileActionPayload(data);
 
       if (result?.requiresReason) {
-        await firebaseUpdateDoc(ref, {
+        await updateQueueDocBestEffort(ref, {
           status: 'failed',
           requiresReason: true,
           error: result.message || 'İptal açıklaması gerekli',
           failedAt: new Date().toISOString(),
-        });
+        }, docId);
         console.warn(`⚠️ PWA işlem açıklama bekliyor: ${docId}`);
         return;
       }
 
-      await markMobileActionProcessed(ref, result);
+      markPwaDocDoneLocally(docId);
+      await Promise.race([markMobileActionProcessed(ref, result).catch(() => {}), sleep(4000)]);
       console.log(`✅ PWA işlem tamamlandı: ${docId} (${data.type})`);
     } else {
-      const printedWithClaim = early === true && plan;
+      const printedWithClaim = (early === 'claimed' || early === 'error') && plan;
       await processMobileOrderPayload(data, printedWithClaim ? { plan, printedOk: armedResult } : null);
+      markPwaDocDoneLocally(docId);
 
-      await firebaseUpdateDoc(ref, {
+      await updateQueueDocBestEffort(ref, {
         status: 'processed',
         processedAt: new Date().toISOString(),
-      });
-      console.log(`✅ PWA sipariş işlendi: ${docId} masa ${data.tableId}`);
+      }, docId);
+      console.log(`✅ PWA sipariş işlendi: ${docId} masa ${data.tableId}${claim === 'error' ? ' (kilitsiz, Firestore yazılamadı)' : ''}`);
     }
   } catch (err) {
     console.error(`❌ PWA kuyruk işleme hatası (${docId}):`, err);
     try {
       if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
         const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_orders', docId);
-        await firebaseUpdateDoc(ref, {
+        await updateQueueDocBestEffort(ref, {
           status: 'failed',
           error: err.message || String(err),
           failedAt: new Date().toISOString(),
-        });
+        }, docId);
       }
     } catch (_) {}
   } finally {
@@ -20503,6 +20579,10 @@ function startMobileOrdersFirestoreListener() {
       });
     }, (err) => {
       console.error('PWA sipariş dinleyici hatası:', err);
+      // Dinleyici hata verince kapanır; kendini yeniden kursun (kota/ağ geçici olabilir)
+      setTimeout(() => {
+        if (tablesFirestore) startMobileOrdersFirestoreListener();
+      }, 30000);
     });
     console.log('✅ PWA mobile_orders Firestore dinleyicisi aktif');
     processPendingMobileOrdersOnStartup().catch((e) =>
@@ -20653,8 +20733,9 @@ async function handleFirestoreMobileAction(docSnap) {
       throw new Error('Firestore mobile_actions güncellemesi hazır değil');
     }
     const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_actions', docId);
-    const claimed = await claimMobileQueueDoc(ref);
-    if (!claimed) {
+    if (isPwaDocDoneLocally(docId)) return;
+    const claim = await claimMobileQueueDoc(ref);
+    if (claim === 'taken') {
       console.log(`PWA işlem başka kasada işleniyor: ${docId}`);
       return;
     }
@@ -20662,32 +20743,33 @@ async function handleFirestoreMobileAction(docSnap) {
     const result = await processMobileActionPayload(data);
 
     if (result?.requiresReason) {
-      await firebaseUpdateDoc(ref, {
+      await updateQueueDocBestEffort(ref, {
         status: 'failed',
         requiresReason: true,
         error: result.message || 'İptal açıklaması gerekli',
         failedAt: new Date().toISOString(),
-      });
+      }, docId);
       console.warn(`⚠️ PWA işlem açıklama bekliyor: ${docId}`);
       return;
     }
 
-    await firebaseUpdateDoc(ref, {
+    markPwaDocDoneLocally(docId);
+    await updateQueueDocBestEffort(ref, {
       status: 'processed',
       result: result || null,
       processedAt: new Date().toISOString(),
-    });
+    }, docId);
     console.log(`✅ PWA işlem tamamlandı: ${docId} (${data.type})`);
   } catch (err) {
     console.error(`❌ PWA işlem hatası (${docId}):`, err);
     try {
       if (tablesFirestore && tablesFirebaseDoc && firebaseUpdateDoc) {
         const ref = tablesFirebaseDoc(tablesFirestore, 'mobile_actions', docId);
-        await firebaseUpdateDoc(ref, {
+        await updateQueueDocBestEffort(ref, {
           status: 'failed',
           error: err.message || String(err),
           failedAt: new Date().toISOString(),
-        });
+        }, docId);
       }
     } catch (_) {}
   } finally {
@@ -20721,6 +20803,9 @@ function startMobileActionsFirestoreListener() {
       });
     }, (err) => {
       console.error('PWA işlem dinleyici hatası:', err);
+      setTimeout(() => {
+        if (tablesFirestore) startMobileActionsFirestoreListener();
+      }, 30000);
     });
     console.log('✅ PWA mobile_actions Firestore dinleyicisi aktif');
     processPendingMobileActionsOnStartup().catch((e) =>

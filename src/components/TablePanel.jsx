@@ -40,6 +40,8 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   const [showPartialPaymentModal, setShowPartialPaymentModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
+  /** Gün sonu: açık tüm masaların adisyonları sırayla basılırken ilerleme */
+  const [bulkAdisyon, setBulkAdisyon] = useState(null); // { done, total, current } | null
   const [showReservationsModal, setShowReservationsModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
@@ -1145,6 +1147,71 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     }
   };
 
+  /** Gün sonu: açık tüm masaların fiyatlı adisyonlarını kasa yazıcısından arka arkaya basar */
+  const handlePrintAllOpenAdisyons = async () => {
+    if (bulkAdisyon) return;
+    const api = window.electronAPI;
+    if (!api?.getTableOrders || !api?.getTableOrderItems || !api?.printAdisyon) {
+      showToast('Adisyon yazdırma şu anda kullanılamıyor', 'error');
+      return;
+    }
+    let orders = [];
+    try {
+      orders = ((await api.getTableOrders()) || []).filter((o) => o && o.status === 'pending');
+    } catch (error) {
+      showToast('Açık masalar alınamadı: ' + (error?.message || 'bilinmeyen hata'), 'error');
+      return;
+    }
+    if (orders.length === 0) {
+      showToast('Açık masa yok', 'info');
+      return;
+    }
+    orders.sort((a, b) => String(a.table_name || '').localeCompare(String(b.table_name || ''), 'tr', { numeric: true }));
+
+    const failed = [];
+    let printed = 0;
+    setBulkAdisyon({ done: 0, total: orders.length, current: orders[0].table_name || '' });
+    try {
+      for (let i = 0; i < orders.length; i += 1) {
+        const order = orders[i];
+        setBulkAdisyon({ done: i, total: orders.length, current: order.table_name || '' });
+        try {
+          const items = (await api.getTableOrderItems(order.id)) || [];
+          if (items.length === 0) continue;
+          const result = await api.printAdisyon({
+            items: items.map((item) => ({
+              id: item.product_id,
+              name: item.product_name,
+              quantity: item.quantity,
+              price: item.price,
+              isGift: item.isGift || false,
+              staff_name: item.staff_name || null,
+              category_id: null,
+            })),
+            tableName: order.table_name,
+            tableType: order.table_type,
+            orderNote: order.order_note || null,
+            sale_date: order.order_date || new Date().toLocaleDateString('tr-TR'),
+            sale_time: order.order_time || new Date().toLocaleTimeString('tr-TR'),
+            cashierOnly: true,
+          });
+          if (result?.success) printed += 1;
+          else failed.push(`${order.table_name}: ${result?.error || 'hata'}`);
+        } catch (error) {
+          failed.push(`${order.table_name}: ${error?.message || 'hata'}`);
+        }
+      }
+    } finally {
+      setBulkAdisyon(null);
+    }
+    if (failed.length === 0) {
+      showToast(`${printed} masanın adisyonu yazdırıldı`, 'success');
+    } else {
+      console.error('Gün sonu adisyon hataları:', failed);
+      showToast(`${printed} adisyon yazdırıldı, ${failed.length} yazdırılamadı (${failed[0]})`, 'error');
+    }
+  };
+
   // Ürünleri Hazırlat - Kategori bazlı yazdırma
   const handlePrepareProducts = async () => {
     if (!selectedOrder || orderItems.length === 0) return;
@@ -1865,7 +1932,41 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
             </span>
             {isSuriciBranch ? 'Müşteri Birleştir' : 'Masa Birleştir'}
           </button>
+          <span className="flex h-8 w-5 shrink-0 items-center justify-center" aria-hidden>
+            <span className="h-3.5 w-px bg-gradient-to-b from-transparent via-slate-300 to-transparent" />
+          </span>
+          <button
+            onClick={handlePrintAllOpenAdisyons}
+            disabled={!!bulkAdisyon}
+            className="inline-flex items-center gap-2.5 rounded-full px-3.5 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-50 disabled:cursor-wait disabled:opacity-60"
+          >
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-amber-500 text-white">
+              {bulkAdisyon ? (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+              ) : (
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+              )}
+            </span>
+            {bulkAdisyon ? `Yazdırılıyor ${bulkAdisyon.done + 1}/${bulkAdisyon.total}` : 'Gün Sonu Adisyonları İste'}
+          </button>
       </div>
+
+      {bulkAdisyon && (
+        <div className="fixed bottom-6 left-1/2 z-[1300] -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-white shadow-2xl">
+          <div className="flex items-center gap-3">
+            <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+            <div>
+              <p className="text-sm font-bold">Gün sonu adisyonları yazdırılıyor · {bulkAdisyon.done + 1}/{bulkAdisyon.total}</p>
+              <p className="text-xs text-white/70">{bulkAdisyon.current}</p>
+            </div>
+          </div>
+          <div className="mt-2 h-1.5 w-64 overflow-hidden rounded-full bg-white/15">
+            <div className="h-full rounded-full bg-amber-400 transition-all" style={{ width: `${Math.round((bulkAdisyon.done / bulkAdisyon.total) * 100)}%` }} />
+          </div>
+        </div>
+      )}
 
       {/* Masa Tipi Seçimi: Masalar / Online — Sultan Somatı'nda yalnızca masalar (online yok) */}
       {!isSultanBranch && (

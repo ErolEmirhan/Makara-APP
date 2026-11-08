@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
 import TableCloseModal from './TableCloseModal';
-import BulkPrintPopup, { BULK_FEED_MS, BULK_TEAR_MS } from './BulkPrintPopup';
+import BulkPrintPopup, { BULK_TEAR_MS, BULK_PRINT_MS, BULK_PRINT_LATENCY_MS } from './BulkPrintPopup';
 import { initializeApp, getApp } from 'firebase/app';
 import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
@@ -1079,67 +1079,66 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     setBulkAdisyon({ jobs, finished: false });
     await wait(450); // pencere kayarak gelsin
 
-    // Kasa yazdırma kuyruğunu izleyebiliyorsa ekrandaki fiş gerçek baskıyla eşlenir
-    const tracking = typeof api.onPrintTrack === 'function';
-    const stageListeners = new Map();
-    const offTrack = tracking
-      ? api.onPrintTrack(({ trackId, stage } = {}) => { const fn = stageListeners.get(trackId); if (fn) fn(stage); })
-      : null;
-    const durations = [];
+    // Yazdırma hiç bekletilmez: adisyonlar kasaya art arda gönderilir, yazıcı onları pat pat basar.
+    // Ekrandaki yazıcı aynı sırayı gerçek yazıcının zamanlamasıyla oynatır:
+    // fiş i, yazıcıya teslim edildiği an + BULK_PRINT_LATENCY_MS'de (önceki fiş bitmeden değil) çıkmaya başlar,
+    // BULK_PRINT_MS sürer, sonra koparılır.
     const failed = [];
-    try {
-      for (const job of jobs) {
-        const { order } = job;
-        const trackId = `${job.key}-${Date.now()}`;
-        const estimateMs = durations.length
-          ? durations.slice(-3).reduce((a, b) => a + b, 0) / Math.min(3, durations.length)
-          : BULK_FEED_MS;
-        let feedFrom = null;
-        const startFeed = () => {
-          if (feedFrom != null) return;
-          feedFrom = performance.now();
-          setJob(job.key, { feedFrom });
-        };
-        stageListeners.set(trackId, (stage) => { if (stage === 'spooled' || stage === 'printing') startFeed(); });
-        setJob(job.key, { status: 'printing', estimateMs });
-        if (!tracking) startFeed();
-        const sentAt = performance.now();
+    const results = jobs.map(() => {
+      let resolve;
+      const promise = new Promise((r) => { resolve = r; });
+      return { promise, resolve };
+    });
+
+    const producer = (async () => {
+      for (let i = 0; i < jobs.length; i += 1) {
+        const { order, name } = jobs[i];
         let ok = false;
-        let tracked = false;
         try {
           const result = await api.printAdisyon({
-            items: job.items,
+            items: jobs[i].items,
             tableName: order.table_name,
             tableType: order.table_type,
             orderNote: order.order_note || null,
             sale_date: order.order_date || new Date().toLocaleDateString('tr-TR'),
             sale_time: order.order_time || new Date().toLocaleTimeString('tr-TR'),
             cashierOnly: true,
-            trackId,
           });
           ok = !!result?.success;
-          tracked = result?.printTracking === 'done';
-          if (!ok) failed.push(`${job.name}: ${result?.error || 'hata'}`);
+          if (!ok) failed.push(`${name}: ${result?.error || 'hata'}`);
         } catch (error) {
-          failed.push(`${job.name}: ${error?.message || 'hata'}`);
+          failed.push(`${name}: ${error?.message || 'hata'}`);
         }
-        stageListeners.delete(trackId);
-        startFeed();
-        if (tracked) {
-          durations.push(Math.max(300, performance.now() - (feedFrom ?? sentAt)));
-        } else {
-          // Kasa kuyruğu izleyemiyorsa (eski sürüm): fiş ekranda en azından tamamen çıksın
-          const left = BULK_FEED_MS + 150 - (performance.now() - sentAt);
-          if (left > 0) await wait(left);
-        }
-        setJob(job.key, { status: ok ? 'done' : 'failed', doneAt: performance.now() });
-        const key = job.key;
-        setTimeout(() => setJob(key, { hidden: true }), 220 + 120 + BULK_TEAR_MS + 50);
+        results[i].resolve({ ok, at: performance.now() });
       }
-      await wait(220 + 120 + BULK_TEAR_MS);
-    } finally {
-      if (offTrack) offTrack();
-    }
+    })();
+
+    const screen = (async () => {
+      let prevEnd = 0;
+      for (let i = 0; i < jobs.length; i += 1) {
+        const job = jobs[i];
+        setJob(job.key, { status: 'printing' });
+        const { ok, at } = await results[i].promise;
+        if (!ok) {
+          setJob(job.key, { status: 'failed', feedFrom: performance.now(), doneAt: performance.now() });
+          setTimeout(() => setJob(job.key, { hidden: true }), 700);
+          continue;
+        }
+        const start = Math.max(at + BULK_PRINT_LATENCY_MS, prevEnd);
+        if (start > performance.now()) await wait(start - performance.now());
+        const feedFrom = performance.now();
+        setJob(job.key, { feedFrom, estimateMs: BULK_PRINT_MS - 180 });
+        await wait(BULK_PRINT_MS - 180);
+        setJob(job.key, { status: 'done', doneAt: performance.now() });
+        await wait(180);
+        prevEnd = performance.now();
+        const key = job.key;
+        setTimeout(() => setJob(key, { hidden: true }), 120 + BULK_TEAR_MS + 80);
+      }
+      await wait(120 + BULK_TEAR_MS);
+    })();
+
+    await Promise.all([producer, screen]);
 
     setBulkAdisyon((prev) => (prev ? { ...prev, finished: true } : prev));
     if (failed.length) console.error('Gün sonu adisyon hataları:', failed);

@@ -4,6 +4,10 @@ import receiptLogo from '../assets/receipt-logo-bw.svg';
 
 /** Fişin yazıcıdan tamamen çıkması bu kadar sürer (satır satır). */
 export const BULK_FEED_MS = 1100;
+/** Termal kasa yazıcısında bir adisyonun basılıp kesilmesi (ekrandaki fiş bu sürede çıkar). */
+export const BULK_PRINT_MS = 850;
+/** Fiş Windows'a teslim edildikten sonra yazıcıdan çıkmaya başlaması (ağ + yazıcı ısınması). */
+export const BULK_PRINT_LATENCY_MS = 250;
 /** Çıkan fişin koparılıp uçması. */
 export const BULK_TEAR_MS = 380;
 

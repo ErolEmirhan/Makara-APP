@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
 import TableCloseModal from './TableCloseModal';
+import BulkPrintPopup, { BULK_FEED_MS, BULK_TEAR_MS } from './BulkPrintPopup';
 import { initializeApp, getApp } from 'firebase/app';
 import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
@@ -44,7 +45,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   /** Masayı kapat penceresi: { order, busy } | null */
   const [closeDialog, setCloseDialog] = useState(null);
   /** Gün sonu: açık tüm masaların adisyonları sırayla basılırken ilerleme */
-  const [bulkAdisyon, setBulkAdisyon] = useState(null); // { done, total, current } | null
+  const [bulkAdisyon, setBulkAdisyon] = useState(null); // { jobs, finished } | null
   const [showReservationsModal, setShowReservationsModal] = useState(false);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const [toast, setToast] = useState({ message: '', type: 'info', show: false });
@@ -1038,48 +1039,77 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     }
     orders.sort((a, b) => String(a.table_name || '').localeCompare(String(b.table_name || ''), 'tr', { numeric: true }));
 
+    // Ürünler önceden alınır: yazıcı penceresindeki fiş her masanın gerçek içeriğini gösterir
+    const jobs = [];
+    for (const order of orders) {
+      let items = [];
+      try {
+        items = (await api.getTableOrderItems(order.id)) || [];
+      } catch (_) {}
+      if (items.length === 0) continue;
+      const mapped = items.map((item) => ({
+        id: item.product_id,
+        name: item.product_name,
+        quantity: item.quantity,
+        price: item.price,
+        isGift: item.isGift || false,
+        staff_name: item.staff_name || null,
+        category_id: null,
+      }));
+      jobs.push({
+        key: String(order.id),
+        order,
+        name: order.table_name || 'Masa',
+        date: order.order_date || new Date().toLocaleDateString('tr-TR'),
+        time: String(order.order_time || '').split(':').slice(0, 2).join(':'),
+        items: mapped,
+        total: mapped.reduce((sum, i) => sum + (i.isGift ? 0 : (Number(i.price) || 0) * (Number(i.quantity) || 0)), 0),
+        status: 'waiting',
+      });
+    }
+    if (jobs.length === 0) {
+      showToast('Açık masalarda yazdırılacak ürün yok', 'info');
+      return;
+    }
+
+    const setJob = (key, patch) =>
+      setBulkAdisyon((prev) => (prev ? { ...prev, jobs: prev.jobs.map((j) => (j.key === key ? { ...j, ...patch } : j)) } : prev));
+    const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+    setBulkAdisyon({ jobs, finished: false });
+    await wait(450); // pencere kayarak gelsin
+
     const failed = [];
-    let printed = 0;
-    setBulkAdisyon({ done: 0, total: orders.length, current: orders[0].table_name || '' });
-    try {
-      for (let i = 0; i < orders.length; i += 1) {
-        const order = orders[i];
-        setBulkAdisyon({ done: i, total: orders.length, current: order.table_name || '' });
-        try {
-          const items = (await api.getTableOrderItems(order.id)) || [];
-          if (items.length === 0) continue;
-          const result = await api.printAdisyon({
-            items: items.map((item) => ({
-              id: item.product_id,
-              name: item.product_name,
-              quantity: item.quantity,
-              price: item.price,
-              isGift: item.isGift || false,
-              staff_name: item.staff_name || null,
-              category_id: null,
-            })),
-            tableName: order.table_name,
-            tableType: order.table_type,
-            orderNote: order.order_note || null,
-            sale_date: order.order_date || new Date().toLocaleDateString('tr-TR'),
-            sale_time: order.order_time || new Date().toLocaleTimeString('tr-TR'),
-            cashierOnly: true,
-          });
-          if (result?.success) printed += 1;
-          else failed.push(`${order.table_name}: ${result?.error || 'hata'}`);
-        } catch (error) {
-          failed.push(`${order.table_name}: ${error?.message || 'hata'}`);
-        }
+    for (const job of jobs) {
+      const { order } = job;
+      setJob(job.key, { status: 'printing' });
+      const startedAt = Date.now();
+      let ok = false;
+      try {
+        const result = await api.printAdisyon({
+          items: job.items,
+          tableName: order.table_name,
+          tableType: order.table_type,
+          orderNote: order.order_note || null,
+          sale_date: order.order_date || new Date().toLocaleDateString('tr-TR'),
+          sale_time: order.order_time || new Date().toLocaleTimeString('tr-TR'),
+          cashierOnly: true,
+        });
+        ok = !!result?.success;
+        if (!ok) failed.push(`${job.name}: ${result?.error || 'hata'}`);
+      } catch (error) {
+        failed.push(`${job.name}: ${error?.message || 'hata'}`);
       }
-    } finally {
-      setBulkAdisyon(null);
+      // Ekrandaki fiş tamamen çıkmadan koparılmasın
+      const left = BULK_FEED_MS + 150 - (Date.now() - startedAt);
+      if (left > 0) await wait(left);
+      setJob(job.key, { status: ok ? 'done' : 'failed' });
+      await wait(BULK_TEAR_MS);
+      setJob(job.key, { hidden: true });
     }
-    if (failed.length === 0) {
-      showToast(`${printed} masanın adisyonu yazdırıldı`, 'success');
-    } else {
-      console.error('Gün sonu adisyon hataları:', failed);
-      showToast(`${printed} adisyon yazdırıldı, ${failed.length} yazdırılamadı (${failed[0]})`, 'error');
-    }
+
+    setBulkAdisyon((prev) => (prev ? { ...prev, finished: true } : prev));
+    if (failed.length) console.error('Gün sonu adisyon hataları:', failed);
   };
 
   // Ürünleri Hazırlat - Kategori bazlı yazdırma
@@ -1819,7 +1849,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
                 </svg>
               )}
             </span>
-            {bulkAdisyon ? `Yazdırılıyor ${bulkAdisyon.done + 1}/${bulkAdisyon.total}` : 'Gün Sonu Adisyonları İste'}
+            {bulkAdisyon ? 'Yazdırılıyor…' : 'Gün Sonu Adisyonları İste'}
           </button>
       </div>
 
@@ -1834,18 +1864,7 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
       )}
 
       {bulkAdisyon && (
-        <div className="fixed bottom-6 left-1/2 z-[1300] -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-white shadow-2xl">
-          <div className="flex items-center gap-3">
-            <span className="h-5 w-5 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-            <div>
-              <p className="text-sm font-bold">Gün sonu adisyonları yazdırılıyor · {bulkAdisyon.done + 1}/{bulkAdisyon.total}</p>
-              <p className="text-xs text-white/70">{bulkAdisyon.current}</p>
-            </div>
-          </div>
-          <div className="mt-2 h-1.5 w-64 overflow-hidden rounded-full bg-white/15">
-            <div className="h-full rounded-full bg-amber-400 transition-all" style={{ width: `${Math.round((bulkAdisyon.done / bulkAdisyon.total) * 100)}%` }} />
-          </div>
-        </div>
+        <BulkPrintPopup state={bulkAdisyon} onClosed={() => setBulkAdisyon(null)} />
       )}
 
       {/* Masa Tipi Seçimi: Masalar / Online — Sultan Somatı'nda yalnızca masalar (online yok) */}

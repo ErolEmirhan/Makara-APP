@@ -102,6 +102,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Print API
   printReceipt: (receiptData) => ipcRenderer.invoke('print-receipt', receiptData),
   printAdisyon: (adisyonData) => ipcRenderer.invoke('print-adisyon', adisyonData),
+  /** Müdür telefondan "Gün sonu adisyonları"nı isteyince kasa arayüzü yazıcı penceresini açar */
+  onRemoteBulkAdisyon: (callback) => {
+    const handler = (_event, payload) => callback(payload || {});
+    ipcRenderer.on('remote-bulk-adisyon', handler);
+    return () => ipcRenderer.removeListener('remote-bulk-adisyon', handler);
+  },
   /** Yazdırma ilerlemesi (spooled → printing → kuyruk boşaldı). Döndürdüğü fonksiyon dinlemeyi bırakır. */
   onPrintTrack: (callback) => {
     const handler = (_event, payload) => callback(payload);

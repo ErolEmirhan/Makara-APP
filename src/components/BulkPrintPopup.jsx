@@ -146,7 +146,8 @@ const CSS = `
 @keyframes bpp-in{from{transform:translate(440px,-50%);opacity:0}to{transform:translate(0,-50%);opacity:1}}
 @keyframes bpp-out{to{transform:translate(440px,-50%);opacity:0}}
 .bpp-hd{position:absolute;left:24px;right:24px;top:22px}
-.bpp-hd .k{font-size:11px;font-weight:800;letter-spacing:.2em;color:#94a3b8;text-transform:uppercase}
+.bpp-hd .k{font-size:11px;font-weight:800;letter-spacing:.16em;color:#94a3b8;text-transform:uppercase;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bpp-hd .k b{color:#e5398f;font-weight:800}
 .bpp-hd .t{font-size:22px;font-weight:900;color:#0f172a;letter-spacing:-.02em;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .bpp-hd .s{font-size:13px;font-weight:600;color:#64748b;margin-top:2px}
 .bpp-bar{position:absolute;left:24px;right:24px;top:104px;height:6px;border-radius:9px;background:#e2e8f0;overflow:hidden}
@@ -191,6 +192,7 @@ export default function BulkPrintPopup({ state, onClosed }) {
   const failCount = jobs.filter((j) => j.status === 'failed').length;
   const settled = okCount + failCount;
   const current = jobs.find((j) => j.status === 'printing');
+  const lastSettled = [...jobs].reverse().find((j) => j.status === 'done' || j.status === 'failed');
   const printing = !!current;
 
   useEffect(() => {
@@ -204,8 +206,8 @@ export default function BulkPrintPopup({ state, onClosed }) {
     <div className={`bpp-pop${leaving ? ' is-leaving' : ''}`} role="status" aria-live="polite">
       <style>{CSS}</style>
       <div className="bpp-hd">
-        <div className="k">Gün sonu adisyonları</div>
-        <div className="t">{finished ? 'Tamamlandı' : current ? `${current.name} yazdırılıyor` : 'Hazırlanıyor…'}</div>
+        <div className="k">Gün sonu{state.requestedBy ? <> · <b>{state.requestedBy}</b> istedi</> : ' adisyonları'}</div>
+        <div className="t">{finished ? 'Tamamlandı' : current ? `${current.name} yazdırılıyor` : lastSettled ? `${lastSettled.name} ${lastSettled.status === 'done' ? 'yazdırıldı' : 'yazdırılamadı'}` : 'Hazırlanıyor…'}</div>
         <div className="s">{finished ? `${settled} / ${jobs.length}` : `${Math.min(settled + 1, jobs.length)} / ${jobs.length} adisyon`}</div>
       </div>
       <div className="bpp-bar"><i style={{ width: `${jobs.length ? (settled / jobs.length) * 100 : 0}%` }} /></div>

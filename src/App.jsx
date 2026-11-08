@@ -22,6 +22,7 @@ import KasaUpdateNotice, { useKasaUpdates } from './components/KasaUpdateNotice'
 import ExpenseModal from './components/ExpenseModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
+import BulkAdisyonHost from './components/BulkAdisyonHost';
 import { takeHotResume } from './utils/hotResume';
 import SettingsModal from './components/SettingsModal';
 
@@ -1606,6 +1607,7 @@ function App() {
         autoHideDuration={printToast?.status === 'printing' ? null : 2500}
       />
       <KasaUpdateNotice {...kasaUpdates} />
+      <BulkAdisyonHost />
 
       {/* Minimize Button - Sol Alt Köşe */}
       <button

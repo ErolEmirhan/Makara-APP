@@ -20638,7 +20638,7 @@ async function processPendingMobileOrdersOnStartup() {
 
 // ── PWA müdür/şef işlemleri (Firestore mobile_orders kuyruğu → yerel işlem) ──
 const mobileActionsProcessing = new Set();
-const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'transfer_items', 'merge_table']);
+const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'transfer_items', 'merge_table', 'print_adisyon', 'print_all_adisyons']);
 
 function isMobileQueueAction(data) {
   if (!data) return false;
@@ -20668,6 +20668,31 @@ function allocateStaffId() {
   const next = Math.max(existingMax, cursor) + 1;
   db.settings.nextStaffId = next;
   return next;
+}
+
+/** Masadaki açık siparişten kasa adisyonu verisi (masa ekranındaki "Adisyon yazdır" ile aynı) */
+function buildCashierAdisyonDataForOrder(order) {
+  const items = (db.tableOrderItems || [])
+    .filter((oi) => oi.order_id === order.id)
+    .map((oi) => ({
+      id: oi.product_id,
+      name: oi.product_name,
+      quantity: oi.quantity,
+      price: oi.price,
+      isGift: oi.isGift || false,
+      staff_name: oi.staff_name || null,
+      category_id: null,
+    }));
+  return {
+    items,
+    tableId: order.table_id,
+    tableName: order.table_name,
+    tableType: order.table_type,
+    orderNote: order.order_note || null,
+    sale_date: order.order_date || new Date().toLocaleDateString('tr-TR'),
+    sale_time: order.order_time || getFormattedTime(new Date()),
+    cashierOnly: true,
+  };
 }
 
 async function processMobileActionPayload(data) {
@@ -20732,6 +20757,39 @@ async function processMobileActionPayload(data) {
       );
       if (!result.success) throw new Error(result.error || 'Masa birleştirme başarısız');
       return result;
+    }
+    case 'print_adisyon': {
+      // Müdür telefondan tek masanın adisyonunu ister: kasa yazıcısından fiyatlı adisyon
+      const gate = await mobileStaffMayTransfer(data.staffId, pwaStaffHintsFromPayload(data), 'Adisyon isteme');
+      if (!gate.ok) throw new Error(gate.error);
+      const order = findPendingOrderForTable(data.tableId);
+      if (!order) throw new Error('Bu masada açık sipariş yok');
+      const adisyonData = buildCashierAdisyonDataForOrder(order);
+      if (!adisyonData.items.length) throw new Error('Masada yazdırılacak ürün yok');
+      const res = await printCashierAdisyonFromData(adisyonData);
+      if (!res?.success) throw new Error(res?.error || 'Adisyon yazdırılamadı');
+      return { success: true, tableName: order.table_name };
+    }
+    case 'print_all_adisyons': {
+      // Müdür telefondan gün sonu adisyonlarını ister: kasadaki butonla aynı (yazıcı penceresi açılır)
+      const gate = await mobileStaffMayTransfer(data.staffId, pwaStaffHintsFromPayload(data), 'Gün sonu adisyonu isteme');
+      if (!gate.ok) throw new Error(gate.error);
+      const openOrders = (db.tableOrders || []).filter((o) => o.status === 'pending'
+        && (db.tableOrderItems || []).some((oi) => oi.order_id === o.id));
+      if (!openOrders.length) throw new Error('Açık masa yok');
+      const requestedBy = data.staffName || null;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('remote-bulk-adisyon', { requestedBy });
+        try { bringMainWindowToFront(); } catch (_) {}
+      } else {
+        // Arayüz yoksa yazıcı penceresi gösterilemez: adisyonları yine sırayla bas
+        (async () => {
+          for (const order of openOrders) {
+            try { await printCashierAdisyonFromData(buildCashierAdisyonDataForOrder(order)); } catch (_) {}
+          }
+        })();
+      }
+      return { success: true, count: openOrders.length };
     }
     default:
       throw new Error(`Bilinmeyen işlem türü: ${actionType || data?.type || '—'}`);

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useLayoutEffect, useMemo, useCallback, startTransition } from 'react';
+import TableCloseModal from './TableCloseModal';
 import { initializeApp, getApp } from 'firebase/app';
 import { getFirestore, collection, query, orderBy, onSnapshot, getDocs, doc, updateDoc, setDoc, where, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import TableOrderModal from './TableOrderModal';
@@ -40,6 +41,8 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
   const [showPartialPaymentModal, setShowPartialPaymentModal] = useState(false);
   const [showTransferModal, setShowTransferModal] = useState(false);
   const [showMergeModal, setShowMergeModal] = useState(false);
+  /** Masayı kapat penceresi: { order, busy } | null */
+  const [closeDialog, setCloseDialog] = useState(null);
   /** Gün sonu: açık tüm masaların adisyonları sırayla basılırken ilerleme */
   const [bulkAdisyon, setBulkAdisyon] = useState(null); // { done, total, current } | null
   const [showReservationsModal, setShowReservationsModal] = useState(false);
@@ -817,168 +820,35 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     }
   };
 
-  // Masayı sonlandır
-  const handleCompleteTable = async () => {
+  // Masayı sonlandır: indirim (yok / yüzde / tutar) + ödeme yöntemi penceresi
+  const handleCompleteTable = () => {
     if (!selectedOrder || !window.electronAPI || !window.electronAPI.completeTableOrder) {
       console.error('completeTableOrder API mevcut değil');
       return;
     }
+    setCloseDialog({ order: selectedOrder, busy: false });
+  };
 
-    // Önce ödeme yöntemi seçimi modal'ı göster
-    const paymentResult = await new Promise((resolve) => {
-      let selectedCampaign = null;
-      let showCampaign = false;
-      
-      const updateModal = () => {
-        const originalAmount = selectedOrder.total_amount;
-        const discount = selectedCampaign ? (originalAmount * selectedCampaign) / 100 : 0;
-        const finalAmount = originalAmount - discount;
-        
-        const campaignSection = showCampaign ? `
-          <div id="campaignSection" class="bg-amber-50 border-2 border-amber-200 rounded-2xl p-4 space-y-2 mb-4">
-            <p class="text-center font-semibold text-amber-800 mb-3">Kampanya Seçin</p>
-            <div class="grid grid-cols-3 gap-2">
-              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 10 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="10">%10</button>
-              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 15 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="15">%15</button>
-              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 20 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="20">%20</button>
-              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 25 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="25">%25</button>
-              <button class="campaignBtn p-4 rounded-xl font-bold text-lg transition-all ${selectedCampaign === 50 ? 'bg-gradient-to-r from-amber-600 to-orange-600 text-white shadow-lg scale-105' : 'bg-white text-amber-700 hover:bg-amber-100 border-2 border-amber-300 hover:scale-105'}" data-percent="50">%50</button>
-            </div>
-            ${selectedCampaign ? `
-              <button id="removeCampaignBtn" class="w-full mt-2 py-2 bg-red-100 hover:bg-red-200 text-red-700 font-semibold rounded-lg transition-all">
-                Kampanyayı Kaldır
-              </button>
-            ` : ''}
-          </div>
-        ` : '';
-        
-        const amountDisplay = selectedCampaign ? `
-          <div class="mb-4 space-y-2">
-            <p class="text-sm text-gray-600">Orijinal Tutar</p>
-            <p class="text-xl font-semibold text-gray-400 line-through">₺${originalAmount.toFixed(2)}</p>
-            <p class="text-sm text-amber-700 font-semibold">Kampanya: %${selectedCampaign} İndirim</p>
-            <p class="text-3xl font-bold text-gray-800">₺${finalAmount.toFixed(2)}</p>
-            <p class="text-sm text-fuchsia-600 theme-sultan:text-green-600 font-semibold">İndirim: -₺${discount.toFixed(2)}</p>
-          </div>
-        ` : `
-          <p class="text-lg font-semibold text-gray-800 mb-6">Toplam: ₺${originalAmount.toFixed(2)}</p>
-        `;
-        
-        modal.innerHTML = `
-          <div class="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-2xl">
-            <h3 class="text-xl font-bold text-gray-800 mb-2">Ödeme Yöntemi Seçin</h3>
-            <p class="text-sm text-gray-600 mb-4">Masa: ${selectedOrder.table_name}</p>
-            ${amountDisplay}
-            <div class="grid grid-cols-2 gap-3 mb-3">
-              <button id="cashBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-fuchsia-500 theme-sultan:from-green-500 to-pink-500 theme-sultan:to-emerald-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z" />
-                  </svg>
-                  <span>Nakit</span>
-                </div>
-              </button>
-              <button id="cardBtn" class="p-4 rounded-xl font-semibold bg-gradient-to-r from-blue-500 to-cyan-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
-                <div class="flex flex-col items-center space-y-2">
-                  <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
-                  </svg>
-                  <span>Kredi Kartı</span>
-                </div>
-              </button>
-            </div>
-            <button id="campaignBtn" class="w-full mb-3 p-4 rounded-xl font-semibold bg-gradient-to-r from-amber-500 to-orange-500 text-white shadow-lg hover:shadow-xl transition-all transform hover:scale-105">
-              <div class="flex items-center justify-center space-x-2">
-                <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span>Kampanya Uygula</span>
-              </div>
-            </button>
-            ${campaignSection}
-            <button id="cancelBtn" class="w-full py-3 bg-gray-100 hover:bg-gray-200 rounded-xl text-gray-700 font-semibold transition-all">
-              İptal
-            </button>
-          </div>
-        `;
-        
-        const closeModal = () => {
-          if (modal.parentNode) document.body.removeChild(modal);
-        };
-        const setModalLoading = () => {
-          const wrap = modal.querySelector('.bg-white.rounded-2xl');
-          if (wrap) {
-            wrap.innerHTML = `
-              <div class="flex flex-col items-center justify-center py-10 px-4">
-                <div class="w-12 h-12 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin" style="animation-duration: 0.8s;"></div>
-                <p class="mt-4 text-gray-700 font-semibold">Masa sonlandırılıyor...</p>
-              </div>
-            `;
-          }
-        };
-        modal.querySelector('#cashBtn').onclick = () => {
-          const btn = modal.querySelector('#cashBtn');
-          const cardBtn = modal.querySelector('#cardBtn');
-          if (btn.disabled) return;
-          btn.disabled = true;
-          if (cardBtn) cardBtn.disabled = true;
-          setModalLoading();
-          resolve({ paymentMethod: 'Nakit', campaignPercentage: selectedCampaign, closeModal });
-        };
-        modal.querySelector('#cardBtn').onclick = () => {
-          const btn = modal.querySelector('#cardBtn');
-          const cashBtn = modal.querySelector('#cashBtn');
-          if (btn.disabled) return;
-          btn.disabled = true;
-          if (cashBtn) cashBtn.disabled = true;
-          setModalLoading();
-          resolve({ paymentMethod: 'Kredi Kartı', campaignPercentage: selectedCampaign, closeModal });
-        };
-        
-        modal.querySelector('#campaignBtn').onclick = () => {
-          showCampaign = !showCampaign;
-          updateModal();
-        };
-        
-        if (showCampaign) {
-          modal.querySelectorAll('.campaignBtn').forEach(btn => {
-            btn.onclick = () => {
-              selectedCampaign = parseInt(btn.dataset.percent);
-              updateModal();
-            };
-          });
-          
-          const removeBtn = modal.querySelector('#removeCampaignBtn');
-          if (removeBtn) {
-            removeBtn.onclick = () => {
-              selectedCampaign = null;
-              updateModal();
-            };
-          }
-        }
-        
-        modal.querySelector('#cancelBtn').onclick = () => {
-          document.body.removeChild(modal);
-          resolve(null);
-        };
-      };
-      
-      const modal = document.createElement('div');
-      modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
-      document.body.appendChild(modal);
-      updateModal();
-    });
-
-    if (!paymentResult) {
-      return; // Kullanıcı iptal etti
-    }
-
-    const { paymentMethod, campaignPercentage, closeModal } = paymentResult;
-
+  const confirmCompleteTable = async ({ paymentMethod, campaignPercentage, discountAmountTL }) => {
+    const order = closeDialog?.order;
+    if (!order || closeDialog?.busy) return;
+    setCloseDialog((d) => (d ? { ...d, busy: true } : d));
+    const api = window.electronAPI;
     try {
-      const result = await window.electronAPI.completeTableOrder(selectedOrder.id, paymentMethod, campaignPercentage);
-      
+      let result;
+      if (discountAmountTL > 0 && typeof api.completeTableOrderWithDiscount === 'function') {
+        result = await api.completeTableOrderWithDiscount(order.id, paymentMethod, discountAmountTL);
+      } else if (discountAmountTL > 0) {
+        // Eski kasa sürümü tutar indirimini iletemiyor: aynı sonucu veren yüzdeye çevir
+        const total = Number(order.total_amount) || 0;
+        const pct = total > 0 ? (discountAmountTL / total) * 100 : 0;
+        result = await api.completeTableOrder(order.id, paymentMethod, pct);
+      } else {
+        result = await api.completeTableOrder(order.id, paymentMethod, campaignPercentage);
+      }
+
       if (result.success) {
+        setCloseDialog(null);
         setShowModal(false);
         setSelectedOrder(null);
         setOrderItems([]);
@@ -986,13 +856,13 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
         setShowSuccessToast(true);
         setTimeout(() => setShowSuccessToast(false), 1000);
       } else {
+        setCloseDialog((d) => (d ? { ...d, busy: false } : d));
         showToast('Masa sonlandırılamadı: ' + (result.error || 'Bilinmeyen hata'), 'error');
       }
     } catch (error) {
       console.error('Masa sonlandırılırken hata:', error);
+      setCloseDialog((d) => (d ? { ...d, busy: false } : d));
       showToast('Masa sonlandırılamadı: ' + error.message, 'error');
-    } finally {
-      if (typeof closeModal === 'function') closeModal();
     }
   };
 
@@ -1952,6 +1822,16 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
             {bulkAdisyon ? `Yazdırılıyor ${bulkAdisyon.done + 1}/${bulkAdisyon.total}` : 'Gün Sonu Adisyonları İste'}
           </button>
       </div>
+
+      {closeDialog && (
+        <TableCloseModal
+          tableName={closeDialog.order.table_name}
+          totalAmount={closeDialog.order.total_amount}
+          busy={closeDialog.busy}
+          onConfirm={confirmCompleteTable}
+          onCancel={() => { if (!closeDialog.busy) setCloseDialog(null); }}
+        />
+      )}
 
       {bulkAdisyon && (
         <div className="fixed bottom-6 left-1/2 z-[1300] -translate-x-1/2 rounded-2xl bg-slate-900 px-5 py-3 text-white shadow-2xl">

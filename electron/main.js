@@ -4676,8 +4676,8 @@ async function revertCompletedTableOrderCore(orderId) {
   return { success: true };
 }
 
-ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit', campaignPercentage = null) => {
-  return withOrderPaymentLock(orderId, () => completeTableOrderCore(orderId, paymentMethod, campaignPercentage));
+ipcMain.handle('complete-table-order', async (event, orderId, paymentMethod = 'Nakit', campaignPercentage = null, discountAmountTL = null) => {
+  return withOrderPaymentLock(orderId, () => completeTableOrderCore(orderId, paymentMethod, campaignPercentage, discountAmountTL));
 });
 
 // Kısmi ödeme için masa siparişi tutarını güncelle ve satış kaydı oluştur

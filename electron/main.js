@@ -7222,10 +7222,14 @@ function generateMinimalAdisyonReceiptHTML(receiptData) {
   const date = receiptData.sale_date || new Date().toLocaleDateString('tr-TR');
   const items = receiptData.items || [];
 
+  // Suriçi self servis: ürün notları ve sipariş notu adisyonda da yazar (diğer şubelerde yazmaz)
+  const showNotes = activeBranchKey === 'makarasur';
   const row = (item) => {
     const qty = Number(item.quantity) || 0;
     const line = item.isGift ? 0 : (Number(item.price) || 0) * qty;
-    return `<div class="it"><span class="n"><b>${esc(qty)}×</b> ${esc(item.name)}</span><span class="p">${item.isGift ? 'İkram' : money(line)}</span></div>`;
+    const note = showNotes ? String(item.extraNote || item.item_note || '').trim() : '';
+    return `<div class="it"><span class="n"><b>${esc(qty)}×</b> ${esc(item.name)}</span><span class="p">${item.isGift ? 'İkram' : money(line)}</span></div>`
+      + (note ? `<div class="x">${esc(note)}</div>` : '');
   };
 
   const groups = Array.isArray(receiptData.paymentGroups) && receiptData.paymentGroups.length ? receiptData.paymentGroups : null;
@@ -7262,6 +7266,8 @@ function generateMinimalAdisyonReceiptHTML(receiptData) {
   .it { display: flex; justify-content: space-between; gap: 6px; font-size: 13px; line-height: 1.25; padding-top: 4px; }
   .it .n { font-weight: 700; word-break: break-word; }
   .it .p { font-weight: 800; white-space: nowrap; }
+  .x { font-size: 11px; font-weight: 600; padding-left: 20px; margin-top: 1px; word-break: break-word; }
+  .note { font-size: 12px; font-weight: 600; margin-top: 9px; line-height: 1.35; word-break: break-word; }
   .grp { font-size: 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; margin-top: 8px; }
   .gt { display: flex; justify-content: space-between; font-size: 12px; font-weight: 900; border-top: 1px dashed #000; margin-top: 4px; padding-top: 3px; }
   .sum { display: flex; justify-content: space-between; font-size: 11px; font-weight: 600; margin-top: 3px; }
@@ -7286,6 +7292,7 @@ function generateMinimalAdisyonReceiptHTML(receiptData) {
   ${itemsHTML}
   ${hasDisc ? `<hr><div class="sum"><span>Ara toplam</span><span>${money(subtotal)}</span></div><div class="sum"><span>İndirim %${esc(receiptData.discountInfo.discountPercent || 0)}</span><span>−${money(receiptData.discountAmount)}</span></div>` : ''}
   <div class="tot"><span class="l">TOPLAM</span><span class="v">${money(finalTotal)}</span></div>
+  ${showNotes && receiptData.orderNote ? `<div class="note">${esc(receiptData.orderNote)}</div>` : ''}
   ${receiptData.qrCodeDataURL && isOnline ? `<div class="qr"><img src="${receiptData.qrCodeDataURL}" alt=""><div>ADRES</div></div>` : ''}
   <div class="end">Afiyet olsun</div>
 </body></html>`;
@@ -8188,7 +8195,32 @@ function waitPrinterQueueDrained(printerName, onStage, timeoutMs = 30000) {
   });
 }
 
+/**
+ * Suriçi (self servis): adisyonda notlar da çıksın. Adisyonu isteyen ekranlar notu göndermese bile
+ * açık siparişteki ürün notları (satır sırasıyla) ve sipariş notu kasanın kendi kaydından eklenir.
+ */
+function withSuriciReceiptNotes(adisyonData) {
+  if (activeBranchKey !== 'makarasur' || !adisyonData) return adisyonData;
+  const order = (db.tableOrders || []).find((o) => o.status === 'pending'
+    && ((adisyonData.tableId != null && o.table_id === adisyonData.tableId) || (adisyonData.tableName && o.table_name === adisyonData.tableName)));
+  if (!order) return adisyonData;
+  const queues = new Map();
+  for (const row of (db.tableOrderItems || []).filter((oi) => oi.order_id === order.id)) {
+    const key = String(row.product_id);
+    if (!queues.has(key)) queues.set(key, []);
+    queues.get(key).push(row.item_note && String(row.item_note).trim() ? String(row.item_note).trim() : null);
+  }
+  const items = (adisyonData.items || []).map((it) => {
+    if (it && (it.extraNote || it.item_note)) return it;
+    const q = queues.get(String(it?.id ?? it?.product_id));
+    const note = q && q.length ? q.shift() : null;
+    return note ? { ...it, extraNote: note } : it;
+  });
+  return { ...adisyonData, items, orderNote: adisyonData.orderNote || order.order_note || null };
+}
+
 async function printCashierAdisyonFromData(adisyonData, options = {}) {
+  adisyonData = withSuriciReceiptNotes(adisyonData);
   const items = adisyonData.items || [];
   const paymentGroups = Array.isArray(adisyonData.paymentGroups) ? adisyonData.paymentGroups : null;
   const cashierPrinter = db.settings.cashierPrinter;

@@ -19723,16 +19723,61 @@ function rebuildHavzanStaffCache() {
     });
   }
   havzanStaffById = map;
+  rememberHavzanStaffMaxId();
+}
+
+/**
+ * Bilinen en yüksek personel numarası yerelde saklanır: Firestore okuma kotası dolunca
+ * yeni personel okumadan yazılır ve var olan bir personelin üstüne yazılmaz.
+ */
+function rememberHavzanStaffMaxId() {
+  let max = 0;
+  const bump = (v) => {
+    const n = Number(v);
+    if (Number.isFinite(n)) max = Math.max(max, n);
+  };
+  for (const d of havzanStaffDocs) { bump(d.id); bump(d.data()?.id); }
+  for (const id of havzanStaffDeletions.byId) bump(id);
+  if (!db.settings) db.settings = {};
+  if (max > (Number(db.settings.havzanStaffMaxId) || 0)) {
+    db.settings.havzanStaffMaxId = max;
+    try { saveDatabase(); } catch (_) {}
+  }
+}
+
+function isFirestoreQuotaOrNetworkError(error) {
+  const code = String(error?.code || '');
+  const msg = String(error?.message || '');
+  return /resource-exhausted|unavailable|deadline-exceeded/i.test(code)
+    || /quota|RESOURCE_EXHAUSTED|zaman aşımı|offline/i.test(msg);
+}
+
+function withFirestoreTimeout(promise, ms = 7000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('Firestore zaman aşımı'), { code: 'deadline-exceeded' })), ms)),
+  ]);
 }
 
 async function refreshHavzanStaff() {
   if (!firestore || !firebaseCollection || !firebaseGetDocs) {
     throw new Error('Firestore bağlantısı hazır değil');
   }
-  const [staffSnap, deletionsSnap] = await Promise.all([
-    firebaseGetDocs(firebaseCollection(firestore, 'staff')),
-    firebaseGetDocs(firebaseCollection(firestore, 'staff_deletions'))
-  ]);
+  let staffSnap;
+  let deletionsSnap;
+  try {
+    [staffSnap, deletionsSnap] = await withFirestoreTimeout(Promise.all([
+      firebaseGetDocs(firebaseCollection(firestore, 'staff')),
+      firebaseGetDocs(firebaseCollection(firestore, 'staff_deletions'))
+    ]));
+  } catch (error) {
+    // Okuma kotası dolu / ağ yok: canlı dinleyicinin son listesiyle devam et
+    if (havzanStaffDocs.length > 0 && isFirestoreQuotaOrNetworkError(error)) {
+      console.warn('Personel listesi okunamadı, son bilinen liste kullanılıyor:', error?.message || error);
+      return [...havzanStaffById.values()];
+    }
+    throw error;
+  }
   havzanStaffDocs = staffSnap.docs;
   havzanDeletionDocs = deletionsSnap.docs;
   rebuildHavzanStaffCache();
@@ -19805,13 +19850,106 @@ function nextHavzanStaffIdCandidate() {
   return max + 1;
 }
 
+/** Yerelde görülen en yüksek personel numarası (kasa kota doluyken açıldıysa başlangıç noktası) */
+function localStaffIdFloor() {
+  let max = Number(db.settings?.havzanStaffMaxId) || 0;
+  const bump = (v) => {
+    const n = Number(v);
+    if (Number.isFinite(n) && n < 1e7) max = Math.max(max, n);
+  };
+  bump((Number(db.settings?.nextStaffId) || 1) - 1);
+  for (const st of db.staff || []) bump(st.id);
+  for (const it of db.tableOrderItems || []) bump(it.staff_id);
+  for (const it of db.saleItems || []) bump(it.staff_id);
+  for (const st of havzanStaffById.values()) bump(st.id);
+  return max;
+}
+
+function toFirestoreRestValue(v) {
+  if (v === null || v === undefined) return { nullValue: null };
+  if (typeof v === 'boolean') return { booleanValue: v };
+  if (typeof v === 'number') return Number.isInteger(v) ? { integerValue: String(v) } : { doubleValue: v };
+  return { stringValue: String(v) };
+}
+
+/**
+ * Firestore REST createDocument: belge yoksa oluşturur ('created'), varsa 'exists' döner.
+ * Okuma kotası harcamaz (yalnızca yazma).
+ */
+async function createFirestoreDocIfAbsent(projectConfig, collection, docId, data) {
+  const fields = {};
+  for (const [k, v] of Object.entries(data)) fields[k] = toFirestoreRestValue(v);
+  const url = `https://firestore.googleapis.com/v1/projects/${projectConfig.projectId}/databases/(default)/documents/${collection}`
+    + `?documentId=${encodeURIComponent(docId)}&key=${encodeURIComponent(projectConfig.apiKey)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields }),
+      signal: controller.signal,
+    });
+    if (res.ok) return 'created';
+    if (res.status === 409) return 'exists';
+    let msg = `HTTP ${res.status}`;
+    try { msg = (await res.json())?.error?.message || msg; } catch (_) {}
+    throw new Error(`Firestore yazılamadı: ${msg}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function createHavzanStaff({ name, surname, password }) {
-  await refreshHavzanStaff();
+  let readable = true;
+  try {
+    await refreshHavzanStaff();
+  } catch (error) {
+    if (!isFirestoreQuotaOrNetworkError(error)) throw error;
+    readable = false;
+  }
   const pwdError = validateHavzanStaffPassword(password);
   if (pwdError) return { success: false, error: pwdError };
 
   const now = new Date().toISOString();
-  let candidate = nextHavzanStaffIdCandidate();
+  const knownMax = Number(db.settings?.havzanStaffMaxId) || 0;
+  let candidate = Math.max(nextHavzanStaffIdCandidate(), knownMax + 1);
+
+  const writeOnly = async () => {
+    // Okuma kotası dolu: eskisi gibi okumadan yaz. "Yalnızca boşsa oluştur" ön koşulu okuma
+    // harcamaz; numara doluysa sıradakine geçilir, var olan personelin üstüne yazılmaz.
+    let next = Math.max(candidate, localStaffIdFloor() + 1);
+    for (let attempt = 0; attempt < 40; attempt += 1, next += 1) {
+      const record = {
+        id: next, name, surname, password,
+        is_manager: false, is_chef: false, is_admin: false, is_boss: false,
+        branchKey: 'makara', createdAt: now, updatedAt: now
+      };
+      const res = await createFirestoreDocIfAbsent(FIREBASE_MAKARA_MAIN, 'staff', String(next), record);
+      if (res === 'exists') continue;
+      // Bu numara daha önce silinmiş bir personele aitse silinme kaydı yeni personeli engellemesin
+      try {
+        await withFirestoreTimeout(firebaseDeleteDoc(firebaseDoc(firestore, 'staff_deletions', String(next))), 5000);
+      } catch (_) {}
+      if (!db.settings) db.settings = {};
+      db.settings.havzanStaffMaxId = Math.max(Number(db.settings.havzanStaffMaxId) || 0, next);
+      try { saveDatabase(); } catch (_) {}
+      console.warn(`Personel okumadan yazıldı (okuma kotası): #${next}`);
+      return { success: true, staff: { id: next, name, surname, is_manager: false, is_chef: false } };
+    }
+    return { success: false, error: 'Personel numarası ayrılamadı, tekrar deneyin' };
+  };
+
+  if (!readable) return writeOnly();
+  try {
+    return await createHavzanStaffWithTransaction({ name, surname, password, now, candidate });
+  } catch (error) {
+    if (!isFirestoreQuotaOrNetworkError(error)) throw error;
+    return writeOnly();
+  }
+}
+
+async function createHavzanStaffWithTransaction({ name, surname, password, now, candidate }) {
   // İki kasa aynı anda eklerse aynı numarayı almasın
   for (let attempt = 0; attempt < 5; attempt += 1, candidate += 1) {
     const id = String(candidate);
@@ -19830,14 +19968,17 @@ async function createHavzanStaff({ name, surname, password }) {
       createdAt: now,
       updatedAt: now
     };
-    const created = await firebaseRunTransaction(firestore, async (tx) => {
+    const created = await withFirestoreTimeout(firebaseRunTransaction(firestore, async (tx) => {
       const staffSnap = await tx.get(staffRef);
       const tombstoneSnap = await tx.get(tombstoneRef);
       if (staffSnap.exists() || tombstoneSnap.exists()) return false;
       tx.set(staffRef, record);
       return true;
-    });
+    }));
     if (created) {
+      if (!db.settings) db.settings = {};
+      db.settings.havzanStaffMaxId = Math.max(Number(db.settings.havzanStaffMaxId) || 0, candidate);
+      try { saveDatabase(); } catch (_) {}
       return { success: true, staff: { id: candidate, name, surname, is_manager: false, is_chef: false } };
     }
   }
@@ -19848,9 +19989,17 @@ async function createHavzanStaff({ name, surname, password }) {
 async function deleteHavzanStaff(staffId) {
   const id = String(staffId);
   const staffRef = firebaseDoc(firestore, 'staff', id);
-  const snap = await firebaseGetDoc(staffRef);
-  if (!snap.exists()) return { success: false, error: 'Personel bulunamadı' };
-  const data = snap.data() || {};
+  let data;
+  try {
+    const snap = await withFirestoreTimeout(firebaseGetDoc(staffRef));
+    if (!snap.exists()) return { success: false, error: 'Personel bulunamadı' };
+    data = snap.data() || {};
+  } catch (error) {
+    // Okuma kotası dolu: son bilinen listeden şifreyi al, okumadan sil
+    const cached = havzanStaffById.get(id);
+    if (!cached || !isFirestoreQuotaOrNetworkError(error)) throw error;
+    data = { password: cached.password };
+  }
   const idNum = Number(id);
   await firebaseSetDoc(firebaseDoc(firestore, 'staff_deletions', id), {
     staffId: Number.isFinite(idNum) ? idNum : id,

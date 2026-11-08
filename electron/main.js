@@ -17451,7 +17451,20 @@ function cleanupOldPrintJobs() {
 }
 
 // Sepetteyken fiş HTML'i hazırlanır. Yazıcıya basış, sıcak fiş penceresinden gider.
-function preloadPrintWindows(htmlReceiptsMap) {
+/**
+ * Sepetteyken önceden hazırlanan fişin, gönderilen siparişle aynı olup olmadığını anlamak için imza.
+ * Ürün, adet, ikram, ürün notu, sipariş notu ya da masa farklıysa hazır fiş kullanılmaz.
+ */
+function printOrderSignature({ items, tableName, orderNote } = {}) {
+  const norm = (v) => (v == null ? '' : String(v).trim());
+  return JSON.stringify({
+    t: norm(tableName),
+    n: norm(orderNote),
+    i: (items || []).map((it) => [norm(it.id ?? it.product_id), Number(it.quantity) || 0, !!it.isGift, norm(it.extraNote ?? it.item_note)]),
+  });
+}
+
+function preloadPrintWindows(htmlReceiptsMap, signature = null) {
   for (const [, oldJob] of preloadedPrintJobs.entries()) {
     closePreloadedWindows(oldJob);
   }
@@ -17459,7 +17472,7 @@ function preloadPrintWindows(htmlReceiptsMap) {
 
   const jobId = Date.now().toString(36) + Math.random().toString(36).slice(2);
   const receipts = Object.entries(htmlReceiptsMap || {}).map(([printerName, html]) => ({ printerName, html }));
-  preloadedPrintJobs.set(jobId, { receipts, windows: [], createdAt: Date.now() });
+  preloadedPrintJobs.set(jobId, { receipts, windows: [], createdAt: Date.now(), signature });
   cleanupOldPrintJobs();
   return jobId;
 }
@@ -18959,7 +18972,7 @@ self.addEventListener('fetch', (event) => {
       const htmlReceipts = prepareAdisyonHtmlReceipts(itemsWithMeta, adisyonData);
       // BrowserWindow'ları şimdiden aç + HTML yükle — Siparişi Gönder'e basılınca sadece .print() kalır
       const printJobId = Object.keys(htmlReceipts).length > 0
-        ? preloadPrintWindows(htmlReceipts)
+        ? preloadPrintWindows(htmlReceipts, printOrderSignature({ items, tableName, orderNote }))
         : null;
       console.log(`[prepare-adisyon] htmlReceipts yazıcılar: [${Object.keys(htmlReceipts).join(', ')}], printJobId: ${printJobId}`);
       res.json({ success: true, receipts, htmlReceipts, printJobId });
@@ -18977,14 +18990,25 @@ self.addEventListener('fetch', (event) => {
         return res.status(400).json({ success: false, error: 'Ürün listesi gerekli' });
       }
       
-      // 1. YOL: Önceden yüklenmiş pencere var → sadece .print() (en hızlı, sıfır gecikme)
-      if (printJobId && preloadedPrintJobs.has(printJobId)) {
+      // Hazır fiş, not/ürün eklenmeden önce hazırlanmış olabilir: gönderilen siparişle aynı değilse kullanma
+      const orderSignature = printOrderSignature({ items, tableName, orderNote });
+      const preloadedJob = printJobId ? preloadedPrintJobs.get(printJobId) : null;
+      const preloadedMatches = !!preloadedJob && preloadedJob.signature === orderSignature;
+      if (preloadedJob && !preloadedMatches) {
+        console.warn(`[/api/orders] Hazır fiş siparişle aynı değil (not/ürün sonradan değişmiş), yeniden üretilecek`);
+        preloadedPrintJobs.delete(printJobId);
+        closePreloadedWindows(preloadedJob);
+      }
+
+      // 1. YOL: Önceden yüklenmiş pencere var ve sipariş aynı → sadece .print() (en hızlı, sıfır gecikme)
+      if (preloadedMatches) {
         console.log(`[/api/orders] ✅ Hazır pencere bulundu (printJobId=${printJobId}), anında yazdırılıyor`);
         printPreloadedJob(printJobId).catch(err => {
           console.error('Önceden yüklenmiş fiş yazdırma hatası:', err);
         });
-      // 2. YOL: Hazır HTML var → pencereyi yeni aç, HTML yükle, yazdır
-      } else if (preparedHtmlReceipts && typeof preparedHtmlReceipts === 'object' && Object.keys(preparedHtmlReceipts).length > 0) {
+      // 2. YOL: Hazır HTML var (eski istemci) → yalnızca hazır iş yoksa ve not içermeyen siparişte kullan
+      } else if (!preloadedJob && !orderNote && !items.some((it) => it && it.extraNote)
+        && preparedHtmlReceipts && typeof preparedHtmlReceipts === 'object' && Object.keys(preparedHtmlReceipts).length > 0) {
         console.log(`[/api/orders] ⚡ Hazır HTML ile yazdırılıyor`);
         printPreparedHtmlReceipts(preparedHtmlReceipts).catch(err => {
           console.error('Mobil hazır fiş yazdırma hatası:', err);

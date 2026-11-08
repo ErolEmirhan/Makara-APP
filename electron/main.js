@@ -1856,6 +1856,17 @@ function createWindow() {
     mainWindow = null;
   });
 
+  // Görev çubuğundan / Alt+Tab ile geri gelince tam ekran + kiosk'a dön ve öne çık
+  mainWindow.on('restore', () => {
+    setTimeout(() => bringMainWindowToFront(), 50);
+  });
+  mainWindow.on('minimize', () => {
+    // Windows'un kendi kısayoluyla (Win+D vb.) küçültülürse de kiosk kilidi kalksın ki geri gelebilsin
+    try {
+      if (mainWindow.isKiosk()) mainWindow.setKiosk(false);
+    } catch (_) {}
+  });
+
   if (app.isPackaged) {
     mainWindow.on('focus', () => {
       const elapsed = Date.now() - lastUpdateCheckAt;
@@ -7634,16 +7645,47 @@ app.whenReady().then(() => {
   });
 });
 
+/** Açılış ekranı bitti mi: bittiyse kasa penceresi tam ekran + kiosk çalışır */
+let launcherUiFinished = false;
+
+/** Kiosk + tam ekranı geri aç (yalnızca açılış ekranı bittiyse) */
+function applyKioskLayout() {
+  if (!mainWindow || mainWindow.isDestroyed() || !launcherUiFinished) return;
+  try {
+    if (!mainWindow.isFullScreen()) mainWindow.setFullScreen(true);
+    if (!mainWindow.isKiosk()) mainWindow.setKiosk(true);
+  } catch (_) {}
+}
+
+/**
+ * Kasa penceresini zorla öne getirir. Windows başka bir uygulamanın öne çıkmasını engellediği için
+ * kısa süre "her zaman üstte" yapılır; kiosk + şeffaf pencere simge durumundan dönerken takılmasın diye
+ * önce normal pencereye çevrilir.
+ */
+function bringMainWindowToFront() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.setAlwaysOnTop(true, 'screen-saver');
+    mainWindow.moveTop();
+    mainWindow.focus();
+    if (typeof app.focus === 'function') app.focus({ steal: true });
+    mainWindow.webContents.focus();
+  } catch (_) {}
+  setTimeout(() => {
+    try {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      applyKioskLayout();
+      mainWindow.setAlwaysOnTop(false);
+      mainWindow.focus();
+    } catch (_) {}
+  }, 350);
+}
+
 // İkinci açılış denemesinde açık olan kasa penceresini öne getir
 app.on('second-instance', () => {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  if (!mainWindow.isVisible()) mainWindow.show();
-  mainWindow.setAlwaysOnTop(true);
-  mainWindow.focus();
-  setTimeout(() => {
-    try { if (!mainWindow.isDestroyed()) mainWindow.setAlwaysOnTop(false); } catch (_) {}
-  }, 400);
+  bringMainWindowToFront();
 });
 
 app.on('window-all-closed', () => {
@@ -19254,6 +19296,7 @@ self.addEventListener('fetch', (event) => {
 ipcMain.handle('finish-launcher-ui', () => {
   try {
     if (!mainWindow || mainWindow.isDestroyed()) return { ok: false };
+    launcherUiFinished = true;
     mainWindow.setFullScreen(true);
     mainWindow.setKiosk(true);
     return { ok: true };
@@ -19432,8 +19475,15 @@ ipcMain.handle('test-integration-connection', async (event, platform, settings) 
 
 // Minimize window handler
 ipcMain.handle('minimize-window', () => {
-  if (mainWindow) {
-    mainWindow.minimize();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    // Kiosk/tam ekran pencere Windows'ta simge durumundan geri gelemiyor: önce normal pencereye çevir
+    try {
+      if (mainWindow.isKiosk()) mainWindow.setKiosk(false);
+      if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+    } catch (_) {}
+    setTimeout(() => {
+      try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize(); } catch (_) {}
+    }, 60);
   }
   return { success: true };
 });

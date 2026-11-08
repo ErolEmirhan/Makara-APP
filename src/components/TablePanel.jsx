@@ -1079,33 +1079,66 @@ const TablePanel = ({ onSelectTable, branchKey, refreshTrigger, autoOpenOrderId,
     setBulkAdisyon({ jobs, finished: false });
     await wait(450); // pencere kayarak gelsin
 
+    // Kasa yazdırma kuyruğunu izleyebiliyorsa ekrandaki fiş gerçek baskıyla eşlenir
+    const tracking = typeof api.onPrintTrack === 'function';
+    const stageListeners = new Map();
+    const offTrack = tracking
+      ? api.onPrintTrack(({ trackId, stage } = {}) => { const fn = stageListeners.get(trackId); if (fn) fn(stage); })
+      : null;
+    const durations = [];
     const failed = [];
-    for (const job of jobs) {
-      const { order } = job;
-      setJob(job.key, { status: 'printing' });
-      const startedAt = Date.now();
-      let ok = false;
-      try {
-        const result = await api.printAdisyon({
-          items: job.items,
-          tableName: order.table_name,
-          tableType: order.table_type,
-          orderNote: order.order_note || null,
-          sale_date: order.order_date || new Date().toLocaleDateString('tr-TR'),
-          sale_time: order.order_time || new Date().toLocaleTimeString('tr-TR'),
-          cashierOnly: true,
-        });
-        ok = !!result?.success;
-        if (!ok) failed.push(`${job.name}: ${result?.error || 'hata'}`);
-      } catch (error) {
-        failed.push(`${job.name}: ${error?.message || 'hata'}`);
+    try {
+      for (const job of jobs) {
+        const { order } = job;
+        const trackId = `${job.key}-${Date.now()}`;
+        const estimateMs = durations.length
+          ? durations.slice(-3).reduce((a, b) => a + b, 0) / Math.min(3, durations.length)
+          : BULK_FEED_MS;
+        let feedFrom = null;
+        const startFeed = () => {
+          if (feedFrom != null) return;
+          feedFrom = performance.now();
+          setJob(job.key, { feedFrom });
+        };
+        stageListeners.set(trackId, (stage) => { if (stage === 'spooled' || stage === 'printing') startFeed(); });
+        setJob(job.key, { status: 'printing', estimateMs });
+        if (!tracking) startFeed();
+        const sentAt = performance.now();
+        let ok = false;
+        let tracked = false;
+        try {
+          const result = await api.printAdisyon({
+            items: job.items,
+            tableName: order.table_name,
+            tableType: order.table_type,
+            orderNote: order.order_note || null,
+            sale_date: order.order_date || new Date().toLocaleDateString('tr-TR'),
+            sale_time: order.order_time || new Date().toLocaleTimeString('tr-TR'),
+            cashierOnly: true,
+            trackId,
+          });
+          ok = !!result?.success;
+          tracked = result?.printTracking === 'done';
+          if (!ok) failed.push(`${job.name}: ${result?.error || 'hata'}`);
+        } catch (error) {
+          failed.push(`${job.name}: ${error?.message || 'hata'}`);
+        }
+        stageListeners.delete(trackId);
+        startFeed();
+        if (tracked) {
+          durations.push(Math.max(300, performance.now() - (feedFrom ?? sentAt)));
+        } else {
+          // Kasa kuyruğu izleyemiyorsa (eski sürüm): fiş ekranda en azından tamamen çıksın
+          const left = BULK_FEED_MS + 150 - (performance.now() - sentAt);
+          if (left > 0) await wait(left);
+        }
+        setJob(job.key, { status: ok ? 'done' : 'failed', doneAt: performance.now() });
+        const key = job.key;
+        setTimeout(() => setJob(key, { hidden: true }), 220 + 120 + BULK_TEAR_MS + 50);
       }
-      // Ekrandaki fiş tamamen çıkmadan koparılmasın
-      const left = BULK_FEED_MS + 150 - (Date.now() - startedAt);
-      if (left > 0) await wait(left);
-      setJob(job.key, { status: ok ? 'done' : 'failed' });
-      await wait(BULK_TEAR_MS);
-      setJob(job.key, { hidden: true });
+      await wait(220 + 120 + BULK_TEAR_MS);
+    } finally {
+      if (offTrack) offTrack();
     }
 
     setBulkAdisyon((prev) => (prev ? { ...prev, finished: true } : prev));

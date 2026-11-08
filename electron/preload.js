@@ -102,6 +102,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Print API
   printReceipt: (receiptData) => ipcRenderer.invoke('print-receipt', receiptData),
   printAdisyon: (adisyonData) => ipcRenderer.invoke('print-adisyon', adisyonData),
+  /** Yazdırma ilerlemesi (spooled → printing → kuyruk boşaldı). Döndürdüğü fonksiyon dinlemeyi bırakır. */
+  onPrintTrack: (callback) => {
+    const handler = (_event, payload) => callback(payload);
+    ipcRenderer.on('print-track', handler);
+    return () => ipcRenderer.removeListener('print-track', handler);
+  },
   prepareAdisyonReceipts: (adisyonData) => ipcRenderer.invoke('prepare-adisyon-receipts', adisyonData),
   prepareAdisyonDesktop: (adisyonData) => ipcRenderer.invoke('prepare-adisyon-desktop', adisyonData),
   prepareAdisyonOnline: (adisyonData) => ipcRenderer.invoke('prepare-adisyon-online', adisyonData),

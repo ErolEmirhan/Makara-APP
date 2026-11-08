@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import receiptLogo from '../assets/receipt-logo-bw.svg';
 
@@ -38,30 +38,57 @@ function MiniReceipt({ job }) {
   );
 }
 
-/** Yazıcıdan çıkan fiş: başlayınca satır satır yükselir, iş bitince koparılıp uçar. */
+/**
+ * Yazıcıdan çıkan fiş, gerçek baskıya bağlı:
+ * - job.feedFrom: yazıcıya veri gitmeye başladığı an → fiş satır satır çıkmaya başlar,
+ *   hız job.estimateMs'e (önceki fişlerin ölçülen süresi) göre ayarlanır, %88'de bekler.
+ * - job.doneAt: kasa "yazıcı fişi aldı" dediği an → kalan kısım hızla çıkar, sonra koparılır.
+ */
 function Paper({ job }) {
-  const ref = useRef(null);
-  const [height, setHeight] = useState(0);
-  const [full, setFull] = useState(0);
+  const wrapRef = useRef(null);
+  const rcRef = useRef(null);
+  const [torn, setTorn] = useState(false);
+  const jobRef = useRef(job);
+  jobRef.current = job;
 
-  useLayoutEffect(() => {
-    const h = ref.current?.firstChild?.offsetHeight || 0;
-    setFull(h);
-    const id = requestAnimationFrame(() => setHeight(h));
-    return () => cancelAnimationFrame(id);
+  useEffect(() => {
+    let raf;
+    let doneFrac = null;
+    let tornSet = false;
+    const tick = () => {
+      const j = jobRef.current;
+      const H = rcRef.current?.offsetHeight || 0;
+      const now = performance.now();
+      let f = 0;
+      if (j.feedFrom != null) {
+        const e = Math.max(400, j.estimateMs || BULK_FEED_MS);
+        const x = Math.min(1, (now - j.feedFrom) / e);
+        f = 0.88 * (1 - Math.pow(1 - x, 1.6));
+      }
+      if (j.doneAt != null) {
+        if (doneFrac == null) doneFrac = f;
+        const k = Math.min(1, (now - j.doneAt) / 220);
+        f = doneFrac + (1 - doneFrac) * k;
+        if (k >= 1 && !tornSet) {
+          tornSet = true;
+          setTimeout(() => setTorn(true), 120);
+        }
+      }
+      const h = f >= 1 ? H : Math.floor((f * H) / 7) * 7;
+      if (wrapRef.current) wrapRef.current.style.height = `${h}px`;
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
   }, []);
 
-  const torn = job.status === 'done' || job.status === 'failed';
   return (
     <div
-      ref={ref}
-      className={`bpp-paper${torn ? ' is-torn' : ''}${job.status === 'failed' ? ' is-failed' : ''}`}
-      style={{
-        height: full ? height : 0,
-        transition: `height ${BULK_FEED_MS}ms steps(${Math.max(8, Math.round(full / 7))}, end), transform ${BULK_TEAR_MS}ms cubic-bezier(.65,0,.35,1), opacity ${BULK_TEAR_MS}ms cubic-bezier(.65,0,.35,1)`,
-      }}
+      ref={wrapRef}
+      className={`bpp-paper${torn ? ' is-torn' : ''}`}
+      style={{ height: 0, transition: `transform ${BULK_TEAR_MS}ms cubic-bezier(.65,0,.35,1), opacity ${BULK_TEAR_MS}ms cubic-bezier(.65,0,.35,1)` }}
     >
-      <MiniReceipt job={job} />
+      <div ref={rcRef}><MiniReceipt job={job} /></div>
     </div>
   );
 }
@@ -125,13 +152,13 @@ const CSS = `
 .bpp-chip.ok{color:#0f766e;background:#ccfbf1}.bpp-chip.err{color:#b91c1c;background:#fee2e2}
 @keyframes bpp-chip{from{transform:scale(.7);opacity:0}}
 .bpp-stage{position:absolute;left:0;right:0;top:176px;bottom:213px;overflow:hidden;z-index:2}
-.bpp-paper{position:absolute;left:50%;bottom:0;width:190px;margin-left:-95px;overflow:hidden;transform-origin:50% 100%}
+.bpp-paper{position:absolute;left:50%;bottom:0;width:190px;margin-left:-95px;overflow:hidden;transform-origin:50% 100%}\n.bpp-paper>div{position:absolute;left:0;top:0;width:190px}
 .bpp-paper.is-torn{transform:translate(150px,-60px) rotate(14deg) scale(.65);opacity:0}
 .bpp-printer{position:absolute;left:50%;bottom:10px;width:340px;height:238px;margin-left:-170px;z-index:1}
 .bpp-printer svg{width:100%;height:100%;overflow:visible}
 .bpp-led-blink{animation:bpp-led .22s steps(2) infinite}
 @keyframes bpp-led{50%{opacity:.3}}
-.bpp-rc{position:absolute;left:0;top:0;width:190px;background:#fff;padding:14px 14px 18px;color:#000;box-shadow:0 4px 14px rgba(15,23,42,.16)}
+.bpp-rc{position:relative;width:190px;background:#fff;padding:14px 14px 18px;color:#000;box-shadow:0 4px 14px rgba(15,23,42,.16)}
 .bpp-rc *{color:#000}
 .bpp-br{display:flex;align-items:center;justify-content:center;gap:6px}
 .bpp-br img{width:30px;height:30px}.bpp-br b{display:block;font-size:11px;font-weight:900;letter-spacing:2px;line-height:1}.bpp-br span{display:block;font-size:7px;font-weight:700;letter-spacing:1.5px;margin-top:2px}

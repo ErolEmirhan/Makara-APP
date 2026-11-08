@@ -10,7 +10,7 @@ if (!gotTheLock) {
 const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
-const { execSync, spawnSync } = require('child_process');
+const { execSync, spawnSync, spawn } = require('child_process');
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
@@ -8095,7 +8095,58 @@ ipcMain.handle('print-adisyon-prepared', async (event, receipts) => {
 });
 
 /** Kasa adisyon fişi (cashierOnly) — ipc ve Sultan mobil müdür API ortak. */
-async function printCashierAdisyonFromData(adisyonData) {
+/**
+ * Windows yazdırma kuyruğunu izler: yazıcı işi almaya başlayınca onStage('printing'),
+ * kuyruk boşalınca (yazıcı fişin tamamını aldı) çözülür. Termal yazıcı veriyi aldıkça
+ * bastığı için bu an kağıdın çıkışına çok yakındır.
+ */
+function waitPrinterQueueDrained(printerName, onStage, timeoutMs = 30000) {
+  if (process.platform !== 'win32') return Promise.resolve('unsupported');
+  const target = resolvePrinterDeviceName(printerName) || printerName;
+  if (!target) return Promise.resolve('unsupported');
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue'",
+    "$p = '" + String(target).replace(/'/g, "''") + "'",
+    '$sw = [Diagnostics.Stopwatch]::StartNew()',
+    '$seen = $false',
+    'while ($sw.ElapsedMilliseconds -lt ' + Number(timeoutMs) + ') {',
+    '  $jobs = @(Get-PrintJob -PrinterName $p)',
+    // İş zaten Windows'a teslim edildi: kuyruk boşsa yazıcı fişi almış demektir
+    "  if ($jobs.Count -eq 0) { 'DONE'; break }",
+    "  elseif (-not $seen) { $seen = $true; 'PRINTING' }",
+    '  Start-Sleep -Milliseconds 80',
+    '}',
+    "'END'",
+  ].join('\n');
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (v) => { if (!settled) { settled = true; resolve(v); } };
+    let child;
+    try {
+      child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { windowsHide: true });
+    } catch (_) {
+      finish('unsupported');
+      return;
+    }
+    let buf = '';
+    child.stdout.on('data', (d) => {
+      buf += d.toString();
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop();
+      for (const line of lines) {
+        const t = line.trim();
+        if (t === 'PRINTING') onStage?.('printing');
+        else if (t === 'DONE') finish('done');
+        else if (t === 'END') finish('timeout');
+      }
+    });
+    child.on('error', () => finish('unsupported'));
+    child.on('exit', () => finish('timeout'));
+    setTimeout(() => { try { child.kill(); } catch (_) {} finish('timeout'); }, timeoutMs + 3000);
+  });
+}
+
+async function printCashierAdisyonFromData(adisyonData, options = {}) {
   const items = adisyonData.items || [];
   const paymentGroups = Array.isArray(adisyonData.paymentGroups) ? adisyonData.paymentGroups : null;
   const cashierPrinter = db.settings.cashierPrinter;
@@ -8138,7 +8189,16 @@ async function printCashierAdisyonFromData(adisyonData) {
       receiptData.qrCodeDataURL = await QRCode.toDataURL(mapsURL, { width: 280, margin: 4, errorCorrectionLevel: 'H', color: { dark: '#000000', light: '#FFFFFF' } });
     } catch (_) {}
   }
-  await printToPrinter(cashierPrinter.printerName, cashierPrinter.printerType, receiptData, false, null);
+  const printRes = await printToPrinter(cashierPrinter.printerName, cashierPrinter.printerType, receiptData, false, null);
+  if (printRes && printRes.success === false) {
+    return { success: false, error: printRes.error || 'Yazdırılamadı' };
+  }
+  if (typeof options.onStage === 'function') {
+    // Fiş Windows'a teslim edildi; yazıcı fişin tamamını alana kadar bekle (ekrandaki yazıcı bununla eşlenir)
+    options.onStage('spooled');
+    const drained = await waitPrinterQueueDrained(cashierPrinter.printerName, options.onStage);
+    return { success: true, error: null, printTracking: drained };
+  }
   return { success: true, error: null };
 }
 
@@ -8153,7 +8213,11 @@ ipcMain.handle('print-adisyon', async (event, adisyonData) => {
     
     if (adisyonData.cashierOnly === true) {
       console.log('   💰 Kasa yazıcısından fiyatlı fiş yazdırılıyor...');
-      const r = await printCashierAdisyonFromData(adisyonData);
+      const trackId = adisyonData.trackId;
+      const sender = event.sender;
+      const r = await printCashierAdisyonFromData(adisyonData, trackId
+        ? { onStage: (stage) => { try { if (!sender.isDestroyed()) sender.send('print-track', { trackId, stage }); } catch (_) {} } }
+        : {});
       console.log(`\n=== KASA YAZICISINDAN FİYATLI FİŞ YAZDIRMA TAMAMLANDI ===`);
       return r;
     }

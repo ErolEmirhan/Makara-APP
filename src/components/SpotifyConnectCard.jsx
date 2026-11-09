@@ -77,6 +77,11 @@ export default function SpotifyConnectCard() {
           </button>
         )}
       </div>
+      {busy && !connected && (
+        <div className="border-t border-gray-100 bg-gray-50 px-6 py-3 text-sm font-medium text-gray-600">
+          Chrome'da Spotify sayfası açıldı: <b>Kabul et (Agree)</b>'ye basın. Bitince kasa kendiliğinden geri gelir.
+        </div>
+      )}
       {message && (
         <div className={`border-t px-6 py-3 text-sm font-medium ${message.type === 'ok' ? 'border-emerald-100 bg-emerald-50 text-emerald-700' : message.type === 'warn' ? 'border-amber-100 bg-amber-50 text-amber-700' : 'border-red-100 bg-red-50 text-red-700'}`}>
           {message.text}

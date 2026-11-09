@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Menu, dialog, webContents, net } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, webContents, net, shell } = require('electron');
 const crypto = require('crypto');
 
 // Tek kopya: kasa zaten açıksa ikinci açılış hiçbir şey başlatmadan hemen kapanır
@@ -17574,6 +17574,11 @@ function startAPIServer() {
   const appExpress = express();
   appExpress.use(cors());
   appExpress.use(express.json({ limit: '10mb' }));
+
+  // Spotify girişi bilgisayarın tarayıcısından buraya döner
+  appExpress.get('/spotify/callback', (req, res) => {
+    handleSpotifyCallback(req, res).catch((e) => res.status(500).send(String(e?.message || e)));
+  });
   
   // Assets klasörünü serve et
   const assetsPath = path.join(__dirname, '../assets');
@@ -21036,9 +21041,69 @@ async function withSpotifyCover(res) {
   return res;
 }
 
-/** Kasada küçük bir pencerede Spotify girişi (kiosk ekranında tarayıcı arkada kalmasın) */
+/** Bekleyen Spotify girişi (bilgisayarın tarayıcısında): { state, verifier, resolve, timer } */
+let pendingSpotifyAuth = null;
+
+const spotifyCallbackPage = (ok, text) => `<!doctype html><html lang="tr"><head><meta charset="utf-8"><title>Spotify</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#121212;color:#fff;font-family:system-ui,Segoe UI,sans-serif}
+.c{text-align:center;padding:40px}.i{width:72px;height:72px;border-radius:50%;display:grid;place-items:center;margin:0 auto 18px;font-size:38px;font-weight:900;color:#000;background:${ok ? '#1ed760' : '#f87171'}}
+h1{font-size:22px;margin:0 0 8px}p{color:#b3b3b3;margin:0}</style></head>
+<body><div class="c"><div class="i">${ok ? '✓' : '!'}</div><h1>${ok ? 'Spotify kasaya bağlandı' : 'Bağlanamadı'}</h1><p>${text}</p></div></body></html>`;
+
+/** Kasa API sunucusu: Spotify girişten sonra buraya döner (127.0.0.1:3000/spotify/callback) */
+async function handleSpotifyCallback(req, res) {
+  const p = pendingSpotifyAuth;
+  const send = (ok, text) => res.status(ok ? 200 : 400).set('Content-Type', 'text/html; charset=utf-8').send(spotifyCallbackPage(ok, text));
+  if (!p || req.query.state !== p.state) {
+    return send(false, 'Giriş isteği bulunamadı ya da süresi doldu. Kasada "Spotify\'ı bağla"ya tekrar basın.');
+  }
+  pendingSpotifyAuth = null;
+  clearTimeout(p.timer);
+  if (req.query.error) {
+    send(false, req.query.error === 'access_denied' ? 'İzin verilmedi.' : String(req.query.error));
+    return p.resolve({ success: false, error: req.query.error === 'access_denied' ? 'İzin verilmedi' : String(req.query.error) });
+  }
+  try {
+    const json = await spotifyTokenRequest({
+      grant_type: 'authorization_code',
+      code: String(req.query.code || ''),
+      redirect_uri: SPOTIFY_REDIRECT_URI,
+      code_verifier: p.verifier,
+    });
+    saveSpotifySettings({
+      accessToken: json.access_token,
+      refreshToken: json.refresh_token,
+      expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
+      connectedAt: new Date().toISOString(),
+    });
+    let name = '';
+    let product = '';
+    try {
+      const me = await spotifyApi('GET', '/me');
+      name = me?.display_name || me?.id || '';
+      product = me?.product || '';
+      saveSpotifySettings({ displayName: name, product });
+    } catch (_) {}
+    send(true, 'Bu sekmeyi kapatabilirsiniz. Müdürler artık telefondan şarkı arayıp kasada çalabilir.');
+    p.resolve({ success: true, displayName: name, product });
+  } catch (e) {
+    send(false, e?.message || 'Spotify bağlanamadı.');
+    p.resolve({ success: false, error: e?.message || 'Spotify bağlanamadı' });
+  }
+}
+
+/**
+ * Spotify girişi bilgisayarın kendi tarayıcısında (Chrome) açılır: orada Spotify'a girişliyse
+ * yalnızca "Kabul et" denir. Kasa tam ekran olduğu için tarayıcı arkada kalmasın diye kasa
+ * penceresi geçici küçülür, giriş bitince yeniden öne gelir.
+ */
 function connectSpotifyInteractive() {
   return new Promise((resolve) => {
+    if (pendingSpotifyAuth) {
+      clearTimeout(pendingSpotifyAuth.timer);
+      pendingSpotifyAuth.resolve({ success: false, error: 'Yeni giriş başlatıldı' });
+      pendingSpotifyAuth = null;
+    }
     const verifier = crypto.randomBytes(48).toString('base64url');
     const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
     const state = crypto.randomBytes(12).toString('hex');
@@ -21050,62 +21115,35 @@ function connectSpotifyInteractive() {
       code_challenge: challenge,
       scope: SPOTIFY_SCOPES,
       state,
-      show_dialog: 'true',
     }).toString();
-    const win = new BrowserWindow({
-      width: 520,
-      height: 760,
-      parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
-      modal: !!(mainWindow && !mainWindow.isDestroyed()),
-      title: 'Spotify\'a bağlan',
-      autoHideMenuBar: true,
-      alwaysOnTop: true,
-      webPreferences: { contextIsolation: true, nodeIntegration: false, partition: 'spotify-auth' },
-    });
-    let settled = false;
-    const finish = (result) => {
-      if (settled) return;
-      settled = true;
-      try { if (!win.isDestroyed()) win.close(); } catch (_) {}
+    const done = (result) => {
+      try { bringMainWindowToFront(); } catch (_) {}
       resolve(result);
     };
-    const handleUrl = async (event, url) => {
-      if (!String(url).startsWith(SPOTIFY_REDIRECT_URI)) return;
-      event.preventDefault();
-      const u = new URL(url);
-      if (u.searchParams.get('state') !== state) return finish({ success: false, error: 'Güvenlik doğrulaması başarısız, tekrar deneyin' });
-      const err = u.searchParams.get('error');
-      if (err) return finish({ success: false, error: err === 'access_denied' ? 'İzin verilmedi' : err });
-      try {
-        const json = await spotifyTokenRequest({
-          grant_type: 'authorization_code',
-          code: u.searchParams.get('code'),
-          redirect_uri: SPOTIFY_REDIRECT_URI,
-          code_verifier: verifier,
-        });
-        saveSpotifySettings({
-          accessToken: json.access_token,
-          refreshToken: json.refresh_token,
-          expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
-          connectedAt: new Date().toISOString(),
-        });
-        let name = '';
-        let product = '';
-        try {
-          const me = await spotifyApi('GET', '/me');
-          name = me?.display_name || me?.id || '';
-          product = me?.product || '';
-          saveSpotifySettings({ displayName: name, product });
-        } catch (_) {}
-        finish({ success: true, displayName: name, product });
-      } catch (e) {
-        finish({ success: false, error: e?.message || 'Spotify bağlanamadı' });
-      }
+    pendingSpotifyAuth = {
+      state,
+      verifier,
+      resolve: done,
+      timer: setTimeout(() => {
+        if (pendingSpotifyAuth?.state === state) pendingSpotifyAuth = null;
+        done({ success: false, error: 'Zaman aşımı: tarayıcıda giriş 5 dakika içinde tamamlanmadı' });
+      }, 5 * 60 * 1000),
     };
-    win.webContents.on('will-redirect', handleUrl);
-    win.webContents.on('will-navigate', handleUrl);
-    win.on('closed', () => finish({ success: false, error: 'Pencere kapatıldı' }));
-    win.loadURL(authUrl).catch(() => {});
+    // Kasa penceresini geçici küçült (kiosk kapalı) ki tarayıcı önde açılsın
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        if (mainWindow.isKiosk()) mainWindow.setKiosk(false);
+        if (mainWindow.isFullScreen()) mainWindow.setFullScreen(false);
+        setTimeout(() => { try { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize(); } catch (_) {} }, 80);
+      }
+    } catch (_) {}
+    shell.openExternal(authUrl).catch((e) => {
+      if (pendingSpotifyAuth?.state === state) {
+        clearTimeout(pendingSpotifyAuth.timer);
+        pendingSpotifyAuth = null;
+      }
+      done({ success: false, error: 'Tarayıcı açılamadı: ' + (e?.message || e) });
+    });
   });
 }
 

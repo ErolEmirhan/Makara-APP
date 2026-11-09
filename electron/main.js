@@ -7618,6 +7618,8 @@ function generateReceiptHTML(receiptData) {
 }
 
 app.whenReady().then(() => {
+  // Müzik yardımcısı (telefondan müzik aç/kapa) arkada hazır dursun: ilk dokunuş da hızlı olsun
+  setTimeout(() => warmKasaMusicHelper(), 15000);
   loadBranchSettings();
   initDatabase();
   enableLaunchAtStartup();
@@ -7703,6 +7705,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  try { if (kasaMusicProc) kasaMusicProc.kill(); } catch (_) {}
   flushSaveDatabaseSync();
 });
 
@@ -20671,71 +20674,203 @@ function allocateStaffId() {
 }
 
 /**
- * Kasadaki müzik (Spotify vb.): Windows medya kontrolüyle doğrudan çal / durdur / durum.
- * Klavyedeki çal-durdur tuşunun bağlı olduğu yer; tuşa basmaktan farkı, "durdur" zaten
- * durmuş müziği açmaz. Medya kontrolüne ulaşılamazsa klavyenin çal/durdur tuşu gönderilir.
- * Dönüş: { playing: true|false|null, title, app, method }
+ * Kasadaki müzik (Spotify vb.): Windows medya kontrolüyle (klavyedeki çal/durdur tuşunun
+ * bağlı olduğu yer) doğrudan çal / durdur / önceki / sonraki / durum.
+ * Hız için tek bir PowerShell süreci açık tutulur (WinRT bir kez yüklenir); her komut
+ * stdin'den gider, sonuç tek satır döner. Metinler base64 UTF-8 taşınır (Türkçe karakterler).
+ * Dönüş: { playing, title, artist, app, positionSec, durationSec, thumb, method }
  */
-function controlKasaMusic(mode = 'status') {
-  if (process.platform !== 'win32') return Promise.resolve({ playing: null, error: 'Yalnızca Windows kasada çalışır' });
-  const action = ['play', 'pause', 'status'].includes(mode) ? mode : 'status';
-  const script = `
+const KASA_MUSIC_PS = String.raw`
 $ErrorActionPreference = 'Stop'
-$action = '${action}'
-function Send-MediaKey {
-  Add-Type -Namespace MakaraMedia -Name Keys -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);'
-  [MakaraMedia.Keys]::keybd_event(0xB3, 0, 1, [System.UIntPtr]::Zero)
-  [MakaraMedia.Keys]::keybd_event(0xB3, 0, 3, [System.UIntPtr]::Zero)
-}
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+function B64([string]$s) { if (-not $s) { return '' }; [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($s)) }
+$ready = $false
 try {
   Add-Type -AssemblyName System.Runtime.WindowsRuntime
-  $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+  Add-Type -AssemblyName System.Drawing
+  $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation` + '`' + String.raw`1' })[0]
   function Await($op, $type) { $t = $asTaskGeneric.MakeGenericMethod($type).Invoke($null, @($op)); $t.Wait(-1) | Out-Null; $t.Result }
   [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime] | Out-Null
+  [Windows.Storage.Streams.IRandomAccessStreamWithContentType, Windows.Storage.Streams, ContentType = WindowsRuntime] | Out-Null
   $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
-  $s = $mgr.GetSessions() | Where-Object { $_.SourceAppUserModelId -match 'Spotify' } | Select-Object -First 1
-  if (-not $s) { $s = $mgr.GetCurrentSession() }
-  if (-not $s) { 'NOSESSION'; exit }
-  $before = [string]$s.GetPlaybackInfo().PlaybackStatus
-  if ($action -eq 'pause' -and $before -eq 'Playing') { Await ($s.TryPauseAsync()) ([bool]) | Out-Null; Start-Sleep -Milliseconds 400 }
-  elseif ($action -eq 'play' -and $before -ne 'Playing') { Await ($s.TryPlayAsync()) ([bool]) | Out-Null; Start-Sleep -Milliseconds 400 }
-  $st = [string]$s.GetPlaybackInfo().PlaybackStatus
-  $title = ''
-  try { $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties]); $title = (@($p.Artist, $p.Title) | Where-Object { $_ }) -join ' - ' } catch {}
-  "STATUS|$st|$($s.SourceAppUserModelId)|$title"
-} catch {
-  if ($action -ne 'status') { Send-MediaKey; 'KEY' } else { 'ERROR|' + $_.Exception.Message }
+  $ready = $true
+} catch { $initError = $_.Exception.Message }
+Add-Type -Namespace MakaraMedia -Name Keys -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);'
+function Send-Key([byte]$vk) { [MakaraMedia.Keys]::keybd_event($vk, 0, 1, [System.UIntPtr]::Zero); [MakaraMedia.Keys]::keybd_event($vk, 0, 3, [System.UIntPtr]::Zero) }
+$thumbKey = ''; $thumbB64 = ''
+function Get-Thumb($props) {
+  $key = "$($props.Artist)|$($props.Title)"
+  if ($key -eq $script:thumbKey) { return $script:thumbB64 }
+  $script:thumbKey = $key; $script:thumbB64 = ''
+  try {
+    if (-not $props.Thumbnail) { return '' }
+    $ras = Await ($props.Thumbnail.OpenReadAsync()) ([Windows.Storage.Streams.IRandomAccessStreamWithContentType])
+    $stream = [System.IO.WindowsRuntimeStreamExtensions]::AsStreamForRead($ras)
+    $img = [System.Drawing.Image]::FromStream($stream)
+    $bmp = New-Object System.Drawing.Bitmap 160, 160
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $side = [Math]::Min($img.Width, $img.Height)
+    $g.DrawImage($img, (New-Object System.Drawing.Rectangle 0, 0, 160, 160), (New-Object System.Drawing.Rectangle ([int](($img.Width - $side) / 2)), ([int](($img.Height - $side) / 2)), $side, $side), [System.Drawing.GraphicsUnit]::Pixel)
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+    $script:thumbB64 = [Convert]::ToBase64String($ms.ToArray())
+    $g.Dispose(); $bmp.Dispose(); $img.Dispose(); $stream.Dispose()
+  } catch {}
+  return $script:thumbB64
+}
+while ($true) {
+  $line = [Console]::In.ReadLine()
+  if ($null -eq $line) { break }
+  $parts = $line.Split('|'); $id = $parts[0]; $action = $parts[1]
+  try {
+    if (-not $ready) { throw "init: $initError" }
+    $s = $mgr.GetSessions() | Where-Object { $_.SourceAppUserModelId -match 'Spotify' } | Select-Object -First 1
+    if (-not $s) { $s = $mgr.GetCurrentSession() }
+    if (-not $s) { "RES|$id|NOSESSION"; [Console]::Out.Flush(); continue }
+    $before = [string]$s.GetPlaybackInfo().PlaybackStatus
+    $beforeTitle = ''
+    if ($action -eq 'next' -or $action -eq 'prev') {
+      try { $bp = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties]); $beforeTitle = "$($bp.Artist)|$($bp.Title)" } catch {}
+    }
+    $changed = $false
+    if ($action -eq 'pause' -and $before -eq 'Playing') { Await ($s.TryPauseAsync()) ([bool]) | Out-Null; $changed = $true }
+    elseif ($action -eq 'play' -and $before -ne 'Playing') { Await ($s.TryPlayAsync()) ([bool]) | Out-Null; $changed = $true }
+    elseif ($action -eq 'next') { Await ($s.TrySkipNextAsync()) ([bool]) | Out-Null; $changed = $true }
+    elseif ($action -eq 'prev') { Await ($s.TrySkipPreviousAsync()) ([bool]) | Out-Null; $changed = $true }
+    $st = [string]$s.GetPlaybackInfo().PlaybackStatus
+    if ($changed) {
+      # Uygulama durumu güncelleyene kadar kısa kısa bak (en fazla ~600 ms)
+      if ($action -eq 'next' -or $action -eq 'prev') {
+        # Yeni şarkının bilgisi gelene kadar bak (en fazla ~1,5 sn); "önceki" aynı şarkıyı başa sarabilir
+        for ($i = 0; $i -lt 25; $i++) {
+          Start-Sleep -Milliseconds 60
+          try {
+            $np = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+            if ("$($np.Artist)|$($np.Title)" -ne $beforeTitle) { break }
+            if ($action -eq 'prev' -and $i -ge 6 -and $s.GetTimelineProperties().Position.TotalSeconds -lt 3) { break }
+          } catch {}
+        }
+        $st = [string]$s.GetPlaybackInfo().PlaybackStatus
+      } else {
+        for ($i = 0; $i -lt 12; $i++) {
+          $st = [string]$s.GetPlaybackInfo().PlaybackStatus
+          if (($action -eq 'pause' -and $st -ne 'Playing') -or ($action -eq 'play' -and $st -eq 'Playing')) { break }
+          Start-Sleep -Milliseconds 50
+        }
+      }
+    }
+    $title = ''; $artist = ''; $thumb = ''
+    try {
+      $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties])
+      $title = $p.Title; $artist = $p.Artist; $thumb = Get-Thumb $p
+    } catch {}
+    $pos = 0; $dur = 0
+    try {
+      $tl = $s.GetTimelineProperties()
+      $dur = [Math]::Max(0, ($tl.EndTime - $tl.StartTime).TotalSeconds)
+      $pos = $tl.Position.TotalSeconds
+      if ($st -eq 'Playing') { $pos += ([DateTimeOffset]::Now - $tl.LastUpdatedTime).TotalSeconds }
+      if ($dur -gt 0) { $pos = [Math]::Min([Math]::Max(0, $pos), $dur) }
+    } catch {}
+    "RES|$id|OK|$st|$(B64 $s.SourceAppUserModelId)|$(B64 $title)|$(B64 $artist)|$(([Math]::Round($pos, 1)).ToString([Globalization.CultureInfo]::InvariantCulture))|$(([Math]::Round($dur, 1)).ToString([Globalization.CultureInfo]::InvariantCulture))|$thumb"
+  } catch {
+    if ($action -eq 'play' -or $action -eq 'pause') { Send-Key 0xB3; "RES|$id|KEY" }
+    elseif ($action -eq 'next') { Send-Key 0xB0; "RES|$id|KEY" }
+    elseif ($action -eq 'prev') { Send-Key 0xB1; "RES|$id|KEY" }
+    else { "RES|$id|ERR|$(B64 $_.Exception.Message)" }
+  }
+  [Console]::Out.Flush()
 }
 `;
-  const encoded = Buffer.from(script, 'utf16le').toString('base64');
-  return new Promise((resolve) => {
-    let out = '';
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
-    let child;
-    try {
-      child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true });
-    } catch (e) {
-      finish({ playing: null, error: e?.message || 'PowerShell başlatılamadı' });
-      return;
+
+let kasaMusicProc = null;
+let kasaMusicBuf = '';
+let kasaMusicSeq = 0;
+const kasaMusicPending = new Map();
+
+function ensureKasaMusicProcess() {
+  if (kasaMusicProc && !kasaMusicProc.killed && kasaMusicProc.exitCode == null) return kasaMusicProc;
+  const encoded = Buffer.from(KASA_MUSIC_PS, 'utf16le').toString('base64');
+  const proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true });
+  kasaMusicProc = proc;
+  kasaMusicBuf = '';
+  proc.stdout.setEncoding('utf8');
+  proc.stdout.on('data', (chunk) => {
+    kasaMusicBuf += chunk;
+    const lines = kasaMusicBuf.split(/\r?\n/);
+    kasaMusicBuf = lines.pop();
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line.startsWith('RES|')) continue;
+      const parts = line.split('|');
+      const pending = kasaMusicPending.get(parts[1]);
+      if (!pending) continue;
+      kasaMusicPending.delete(parts[1]);
+      pending.resolve(parts.slice(2));
     }
-    child.stdout.on('data', (d) => { out += d.toString(); });
-    child.on('error', (e) => finish({ playing: null, error: e?.message || 'PowerShell hatası' }));
-    child.on('exit', () => {
-      const line = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop() || '';
-      if (line.startsWith('STATUS|')) {
-        const [, st, app, title] = line.split('|');
-        finish({ playing: st === 'Playing', title: title || '', app: app || '', method: 'media' });
-      } else if (line === 'KEY') {
-        finish({ playing: action === 'play', title: '', app: '', method: 'key' });
-      } else if (line === 'NOSESSION') {
-        finish({ playing: false, title: '', app: '', method: 'media', noSession: true });
-      } else {
-        finish({ playing: null, error: line.replace(/^ERROR\|/, '') || 'Müzik durumu okunamadı' });
-      }
-    });
-    setTimeout(() => { try { child.kill(); } catch (_) {} finish({ playing: null, error: 'Müzik kontrolü zaman aşımı' }); }, 12000);
   });
+  const fail = (err) => {
+    if (kasaMusicProc === proc) kasaMusicProc = null;
+    for (const [, p] of kasaMusicPending) p.reject(err);
+    kasaMusicPending.clear();
+  };
+  proc.on('error', (e) => fail(e));
+  proc.on('exit', () => fail(new Error('Müzik yardımcısı kapandı')));
+  return proc;
+}
+
+/** Kasa açılınca müzik yardımcısını arkada hazırla: ilk dokunuş da hızlı olsun */
+function warmKasaMusicHelper() {
+  if (process.platform !== 'win32') return;
+  try { ensureKasaMusicProcess(); } catch (_) {}
+}
+
+function sendKasaMusicCommand(action, timeoutMs = 9000) {
+  return new Promise((resolve, reject) => {
+    let proc;
+    try { proc = ensureKasaMusicProcess(); } catch (e) { reject(e); return; }
+    const id = String(++kasaMusicSeq);
+    const timer = setTimeout(() => {
+      kasaMusicPending.delete(id);
+      try { proc.kill(); } catch (_) {}
+      reject(new Error('Müzik kontrolü zaman aşımı'));
+    }, timeoutMs);
+    kasaMusicPending.set(id, {
+      resolve: (v) => { clearTimeout(timer); resolve(v); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
+    try { proc.stdin.write(`${id}|${action}\n`); } catch (e) { kasaMusicPending.delete(id); clearTimeout(timer); reject(e); }
+  });
+}
+
+async function controlKasaMusic(mode = 'status') {
+  if (process.platform !== 'win32') return { playing: null, error: 'Yalnızca Windows kasada çalışır' };
+  const action = ['play', 'pause', 'next', 'prev', 'status'].includes(mode) ? mode : 'status';
+  const fromB64 = (v) => { try { return v ? Buffer.from(v, 'base64').toString('utf8') : ''; } catch (_) { return ''; } };
+  let res;
+  try {
+    res = await sendKasaMusicCommand(action);
+  } catch (e) {
+    // Yardımcı takıldıysa bir kez yeniden başlatıp dene
+    try { res = await sendKasaMusicCommand(action); } catch (e2) { return { playing: null, error: e2?.message || 'Müzik kontrolü başarısız' }; }
+  }
+  const [kind, st, app, title, artist, pos, dur, thumb] = res;
+  if (kind === 'OK') {
+    return {
+      playing: st === 'Playing',
+      app: fromB64(app),
+      title: fromB64(title),
+      artist: fromB64(artist),
+      positionSec: Number(pos) || 0,
+      durationSec: Number(dur) || 0,
+      thumb: thumb ? `data:image/jpeg;base64,${thumb}` : '',
+      method: 'media',
+    };
+  }
+  if (kind === 'KEY') return { playing: action === 'play' ? true : action === 'pause' ? false : null, title: '', method: 'key' };
+  if (kind === 'NOSESSION') return { playing: false, title: '', method: 'media', noSession: true };
+  return { playing: null, error: fromB64(st) || 'Müzik durumu okunamadı' };
 }
 
 /** Masadaki açık siparişten kasa adisyonu verisi (masa ekranındaki "Adisyon yazdır" ile aynı) */
@@ -20845,10 +20980,21 @@ async function processMobileActionPayload(data) {
       const mode = String(data.mode || 'status');
       const res = await controlKasaMusic(mode);
       if (res.error) throw new Error(res.error);
-      if (res.noSession && mode === 'play') {
+      if (res.noSession && mode !== 'status') {
         throw new Error('Kasada açık bir müzik uygulaması bulunamadı (Spotify kapalı olabilir)');
       }
-      return { success: true, playing: res.playing, title: res.title || '', app: res.app || '', method: res.method };
+      return {
+        success: true,
+        playing: res.playing,
+        title: res.title || '',
+        artist: res.artist || '',
+        app: res.app || '',
+        positionSec: res.positionSec || 0,
+        durationSec: res.durationSec || 0,
+        thumb: res.thumb || '',
+        at: Date.now(),
+        method: res.method,
+      };
     }
     case 'print_all_adisyons': {
       // Müdür telefondan gün sonu adisyonlarını ister: kasadaki butonla aynı (yazıcı penceresi açılır)

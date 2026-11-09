@@ -20638,7 +20638,7 @@ async function processPendingMobileOrdersOnStartup() {
 
 // ── PWA müdür/şef işlemleri (Firestore mobile_orders kuyruğu → yerel işlem) ──
 const mobileActionsProcessing = new Set();
-const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'transfer_items', 'merge_table', 'print_adisyon', 'print_all_adisyons']);
+const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'transfer_items', 'merge_table', 'print_adisyon', 'print_all_adisyons', 'music_control']);
 
 function isMobileQueueAction(data) {
   if (!data) return false;
@@ -20668,6 +20668,74 @@ function allocateStaffId() {
   const next = Math.max(existingMax, cursor) + 1;
   db.settings.nextStaffId = next;
   return next;
+}
+
+/**
+ * Kasadaki müzik (Spotify vb.): Windows medya kontrolüyle doğrudan çal / durdur / durum.
+ * Klavyedeki çal-durdur tuşunun bağlı olduğu yer; tuşa basmaktan farkı, "durdur" zaten
+ * durmuş müziği açmaz. Medya kontrolüne ulaşılamazsa klavyenin çal/durdur tuşu gönderilir.
+ * Dönüş: { playing: true|false|null, title, app, method }
+ */
+function controlKasaMusic(mode = 'status') {
+  if (process.platform !== 'win32') return Promise.resolve({ playing: null, error: 'Yalnızca Windows kasada çalışır' });
+  const action = ['play', 'pause', 'status'].includes(mode) ? mode : 'status';
+  const script = `
+$ErrorActionPreference = 'Stop'
+$action = '${action}'
+function Send-MediaKey {
+  Add-Type -Namespace MakaraMedia -Name Keys -MemberDefinition '[DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, System.UIntPtr dwExtraInfo);'
+  [MakaraMedia.Keys]::keybd_event(0xB3, 0, 1, [System.UIntPtr]::Zero)
+  [MakaraMedia.Keys]::keybd_event(0xB3, 0, 3, [System.UIntPtr]::Zero)
+}
+try {
+  Add-Type -AssemblyName System.Runtime.WindowsRuntime
+  $asTaskGeneric = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object { $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation\`1' })[0]
+  function Await($op, $type) { $t = $asTaskGeneric.MakeGenericMethod($type).Invoke($null, @($op)); $t.Wait(-1) | Out-Null; $t.Result }
+  [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime] | Out-Null
+  $mgr = Await ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager]::RequestAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager])
+  $s = $mgr.GetSessions() | Where-Object { $_.SourceAppUserModelId -match 'Spotify' } | Select-Object -First 1
+  if (-not $s) { $s = $mgr.GetCurrentSession() }
+  if (-not $s) { 'NOSESSION'; exit }
+  $before = [string]$s.GetPlaybackInfo().PlaybackStatus
+  if ($action -eq 'pause' -and $before -eq 'Playing') { Await ($s.TryPauseAsync()) ([bool]) | Out-Null; Start-Sleep -Milliseconds 400 }
+  elseif ($action -eq 'play' -and $before -ne 'Playing') { Await ($s.TryPlayAsync()) ([bool]) | Out-Null; Start-Sleep -Milliseconds 400 }
+  $st = [string]$s.GetPlaybackInfo().PlaybackStatus
+  $title = ''
+  try { $p = Await ($s.TryGetMediaPropertiesAsync()) ([Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties]); $title = (@($p.Artist, $p.Title) | Where-Object { $_ }) -join ' - ' } catch {}
+  "STATUS|$st|$($s.SourceAppUserModelId)|$title"
+} catch {
+  if ($action -ne 'status') { Send-MediaKey; 'KEY' } else { 'ERROR|' + $_.Exception.Message }
+}
+`;
+  const encoded = Buffer.from(script, 'utf16le').toString('base64');
+  return new Promise((resolve) => {
+    let out = '';
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    let child;
+    try {
+      child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true });
+    } catch (e) {
+      finish({ playing: null, error: e?.message || 'PowerShell başlatılamadı' });
+      return;
+    }
+    child.stdout.on('data', (d) => { out += d.toString(); });
+    child.on('error', (e) => finish({ playing: null, error: e?.message || 'PowerShell hatası' }));
+    child.on('exit', () => {
+      const line = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop() || '';
+      if (line.startsWith('STATUS|')) {
+        const [, st, app, title] = line.split('|');
+        finish({ playing: st === 'Playing', title: title || '', app: app || '', method: 'media' });
+      } else if (line === 'KEY') {
+        finish({ playing: action === 'play', title: '', app: '', method: 'key' });
+      } else if (line === 'NOSESSION') {
+        finish({ playing: false, title: '', app: '', method: 'media', noSession: true });
+      } else {
+        finish({ playing: null, error: line.replace(/^ERROR\|/, '') || 'Müzik durumu okunamadı' });
+      }
+    });
+    setTimeout(() => { try { child.kill(); } catch (_) {} finish({ playing: null, error: 'Müzik kontrolü zaman aşımı' }); }, 12000);
+  });
 }
 
 /** Masadaki açık siparişten kasa adisyonu verisi (masa ekranındaki "Adisyon yazdır" ile aynı) */
@@ -20769,6 +20837,18 @@ async function processMobileActionPayload(data) {
       const res = await printCashierAdisyonFromData(adisyonData);
       if (!res?.success) throw new Error(res?.error || 'Adisyon yazdırılamadı');
       return { success: true, tableName: order.table_name };
+    }
+    case 'music_control': {
+      // Müdür telefondan kasadaki müziği açar / kapatır ya da durumunu sorar
+      const gate = await mobileStaffMayTransfer(data.staffId, pwaStaffHintsFromPayload(data), 'Müzik kontrolü');
+      if (!gate.ok) throw new Error(gate.error);
+      const mode = String(data.mode || 'status');
+      const res = await controlKasaMusic(mode);
+      if (res.error) throw new Error(res.error);
+      if (res.noSession && mode === 'play') {
+        throw new Error('Kasada açık bir müzik uygulaması bulunamadı (Spotify kapalı olabilir)');
+      }
+      return { success: true, playing: res.playing, title: res.title || '', app: res.app || '', method: res.method };
     }
     case 'print_all_adisyons': {
       // Müdür telefondan gün sonu adisyonlarını ister: kasadaki butonla aynı (yazıcı penceresi açılır)

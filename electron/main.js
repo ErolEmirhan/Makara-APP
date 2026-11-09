@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, Menu, dialog, webContents, net } = require('electron');
+const crypto = require('crypto');
 
 // Tek kopya: kasa zaten açıksa ikinci açılış hiçbir şey başlatmadan hemen kapanır
 // (aksi halde aynı sunucu portunu açmaya çalışıp "JavaScript error" veriyordu).
@@ -20873,6 +20874,248 @@ async function controlKasaMusic(mode = 'status') {
   return { playing: null, error: fromB64(st) || 'Müzik durumu okunamadı' };
 }
 
+// ── Spotify Web API (Premium): arama, şarkı çalma, sıraya ekleme ───────────────
+// Kasa, Spotify geliştirici uygulamasıyla (PKCE, gizli anahtar yok) bir kez bağlanır;
+// yenileme anahtarı yerelde saklanır. Telefon (müdür) arama ve çalma isteklerini kasaya
+// gönderir, kasa Spotify'a iletir ve kasadaki Spotify'da çalar.
+const SPOTIFY_CLIENT_ID = 'f0613ec49c4a43fca63c1a69984206a2';
+const SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:3000/spotify/callback';
+const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing';
+
+function spotifySettings() {
+  if (!db.settings) db.settings = {};
+  return db.settings.spotify || null;
+}
+
+function saveSpotifySettings(patch) {
+  if (!db.settings) db.settings = {};
+  db.settings.spotify = patch ? { ...(db.settings.spotify || {}), ...patch } : null;
+  try { saveDatabase(); } catch (_) {}
+}
+
+async function spotifyTokenRequest(params) {
+  const res = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: SPOTIFY_CLIENT_ID, ...params }).toString(),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error_description || json.error || `Spotify giriş hatası (${res.status})`);
+  return json;
+}
+
+async function spotifyAccessToken(forceRefresh = false) {
+  const st = spotifySettings();
+  if (!st?.refreshToken) throw Object.assign(new Error('Spotify bağlı değil. Kasada Ayarlar → Entegrasyon → "Spotify\'ı bağla".'), { code: 'not_connected' });
+  if (!forceRefresh && st.accessToken && st.expiresAt && Date.now() < st.expiresAt - 60000) return st.accessToken;
+  const json = await spotifyTokenRequest({ grant_type: 'refresh_token', refresh_token: st.refreshToken });
+  saveSpotifySettings({
+    accessToken: json.access_token,
+    expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
+    refreshToken: json.refresh_token || st.refreshToken,
+  });
+  return json.access_token;
+}
+
+async function spotifyApi(method, pathAndQuery, body) {
+  const call = async (token) => fetch(`https://api.spotify.com/v1${pathAndQuery}`, {
+    method,
+    headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let res = await call(await spotifyAccessToken());
+  if (res.status === 401) res = await call(await spotifyAccessToken(true));
+  if (res.status === 204) return null;
+  const json = await res.json().catch(() => null);
+  if (!res.ok) {
+    const reason = json?.error?.reason || '';
+    const msg = json?.error?.message || `Spotify hatası (${res.status})`;
+    if (reason === 'NO_ACTIVE_DEVICE') throw Object.assign(new Error('Kasada Spotify açık değil'), { code: 'no_device' });
+    if (reason === 'PREMIUM_REQUIRED') throw Object.assign(new Error('Bu işlem için Spotify Premium gerekli'), { code: 'premium' });
+    throw Object.assign(new Error(msg), { status: res.status });
+  }
+  return json;
+}
+
+/** Kasadaki Spotify cihazı: önce etkin olan, yoksa bu bilgisayar */
+async function spotifyKasaDeviceId() {
+  const json = await spotifyApi('GET', '/me/player/devices');
+  const devices = json?.devices || [];
+  const host = os.hostname().toLowerCase();
+  const pick = devices.find((d) => d.is_active)
+    || devices.find((d) => String(d.name || '').toLowerCase() === host)
+    || devices.find((d) => d.type === 'Computer')
+    || devices[0];
+  if (!pick) throw Object.assign(new Error('Kasada Spotify açık değil'), { code: 'no_device' });
+  return pick.id;
+}
+
+async function spotifySearchTracks(query) {
+  const q = String(query || '').trim().slice(0, 100);
+  if (!q) return [];
+  const json = await spotifyApi('GET', `/search?type=track&limit=12&market=from_token&q=${encodeURIComponent(q)}`);
+  return (json?.tracks?.items || []).map((t) => {
+    const imgs = t.album?.images || [];
+    const img = imgs.find((i) => i.width && i.width <= 300) || imgs[imgs.length - 1] || imgs[0];
+    return {
+      uri: t.uri,
+      title: t.name,
+      artist: (t.artists || []).map((a) => a.name).join(', '),
+      album: t.album?.name || '',
+      image: img?.url || '',
+      durationSec: Math.round((t.duration_ms || 0) / 1000),
+      explicit: !!t.explicit,
+    };
+  });
+}
+
+async function spotifyPlayTrack(uri) {
+  if (!/^spotify:track:[A-Za-z0-9]+$/.test(String(uri || ''))) throw new Error('Geçersiz şarkı');
+  try {
+    await spotifyApi('PUT', '/me/player/play', { uris: [uri] });
+  } catch (e) {
+    if (e.code !== 'no_device') throw e;
+    const deviceId = await spotifyKasaDeviceId();
+    await spotifyApi('PUT', `/me/player/play?device_id=${encodeURIComponent(deviceId)}`, { uris: [uri] });
+  }
+}
+
+async function spotifyQueueTrack(uri) {
+  if (!/^spotify:track:[A-Za-z0-9]+$/.test(String(uri || ''))) throw new Error('Geçersiz şarkı');
+  try {
+    await spotifyApi('POST', `/me/player/queue?uri=${encodeURIComponent(uri)}`);
+  } catch (e) {
+    if (e.code !== 'no_device') throw e;
+    const deviceId = await spotifyKasaDeviceId();
+    await spotifyApi('POST', `/me/player/queue?uri=${encodeURIComponent(uri)}&device_id=${encodeURIComponent(deviceId)}`);
+  }
+}
+
+/** Spotify'da şu an çalan şarkı (albüm kapağı, süre). Bağlı değilse ya da çalan yoksa null. */
+async function spotifyNowPlaying() {
+  if (!spotifySettings()?.refreshToken) return null;
+  const json = await spotifyApi('GET', '/me/player/currently-playing?market=from_token');
+  const t = json?.item;
+  if (!t || json.currently_playing_type !== 'track') return null;
+  const imgs = t.album?.images || [];
+  const img = imgs.find((i) => i.width && i.width <= 300) || imgs[imgs.length - 1] || imgs[0];
+  return {
+    title: t.name || '',
+    artist: (t.artists || []).map((a) => a.name).join(', '),
+    image: img?.url || '',
+    positionSec: Math.round((json.progress_ms || 0) / 100) / 10,
+    durationSec: Math.round((t.duration_ms || 0) / 1000),
+    playing: !!json.is_playing,
+  };
+}
+
+/**
+ * Windows medya bilgisine Spotify'ın kendi kapağını ekler (Windows kapağı her zaman vermiyor).
+ * Şarkı değiştiyse Spotify'ın yeni şarkıyı bildirmesi için kısa bir kez daha bakar.
+ */
+async function withSpotifyCover(res) {
+  if (!res || !spotifySettings()?.refreshToken) return res;
+  const norm = (v) => String(v || '').trim().toLocaleLowerCase('tr-TR');
+  const withTimeout = (p) => Promise.race([p, new Promise((r) => setTimeout(() => r(null), 2500))]);
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const np = await withTimeout(spotifyNowPlaying()).catch(() => null);
+      if (np && np.image && (!res.title || norm(np.title) === norm(res.title))) {
+        return {
+          ...res,
+          thumb: np.image,
+          title: res.title || np.title,
+          artist: res.artist || np.artist,
+          durationSec: res.durationSec || np.durationSec,
+          positionSec: res.durationSec ? res.positionSec : np.positionSec,
+        };
+      }
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 450));
+    }
+  } catch (_) {}
+  return res;
+}
+
+/** Kasada küçük bir pencerede Spotify girişi (kiosk ekranında tarayıcı arkada kalmasın) */
+function connectSpotifyInteractive() {
+  return new Promise((resolve) => {
+    const verifier = crypto.randomBytes(48).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    const state = crypto.randomBytes(12).toString('hex');
+    const authUrl = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({
+      client_id: SPOTIFY_CLIENT_ID,
+      response_type: 'code',
+      redirect_uri: SPOTIFY_REDIRECT_URI,
+      code_challenge_method: 'S256',
+      code_challenge: challenge,
+      scope: SPOTIFY_SCOPES,
+      state,
+      show_dialog: 'true',
+    }).toString();
+    const win = new BrowserWindow({
+      width: 520,
+      height: 760,
+      parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+      modal: !!(mainWindow && !mainWindow.isDestroyed()),
+      title: 'Spotify\'a bağlan',
+      autoHideMenuBar: true,
+      alwaysOnTop: true,
+      webPreferences: { contextIsolation: true, nodeIntegration: false, partition: 'spotify-auth' },
+    });
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      try { if (!win.isDestroyed()) win.close(); } catch (_) {}
+      resolve(result);
+    };
+    const handleUrl = async (event, url) => {
+      if (!String(url).startsWith(SPOTIFY_REDIRECT_URI)) return;
+      event.preventDefault();
+      const u = new URL(url);
+      if (u.searchParams.get('state') !== state) return finish({ success: false, error: 'Güvenlik doğrulaması başarısız, tekrar deneyin' });
+      const err = u.searchParams.get('error');
+      if (err) return finish({ success: false, error: err === 'access_denied' ? 'İzin verilmedi' : err });
+      try {
+        const json = await spotifyTokenRequest({
+          grant_type: 'authorization_code',
+          code: u.searchParams.get('code'),
+          redirect_uri: SPOTIFY_REDIRECT_URI,
+          code_verifier: verifier,
+        });
+        saveSpotifySettings({
+          accessToken: json.access_token,
+          refreshToken: json.refresh_token,
+          expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
+          connectedAt: new Date().toISOString(),
+        });
+        let name = '';
+        let product = '';
+        try {
+          const me = await spotifyApi('GET', '/me');
+          name = me?.display_name || me?.id || '';
+          product = me?.product || '';
+          saveSpotifySettings({ displayName: name, product });
+        } catch (_) {}
+        finish({ success: true, displayName: name, product });
+      } catch (e) {
+        finish({ success: false, error: e?.message || 'Spotify bağlanamadı' });
+      }
+    };
+    win.webContents.on('will-redirect', handleUrl);
+    win.webContents.on('will-navigate', handleUrl);
+    win.on('closed', () => finish({ success: false, error: 'Pencere kapatıldı' }));
+    win.loadURL(authUrl).catch(() => {});
+  });
+}
+
+ipcMain.handle('spotify-status', () => {
+  const st = spotifySettings();
+  return { connected: !!st?.refreshToken, displayName: st?.displayName || '', product: st?.product || '', connectedAt: st?.connectedAt || null };
+});
+ipcMain.handle('spotify-connect', () => connectSpotifyInteractive());
+ipcMain.handle('spotify-disconnect', () => { saveSpotifySettings(null); return { success: true }; });
+
 /** Masadaki açık siparişten kasa adisyonu verisi (masa ekranındaki "Adisyon yazdır" ile aynı) */
 function buildCashierAdisyonDataForOrder(order) {
   const items = (db.tableOrderItems || [])
@@ -20978,7 +21221,20 @@ async function processMobileActionPayload(data) {
       const gate = await mobileStaffMayTransfer(data.staffId, pwaStaffHintsFromPayload(data), 'Müzik kontrolü');
       if (!gate.ok) throw new Error(gate.error);
       const mode = String(data.mode || 'status');
-      const res = await controlKasaMusic(mode);
+      // Spotify Web API: arama / şarkıyı çal / sıraya ekle
+      if (mode === 'search') {
+        const results = await spotifySearchTracks(data.query);
+        return { success: true, results };
+      }
+      if (mode === 'play_track' || mode === 'queue_track') {
+        if (mode === 'play_track') await spotifyPlayTrack(data.uri);
+        else await spotifyQueueTrack(data.uri);
+        if (mode === 'queue_track') return { success: true, queued: true };
+        await new Promise((r) => setTimeout(r, 450));
+        const now = await withSpotifyCover(await controlKasaMusic('status'));
+        return { success: true, playing: now.playing ?? true, title: now.title || '', artist: now.artist || '', positionSec: now.positionSec || 0, durationSec: now.durationSec || 0, thumb: now.thumb || '', at: Date.now(), spotifyConnected: true };
+      }
+      const res = await withSpotifyCover(await controlKasaMusic(mode));
       if (res.error) throw new Error(res.error);
       if (res.noSession && mode !== 'status') {
         throw new Error('Kasada açık bir müzik uygulaması bulunamadı (Spotify kapalı olabilir)');
@@ -20994,6 +21250,7 @@ async function processMobileActionPayload(data) {
         thumb: res.thumb || '',
         at: Date.now(),
         method: res.method,
+        spotifyConnected: !!spotifySettings()?.refreshToken,
       };
     }
     case 'print_all_adisyons': {

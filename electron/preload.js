@@ -102,6 +102,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Print API
   printReceipt: (receiptData) => ipcRenderer.invoke('print-receipt', receiptData),
   printAdisyon: (adisyonData) => ipcRenderer.invoke('print-adisyon', adisyonData),
+  /** Spotify (Premium) bağlantısı: telefondan şarkı arama / çalma için */
+  spotifyStatus: () => ipcRenderer.invoke('spotify-status'),
+  spotifyConnect: () => ipcRenderer.invoke('spotify-connect'),
+  spotifyDisconnect: () => ipcRenderer.invoke('spotify-disconnect'),
   /** Müdür telefondan "Gün sonu adisyonları"nı isteyince kasa arayüzü yazıcı penceresini açar */
   onRemoteBulkAdisyon: (callback) => {
     const handler = (_event, payload) => callback(payload || {});

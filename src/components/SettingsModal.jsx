@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import SpotifyConnectCard from './SpotifyConnectCard';
 import { createPortal } from 'react-dom';
 import Toast from './Toast';
 
@@ -2106,8 +2107,10 @@ const SettingsModal = ({
             <div className="space-y-6 max-w-4xl mx-auto">
               <div className="mb-6">
                 <h3 className="text-2xl font-bold text-gray-900 mb-1">Entegrasyon Ayarları</h3>
-                <p className="text-sm text-gray-500">Trendyol ve Yemeksepeti API entegrasyonlarını yapılandırın</p>
+                <p className="text-sm text-gray-500">Spotify, Trendyol ve Yemeksepeti bağlantılarını yapılandırın</p>
               </div>
+
+              <SpotifyConnectCard />
 
               {/* Trendyol Entegrasyonu */}
               <div className="bg-white rounded-xl border-2 border-gray-200 p-6 shadow-sm">

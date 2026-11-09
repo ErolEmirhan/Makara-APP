@@ -66,7 +66,12 @@ export default function SpotifyConnectCard() {
             </p>
           </div>
         </div>
-        {connected ? (
+        {connected && status?.needsReconnect ? (
+          <button type="button" onClick={connect} disabled={busy} className="shrink-0 inline-flex items-center gap-2 rounded-full bg-[#1ed760] px-5 py-2.5 text-sm font-bold text-black shadow-md transition hover:brightness-105 active:scale-[0.98] disabled:opacity-60">
+            {busy ? <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/20 border-t-black" /> : <SpotifyLogo className="h-4 w-4" />}
+            Yeniden bağla
+          </button>
+        ) : connected ? (
           <button type="button" onClick={disconnect} disabled={busy} className="shrink-0 rounded-lg border border-gray-200 px-4 py-2.5 text-sm font-semibold text-gray-600 transition hover:bg-red-50 hover:text-red-600 hover:border-red-200 disabled:opacity-50">
             Bağlantıyı kes
           </button>
@@ -77,7 +82,12 @@ export default function SpotifyConnectCard() {
           </button>
         )}
       </div>
-      {busy && !connected && (
+      {connected && status?.needsReconnect && !busy && !message && (
+        <div className="border-t border-amber-100 bg-amber-50 px-6 py-3 text-sm font-medium text-amber-700">
+          Spotify yeni bir izin istiyor: telefondan şarkı aramanın sorunsuz çalışması için <b>Yeniden bağla</b>'ya basıp Chrome'da <b>Kabul et</b> deyin.
+        </div>
+      )}
+      {busy && (!connected || status?.needsReconnect) && (
         <div className="border-t border-gray-100 bg-gray-50 px-6 py-3 text-sm font-medium text-gray-600">
           Chrome'da Spotify sayfası açıldı: <b>Kabul et (Agree)</b>'ye basın. Bitince kasa kendiliğinden geri gelir.
         </div>

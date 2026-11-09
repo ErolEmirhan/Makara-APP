@@ -20885,7 +20885,9 @@ async function controlKasaMusic(mode = 'status') {
 // gönderir, kasa Spotify'a iletir ve kasadaki Spotify'da çalar.
 const SPOTIFY_CLIENT_ID = 'f0613ec49c4a43fca63c1a69984206a2';
 const SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:3000/spotify/callback';
-const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing';
+const SPOTIFY_SCOPES = 'user-read-playback-state user-modify-playback-state user-read-currently-playing user-read-private';
+/** Bağlantı bu izinlerin hepsini içermiyorsa ayarlarda "Yeniden bağla" gösterilir */
+const SPOTIFY_REQUIRED_SCOPES = SPOTIFY_SCOPES.split(' ');
 
 function spotifySettings() {
   if (!db.settings) db.settings = {};
@@ -20918,6 +20920,7 @@ async function spotifyAccessToken(forceRefresh = false) {
     accessToken: json.access_token,
     expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
     refreshToken: json.refresh_token || st.refreshToken,
+    ...(json.scope ? { scope: json.scope } : {}),
   });
   return json.access_token;
 }
@@ -20937,6 +20940,9 @@ async function spotifyApi(method, pathAndQuery, body) {
     const msg = json?.error?.message || `Spotify hatası (${res.status})`;
     if (reason === 'NO_ACTIVE_DEVICE') throw Object.assign(new Error('Kasada Spotify açık değil'), { code: 'no_device' });
     if (reason === 'PREMIUM_REQUIRED') throw Object.assign(new Error('Bu işlem için Spotify Premium gerekli'), { code: 'premium' });
+    if (res.status === 403 && /scope/i.test(msg)) {
+      throw Object.assign(new Error('Spotify bağlantısının yenilenmesi gerekiyor: kasada Ayarlar → Entegrasyon → "Yeniden bağla".'), { code: 'scope' });
+    }
     throw Object.assign(new Error(msg), { status: res.status });
   }
   return json;
@@ -20958,7 +20964,7 @@ async function spotifyKasaDeviceId() {
 async function spotifySearchTracks(query) {
   const q = String(query || '').trim().slice(0, 100);
   if (!q) return [];
-  const json = await spotifyApi('GET', `/search?type=track&limit=12&market=from_token&q=${encodeURIComponent(q)}`);
+  const json = await spotifyApi('GET', `/search?type=track&limit=12&market=TR&q=${encodeURIComponent(q)}`);
   return (json?.tracks?.items || []).map((t) => {
     const imgs = t.album?.images || [];
     const img = imgs.find((i) => i.width && i.width <= 300) || imgs[imgs.length - 1] || imgs[0];
@@ -20999,7 +21005,7 @@ async function spotifyQueueTrack(uri) {
 /** Spotify'da şu an çalan şarkı (albüm kapağı, süre). Bağlı değilse ya da çalan yoksa null. */
 async function spotifyNowPlaying() {
   if (!spotifySettings()?.refreshToken) return null;
-  const json = await spotifyApi('GET', '/me/player/currently-playing?market=from_token');
+  const json = await spotifyApi('GET', '/me/player/currently-playing?market=TR');
   const t = json?.item;
   if (!t || json.currently_playing_type !== 'track') return null;
   const imgs = t.album?.images || [];
@@ -21075,6 +21081,7 @@ async function handleSpotifyCallback(req, res) {
       refreshToken: json.refresh_token,
       expiresAt: Date.now() + (Number(json.expires_in) || 3600) * 1000,
       connectedAt: new Date().toISOString(),
+      scope: json.scope || '',
     });
     let name = '';
     let product = '';
@@ -21149,7 +21156,9 @@ function connectSpotifyInteractive() {
 
 ipcMain.handle('spotify-status', () => {
   const st = spotifySettings();
-  return { connected: !!st?.refreshToken, displayName: st?.displayName || '', product: st?.product || '', connectedAt: st?.connectedAt || null };
+  const granted = String(st?.scope || '').split(/\s+/).filter(Boolean);
+  const needsReconnect = !!st?.refreshToken && SPOTIFY_REQUIRED_SCOPES.some((sc) => !granted.includes(sc));
+  return { connected: !!st?.refreshToken, displayName: st?.displayName || '', product: st?.product || '', connectedAt: st?.connectedAt || null, needsReconnect };
 });
 ipcMain.handle('spotify-connect', () => connectSpotifyInteractive());
 ipcMain.handle('spotify-disconnect', () => { saveSpotifySettings(null); return { success: true }; });

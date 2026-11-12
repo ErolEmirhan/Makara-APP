@@ -876,6 +876,26 @@ function flushSaveDatabaseSync() {
 }
 
 // Firebase'e kategori kaydetme fonksiyonu
+/**
+ * Menü sürümü (meta/menu): ürün/kategori değişince zaman damgası yazılır (tek yazma).
+ * Site (makara.network) ve personel uygulaması bu tek kayda bakıp menüyü yalnızca
+ * değiştiğinde yeniden çeker: fiyatlar hemen yansır, okuma kotası boşa harcanmaz.
+ */
+let menuVersionTimer = null;
+function bumpMenuVersion(reason = 'kasa') {
+  if (menuVersionTimer) clearTimeout(menuVersionTimer);
+  menuVersionTimer = setTimeout(() => {
+    menuVersionTimer = null;
+    if (!firestore || !firebaseDoc || !firebaseSetDoc) return;
+    firebaseSetDoc(firebaseDoc(firestore, 'meta', 'menu'), {
+      updatedAt: Date.now(),
+      by: 'kasa',
+      reason: String(reason).slice(0, 40),
+      branchKey: activeBranchKey,
+    }, { merge: true }).catch((err) => console.warn('Menü sürümü yazılamadı:', err?.message || err));
+  }, 1500);
+}
+
 async function saveCategoryToFirebase(category) {
   if (!firestore || !firebaseCollection || !firebaseDoc || !firebaseSetDoc) {
     return false;
@@ -889,6 +909,7 @@ async function saveCategoryToFirebase(category) {
       order_index: category.order_index || 0
     }, { merge: true });
     console.log(`✅ Kategori Firebase'e kaydedildi: ${category.name} (ID: ${category.id})`);
+    bumpMenuVersion('category');
     return true;
   } catch (error) {
     console.error(`❌ Kategori Firebase'e kaydedilemedi (${category.name}):`, error);
@@ -933,6 +954,7 @@ async function saveProductToFirebase(product) {
       }
     }
     console.log(`✅ Ürün Firebase'e kaydedildi: ${product.name} (ID: ${product.id}, Fiyat: ${parseFloat(product.price) || 0})`);
+    bumpMenuVersion('product');
     return true;
   } catch (error) {
     console.error(`❌ Ürün Firebase'e kaydedilemedi (${product.name}):`, error);
@@ -1611,6 +1633,8 @@ function setupCategoriesRealtimeListener() {
       
       // Sadece gerçek değişiklik varsa database'e yaz ve sırala
       if (hasChanges) {
+        // Başka yerden (patron, yönetim paneli) gelen değişiklik de site ve telefonlara yansısın
+        bumpMenuVersion('remote-change');
         // ID'leri sırala ve order_index'e göre sırala
         db.categories.sort((a, b) => {
           if (a.order_index !== b.order_index) {
@@ -1717,6 +1741,8 @@ function setupProductsRealtimeListener() {
       
       // Sadece gerçek değişiklik varsa database'e yaz
       if (hasChanges) {
+        // Başka yerden (patron, yönetim paneli) gelen değişiklik de site ve telefonlara yansısın
+        bumpMenuVersion('remote-change');
         saveDatabase();
         
         // Renderer process'e bildir

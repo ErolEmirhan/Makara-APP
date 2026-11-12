@@ -5140,6 +5140,7 @@
           return;
         }
         db.collection('products').doc(productId).update({ image: dataUrl }).then(function() {
+          if (typeof bumpMenuVersion === 'function') bumpMenuVersion('image');
           var prod = gorselEkleAllProducts && gorselEkleAllProducts.find(function(p) { return String(p.id) === String(productId); });
           if (prod) prod.image = dataUrl;
           if (typeof showToast === 'function') showToast('success', 'Görsel kaydedildi', (isCircle ? 'Daire' : 'Kare') + ' formatında kaydedildi.');
@@ -8287,6 +8288,7 @@
       if (!trimmed || !db) return;
       try {
         await db.collection('categories').doc(docId).update({ name: trimmed });
+        bumpMenuVersion('category');
         const cat = productAdminCategories.find(c => c.docId === docId);
         if (cat) cat.name = trimmed;
         _pmEditingCatDocId = null;
@@ -8309,6 +8311,21 @@
       renderProductManagement();
     }
 
+    /**
+     * Menü sürümü (meta/menu): ürün/kategori değişince zaman damgası yazılır.
+     * Site (makara.network) ve personel uygulaması bu tek kayda bakıp menüyü yeniler.
+     */
+    function bumpMenuVersion(reason) {
+      try {
+        if (!db) return;
+        db.collection('meta').doc('menu').set({
+          updatedAt: Date.now(),
+          by: 'patron',
+          reason: String(reason || 'patron').slice(0, 40),
+        }, { merge: true }).catch(function(err) { console.warn('Menü sürümü yazılamadı:', err); });
+      } catch (_) {}
+    }
+
     async function saveProductRow(index) {
       const p = productAdminProducts[index];
       if (!p || !db) return;
@@ -8319,6 +8336,7 @@
           name: p.name || '',
           price: parseFloat(p.price) || 0
         });
+        bumpMenuVersion('product');
         if (btn) {
           btn.disabled = false;
           btn.textContent = '✓';
@@ -8349,6 +8367,7 @@
       if (!trimmed || !db) return;
       try {
         await db.collection('categories').doc(docId).update({ name: trimmed });
+        bumpMenuVersion('category');
         const cat = productAdminCategories.find(c => c.docId === docId);
         if (cat) cat.name = trimmed;
         _pmEditingCatDocId = null;

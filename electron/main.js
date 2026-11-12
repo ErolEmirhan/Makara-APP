@@ -902,7 +902,15 @@ async function publishMenuPrices() {
     }
     const body = JSON.stringify(products);
     if (body === lastPublishedMenuPrices) return;
-    const payload = JSON.stringify({ updatedAt: Date.now(), branch: activeBranchKey, count: Object.keys(products).length, products });
+    const updatedAt = Date.now();
+    // 1) Firestore: sitenin okuduğu tek fiyat kaydı (meta/prices) — site tüm fiyatları tek okumayla alır
+    if (firestore && firebaseDoc && firebaseSetDoc) {
+      firebaseSetDoc(firebaseDoc(firestore, 'meta', 'prices'), { updatedAt, branch: activeBranchKey, products }, { merge: true })
+        .then(() => console.log(`✅ Fiyat kaydı Firestore'a yazıldı (meta/prices, ${Object.keys(products).length} ürün)`))
+        .catch((err) => console.warn('Fiyat kaydı Firestore\'a yazılamadı:', err?.message || err));
+    }
+    // 2) R2 yedeği: Firestore okuma kotası dolduğunda site fiyatı buradan alır
+    const payload = JSON.stringify({ updatedAt, branch: activeBranchKey, count: Object.keys(products).length, products });
     await r2Client.send(new PutObjectCommand({
       Bucket: R2_CONFIG.bucketName,
       Key: `menu/${activeBranchKey}-prices.json`,

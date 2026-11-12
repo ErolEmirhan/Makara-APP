@@ -881,11 +881,48 @@ function flushSaveDatabaseSync() {
  * Site (makara.network) ve personel uygulaması bu tek kayda bakıp menüyü yalnızca
  * değiştiğinde yeniden çeker: fiyatlar hemen yansır, okuma kotası boşa harcanmaz.
  */
+/**
+ * Güncel fiyat listesi Cloudflare R2'ye dosya olarak yüklenir (menu/<şube>-prices.json).
+ * makara.network menüsü fiyatları buradan okur: Firebase okuma kotası dolsa bile menüdeki
+ * fiyat kasadakiyle aynı kalır. Yalnızca ad ve fiyat yazılır; içerik değişmediyse yüklenmez.
+ */
+const MENU_PRICES_BRANCHES = new Set(['makara']);
+let lastPublishedMenuPrices = '';
+async function publishMenuPrices() {
+  try {
+    if (!MENU_PRICES_BRANCHES.has(activeBranchKey)) return;
+    const list = Array.isArray(db?.products) ? db.products : [];
+    if (list.length === 0) return;
+    const products = {};
+    for (const p of list) {
+      if (p == null || p.id == null) continue;
+      const price = Number(p.price);
+      if (!Number.isFinite(price)) continue;
+      products[String(p.id)] = { p: price, n: String(p.name || '') };
+    }
+    const body = JSON.stringify(products);
+    if (body === lastPublishedMenuPrices) return;
+    const payload = JSON.stringify({ updatedAt: Date.now(), branch: activeBranchKey, count: Object.keys(products).length, products });
+    await r2Client.send(new PutObjectCommand({
+      Bucket: R2_CONFIG.bucketName,
+      Key: `menu/${activeBranchKey}-prices.json`,
+      Body: Buffer.from(payload, 'utf8'),
+      ContentType: 'application/json; charset=utf-8',
+      CacheControl: 'no-cache, max-age=0',
+    }));
+    lastPublishedMenuPrices = body;
+    console.log(`✅ Menü fiyatları R2'ye yüklendi (${Object.keys(products).length} ürün)`);
+  } catch (err) {
+    console.warn('Menü fiyatları R2\'ye yüklenemedi:', err?.message || err);
+  }
+}
+
 let menuVersionTimer = null;
 function bumpMenuVersion(reason = 'kasa') {
   if (menuVersionTimer) clearTimeout(menuVersionTimer);
   menuVersionTimer = setTimeout(() => {
     menuVersionTimer = null;
+    publishMenuPrices();
     if (!firestore || !firebaseDoc || !firebaseSetDoc) return;
     firebaseSetDoc(firebaseDoc(firestore, 'meta', 'menu'), {
       updatedAt: Date.now(),
@@ -7649,6 +7686,9 @@ app.whenReady().then(() => {
   setTimeout(() => warmKasaMusicHelper(), 15000);
   loadBranchSettings();
   initDatabase();
+  // Açılışta bir kez: site menüsündeki fiyatlar kasadakiyle eşitlensin (sonra her değişiklikte)
+  setTimeout(() => { publishMenuPrices(); }, 20000);
+  setInterval(() => { publishMenuPrices(); }, 10 * 60 * 1000);
   enableLaunchAtStartup();
   initRemoteUi({ logger: writeLog });
   createWindow();

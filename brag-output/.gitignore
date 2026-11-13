@@ -1,0 +1,6 @@
+# Yeniden üretilebilen ara dosyalar (render.js / synth.py ile tekrar oluşturulur)
+work/assets/
+work/fonts/
+work/stills*/
+work/*.mp4
+work/audio/*.wav

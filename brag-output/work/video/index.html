@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Makara brag</title>
+<link rel="stylesheet" href="../fonts/fonts.css">
+<style>
+  :root {
+    --bg: #0E0A0B;
+    --ink: #FFF7EE;
+    --amber: #FFB547;
+    --pink: #F53D88;
+    --pink2: #F472B6;
+    --deep: #BE185D;
+  }
+  html, body { margin: 0; padding: 0; background: #000; }
+  #stage { position: relative; width: 1080px; height: 1920px; overflow: hidden; background: var(--bg); }
+  .layer { position: absolute; left: 0; top: 0; width: 1080px; height: 1920px; overflow: hidden; }
+  .ph { position: absolute; display: block; user-select: none; }
+  .ov { position: absolute; left: 0; top: 0; width: 1080px; height: 1920px; pointer-events: none; }
+  .txt { position: absolute; left: 60px; right: 60px; text-align: center; color: var(--ink); will-change: transform, opacity, filter; }
+  .eyebrow { font-family: 'Inter'; font-weight: 600; font-size: 30px; letter-spacing: .42em; text-indent: .42em; }
+  .serif { font-family: 'Playfair Display'; }
+  .glow { text-shadow: 0 0 28px rgba(255, 181, 71, .35), 0 4px 30px rgba(0, 0, 0, .65); }
+  .pglow { text-shadow: 0 0 34px rgba(245, 61, 136, .55), 0 4px 30px rgba(0, 0, 0, .6); }
+  #grain { mix-blend-mode: overlay; opacity: .09; image-rendering: auto; }
+</style>
+</head>
+<body>
+<div id="stage">
+
+  <!-- S1: hook -->
+  <div class="layer" id="s1">
+    <img class="ph" id="s1bg" src="../assets/1_29-Dxwjwm12.webp">
+    <img class="ph" id="s1fg" src="../assets/1_29-Dxwjwm12.webp">
+    <div class="ov" id="s1fire" style="background: radial-gradient(ellipse 80% 38% at 50% 14%, rgba(255,150,40,.55), rgba(255,120,30,0) 70%); mix-blend-mode: screen;"></div>
+    <div class="ov" style="background: linear-gradient(180deg, rgba(14,10,11,.94) 0%, rgba(14,10,11,.72) 22%, rgba(14,10,11,.18) 40%, rgba(14,10,11,0) 52%, rgba(14,10,11,0) 78%, rgba(14,10,11,.55) 100%);"></div>
+    <div class="txt eyebrow" id="s1a" style="top: 250px; color: var(--amber);">ÇEKYA · 18. YÜZYIL</div>
+    <div class="txt serif glow" id="s1b" style="top: 318px; font-style: italic; font-weight: 600; font-size: 138px; line-height: 1.0;">Açık ateşte</div>
+    <div class="txt serif glow" id="s1c" style="top: 462px; font-style: italic; font-weight: 600; font-size: 138px; line-height: 1.0;">pişer.</div>
+  </div>
+
+  <!-- S2: texture -->
+  <div class="layer" id="s2">
+    <img class="ph" id="s2bg" src="../assets/1_25-Cp1hUpP9.webp">
+    <img class="ph" id="s2fg" src="../assets/1_25-Cp1hUpP9.webp">
+    <div class="ov" style="background: linear-gradient(180deg, rgba(14,10,11,.55) 0%, rgba(14,10,11,0) 18%, rgba(14,10,11,0) 58%, rgba(14,10,11,.82) 76%, rgba(14,10,11,.96) 100%);"></div>
+    <div class="txt serif glow" id="s2a" style="top: 1430px; font-weight: 700; font-size: 112px; line-height: 1.05;">Dışı çıtır çıtır.</div>
+    <div class="txt serif glow" id="s2b" style="top: 1572px; font-style: italic; font-weight: 600; font-size: 112px; line-height: 1.05; color: var(--amber);">İçi yumuşacık.</div>
+  </div>
+
+  <!-- S3: reveal -->
+  <div class="layer" id="s3">
+    <img class="ph" id="s3bg" src="../assets/1_24-z1ql1X4l.webp">
+    <img class="ph" id="s3fg" src="../assets/1_24-z1ql1X4l.webp">
+    <img class="ph" id="s3bloom" src="../assets/1_24-z1ql1X4l.webp" style="mix-blend-mode: screen;">
+    <div class="ov" style="background: linear-gradient(180deg, rgba(14,10,11,.5) 0%, rgba(14,10,11,0) 20%, rgba(14,10,11,0) 70%, rgba(14,10,11,.75) 86%, rgba(14,10,11,.92) 100%);"></div>
+    <div class="txt eyebrow" id="s3a" style="top: 300px; color: var(--pink2); font-size: 32px; letter-spacing: .5em; text-indent: .5em;">PREMİUM PATİSSERİE</div>
+    <div class="txt serif pglow" id="s3b" style="top: 1590px; font-weight: 700; font-size: 124px; line-height: 1.0;">Şimdi Konya'da.</div>
+  </div>
+
+  <!-- S4: montage (built in JS) -->
+  <div class="layer" id="s4"></div>
+
+  <!-- S5: number -->
+  <div class="layer" id="s5">
+    <img class="ph" id="s5bg" src="../assets/1_24-z1ql1X4l.webp">
+    <div class="ov" style="background: radial-gradient(ellipse 70% 40% at 50% 48%, rgba(190,24,93,.28), rgba(14,10,11,0) 70%);"></div>
+    <div class="txt serif pglow" id="s5num" style="top: 760px; font-weight: 800; font-size: 236px; line-height: 1; letter-spacing: -.01em; font-variant-numeric: lining-nums tabular-nums;"><span id="s5val">0</span><span id="s5plus" style="display:inline-block; color: var(--pink); font-family: Inter; font-weight: 700; font-size: .62em; vertical-align: .32em; margin-left: .04em;">+</span></div>
+    <div class="txt" id="s5line" style="top: 1032px; left: 390px; right: 390px; height: 4px; background: linear-gradient(90deg, rgba(245,61,136,0), var(--pink), rgba(245,61,136,0));"></div>
+    <div class="txt eyebrow" id="s5sub" style="top: 1078px; font-size: 46px; font-weight: 500; letter-spacing: .32em; text-indent: .32em;">MUTLU MÜŞTERİ</div>
+  </div>
+
+  <!-- S6: outro -->
+  <div class="layer" id="s6">
+    <img class="ph" id="s6bg" src="../assets/1_27-DJDijsho.webp">
+    <div class="ov" id="s6glow" style="background: radial-gradient(ellipse 75% 42% at 50% 40%, rgba(190,24,93,.55), rgba(14,10,11,0) 72%);"></div>
+    <div id="s6logo" style="position:absolute; left: 320px; top: 520px; width: 440px; height: 440px; border-radius: 50%; background: #E94B8F; box-shadow: 0 0 90px rgba(245,61,136,.55), 0 0 0 0 rgba(0,0,0,0); overflow: hidden;">
+      <img id="s6svg" src="../assets/logo-white.svg" style="position:absolute; left:0; top:0; width:440px; height:440px;">
+      <div id="s6shine" style="position:absolute; top:-20%; left:-60%; width: 40%; height: 140%; background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.45), rgba(255,255,255,0)); transform: rotate(18deg);"></div>
+    </div>
+    <div class="txt serif glow" id="s6a" style="top: 1070px; font-style: italic; font-weight: 600; font-size: 92px; line-height: 1.05;">Trdelnik deneyimini</div>
+    <div class="txt serif glow" id="s6b" style="top: 1172px; font-style: italic; font-weight: 600; font-size: 92px; line-height: 1.05;">yaşayın.</div>
+    <div class="txt" id="s6c" style="top: 1410px; font-family: Inter; font-weight: 600; font-size: 40px; letter-spacing: .14em; text-indent: .14em;">HAVZAN · KONYA</div>
+    <div class="txt" id="s6d" style="top: 1478px; font-family: Inter; font-weight: 400; font-size: 36px; color: rgba(255,247,238,.78);">Her gün 11:30 – 23:30</div>
+    <div class="txt" id="s6e" style="top: 1578px; font-family: Inter; font-weight: 600; font-size: 44px; letter-spacing: .04em; color: var(--pink2);">makara.network</div>
+  </div>
+
+  <!-- global effects -->
+  <div class="ov" id="leak" style="background: radial-gradient(ellipse 38% 60% at 50% 50%, rgba(255,190,90,.95), rgba(255,120,60,.55) 40%, rgba(245,61,136,0) 75%); mix-blend-mode: screen; opacity: 0;"></div>
+  <div class="ov" id="flash" style="background: #FFF4E6; opacity: 0;"></div>
+  <div class="ov" style="background: radial-gradient(ellipse 85% 70% at 50% 46%, rgba(0,0,0,0) 55%, rgba(0,0,0,.6) 100%);"></div>
+  <canvas class="ov" id="grain" width="270" height="480"></canvas>
+  <div class="ov" id="black" style="background: #000; opacity: 1;"></div>
+</div>
+
+<script>
+const W = 1080, H = 1920, FPS = 30, DUR = 23.4;
+const $ = (id) => document.getElementById(id);
+const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
+const prog = (t, a, b) => clamp((t - a) / (b - a));
+const lerp = (a, b, x) => a + (b - a) * x;
+const eOutCubic = (x) => 1 - Math.pow(1 - x, 3);
+const eInOutCubic = (x) => (x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+const eOutExpo = (x) => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * x));
+const eOutBack = (x) => { const c1 = 1.5, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const bell = (t, a, peak, b) => (t <= a || t >= b ? 0 : t < peak ? eOutCubic(prog(t, a, peak)) : 1 - eInOutCubic(prog(t, peak, b)));
+
+// Place a square photo so that its focus point (fx, fy in 0..1) lands at (tx, ty); scale s pivots on that point.
+function placePhoto(el, size, fx, fy, tx, ty) {
+  el.style.width = size + 'px';
+  el.style.height = size + 'px';
+  el.style.left = (tx - fx * size) + 'px';
+  el.style.top = (ty - fy * size) + 'px';
+  el.style.transformOrigin = (fx * size) + 'px ' + (fy * size) + 'px';
+}
+function bgCover(el, size, fx, fy, ty) {
+  placePhoto(el, size, fx, fy, W / 2, ty);
+}
+// Text entrance/exit: rise + unblur in, soft out. Fully settled between tin+dur and tout-outDur.
+function textAnim(el, t, tin, tout, o = {}) {
+  const dy = o.dy ?? 44, blur = o.blur ?? 14, dur = o.dur ?? .45, outDur = o.outDur ?? .22;
+  const a = eOutCubic(prog(t, tin, tin + dur));
+  const b = tout == null ? 0 : prog(t, tout - outDur, tout);
+  el.style.opacity = (a * (1 - b)).toFixed(4);
+  el.style.transform = `translateY(${((1 - a) * dy - b * 16).toFixed(2)}px)`;
+  el.style.filter = `blur(${((1 - a) * blur + b * 8).toFixed(2)}px)`;
+}
+function show(el, on) { el.style.display = on ? 'block' : 'none'; }
+
+// ---------- static layout ----------
+// S1 / S2: the sign stays hidden until the reveal — the top of the frame melts into
+// a blurred copy of the same photo, so the sign reads as warm firelight bokeh.
+const topMelt = (a, b) => `linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0) ${a}%, #000 ${b}%)`;
+placePhoto($('s1bg'), 2050, .49, .60, 540, 1180);
+$('s1bg').style.filter = 'blur(34px) brightness(.62) saturate(1.25)';
+placePhoto($('s1fg'), 2050, .49, .60, 540, 1180);
+$('s1fg').style.webkitMaskImage = $('s1fg').style.maskImage = topMelt(21, 44);
+placePhoto($('s2bg'), 2300, .49, .52, 540, 800);
+$('s2bg').style.filter = 'blur(34px) brightness(.6) saturate(1.25)';
+placePhoto($('s2fg'), 2300, .49, .52, 540, 800);
+$('s2fg').style.webkitMaskImage = $('s2fg').style.maskImage = topMelt(25, 40);
+// S3
+bgCover($('s3bg'), 2600, .5, .25, 700);
+$('s3bg').style.filter = 'blur(44px) brightness(.30) saturate(1.1)';
+placePhoto($('s3fg'), 1080, .5, .2, 540, 470 + .2 * 1080);
+placePhoto($('s3bloom'), 1080, .5, .2, 540, 470 + .2 * 1080);
+const featherMask = 'radial-gradient(ellipse 72% 66% at 50% 46%, #000 58%, rgba(0,0,0,0) 100%)';
+for (const id of ['s3fg', 's3bloom']) { $(id).style.webkitMaskImage = featherMask; $(id).style.maskImage = featherMask; }
+// S5
+bgCover($('s5bg'), 2700, .5, .2, 820);
+$('s5bg').style.filter = 'blur(30px) brightness(.30) saturate(1.15)';
+// S6
+bgCover($('s6bg'), 2400, .5, .6, 1000);
+$('s6bg').style.filter = 'blur(50px) brightness(.22) saturate(1.2)';
+
+// S4 montage items (focus = product centre in the square photo)
+const ITEMS = [
+  { file: '1_27-DJDijsho.webp',     fx: .50, fy: .62, eyebrow: 'MAKARALAR',        name: 'Çilekli Makara' },
+  { file: '1_18-xjunzSJf.webp',     fx: .60, fy: .70, eyebrow: 'FRANSIZ PASTALAR', name: 'Çilek Fransız Pasta' },
+  { file: '1_26-D0ZXPREM.webp',     fx: .47, fy: .74, eyebrow: 'KRUVASANLAR',      name: 'Kruvasan' },
+  { file: 'kova-Q-DpL7-U.jpg',      fx: .51, fy: .80, eyebrow: 'WAFFLE',           name: 'Kova Waffle' },
+  { file: 'bol-DaatB3FB.jpg',       fx: .50, fy: .72, eyebrow: 'BOL ÇİKOLATALI',   name: 'Makara Cup' },
+];
+const S4_START = 10.2, S4_STEP = 1.2;
+const s4 = $('s4');
+ITEMS.forEach((it, i) => {
+  const wrap = document.createElement('div');
+  wrap.className = 'layer';
+  wrap.innerHTML = `
+    <img class="ph bg" src="../assets/${it.file}">
+    <img class="ph fg" src="../assets/${it.file}">
+    <div class="ov" style="background: linear-gradient(180deg, rgba(14,10,11,.45) 0%, rgba(14,10,11,0) 16%, rgba(14,10,11,0) 64%, rgba(14,10,11,.85) 80%, rgba(14,10,11,.97) 100%);"></div>
+    <div class="txt eyebrow ey" style="top: 1590px; color: var(--pink2); font-size: 28px;">${it.eyebrow}</div>
+    <div class="txt serif glow nm" style="top: 1640px; font-weight: 700; font-size: ${it.name.length > 14 ? 100 : 116}px; line-height: 1.05;">${it.name}</div>`;
+  s4.appendChild(wrap);
+  const bg = wrap.querySelector('.bg'), fg = wrap.querySelector('.fg');
+  bgCover(bg, 2500, .5, .6, 1000);
+  bg.style.filter = 'blur(40px) brightness(.32)';
+  placePhoto(fg, 2100, it.fx, it.fy, 540, 1090);
+  it.el = wrap; it.fg = fg; it.ey = wrap.querySelector('.ey'); it.nm = wrap.querySelector('.nm');
+});
+
+
+// Deterministic film grain tiles
+const grainTiles = [];
+(function makeGrain() {
+  let seed = 1337;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+  for (let k = 0; k < 8; k++) {
+    const c = document.createElement('canvas'); c.width = 270; c.height = 480;
+    const g = c.getContext('2d'); const img = g.createImageData(270, 480);
+    for (let p = 0; p < img.data.length; p += 4) { const v = 128 + (rnd() - .5) * 200; img.data[p] = img.data[p + 1] = img.data[p + 2] = v; img.data[p + 3] = 255; }
+    g.putImageData(img, 0, 0); grainTiles.push(c);
+  }
+})();
+const grainCtx = $('grain').getContext('2d');
+
+// Neon sign switch-on curve (piecewise, deterministic)
+function neon(t) {
+  // hold-steps (flicker) then settle: dark -> on -> dip -> half -> full
+  const keys = [[6.60, .16], [6.64, .95], [6.69, .30], [6.74, .55]];
+  if (t >= 6.78) return lerp(1.12, 1.0, eOutCubic(prog(t, 6.78, 7.1)));
+  let v = .16;
+  for (const [tk, vk] of keys) if (t >= tk) v = vk;
+  return v;
+}
+const fmt = (n) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+
+// ---------- per-frame render ----------
+window.renderAt = function (t) {
+  const fi = Math.round(t * FPS);
+  // S1 0..3.6
+  const on1 = t < 3.62; show($('s1'), on1);
+  if (on1) {
+    const s = lerp(1.0, 1.09, eOutCubic(prog(t, 0, 3.8)));
+    $('s1fg').style.transform = `scale(${s.toFixed(4)})`;
+    $('s1bg').style.transform = `scale(${s.toFixed(4)})`;
+    $('s1fg').style.filter = `brightness(${lerp(.55, .82, eOutCubic(prog(t, 0, 1.4))).toFixed(3)}) contrast(1.12) saturate(1.08)`;
+    $('s1fire').style.opacity = (.55 + .08 * Math.sin(t * 9.1) + .05 * Math.sin(t * 23.7 + 1.3)).toFixed(3);
+    textAnim($('s1a'), t, .25, 3.48, { dy: 24, blur: 8 });
+    textAnim($('s1b'), t, .85, 3.48);
+    textAnim($('s1c'), t, 1.05, 3.48);
+  }
+  // S2 3.6..6.6
+  const on2 = t >= 3.6 && t < 6.62; show($('s2'), on2);
+  if (on2) {
+    const u = t - 3.6;
+    const s = lerp(1.0, 1.07, u / 3.0);
+    $('s2fg').style.transform = `translateX(${lerp(-22, 22, u / 3.0).toFixed(2)}px) scale(${s.toFixed(4)})`;
+    $('s2bg').style.transform = $('s2fg').style.transform;
+    $('s2fg').style.filter = 'brightness(.86) contrast(1.12) saturate(1.1)';
+    textAnim($('s2a'), t, 3.75, 6.45);
+    textAnim($('s2b'), t, 4.8, 6.45);
+  }
+  // S3 6.6..10.2
+  const on3 = t >= 6.6 && t < 10.22; show($('s3'), on3);
+  if (on3) {
+    const u = t - 6.6;
+    const n = neon(t);
+    const s = lerp(1.0, 1.05, u / 3.6);
+    $('s3fg').style.transform = `scale(${s.toFixed(4)})`;
+    $('s3bloom').style.transform = `scale(${s.toFixed(4)})`;
+    $('s3fg').style.filter = `brightness(${(n * .95).toFixed(3)}) contrast(1.1) saturate(1.1)`;
+    const bloom = clamp(n - .2) * lerp(.85, .32, eOutCubic(prog(t, 6.78, 8.2)));
+    $('s3bloom').style.filter = 'blur(26px) brightness(1.5) saturate(1.3)';
+    $('s3bloom').style.opacity = bloom.toFixed(3);
+    $('s3bg').style.opacity = (.35 + .65 * clamp(n)).toFixed(3);
+    textAnim($('s3b'), t, 7.2, 10.12);
+    textAnim($('s3a'), t, 8.4, 10.12, { dy: 20, blur: 8 });
+  }
+  // S4 10.2..16.2
+  const on4 = t >= 10.2 && t < 16.22; show(s4, on4);
+  if (on4) {
+    ITEMS.forEach((it, i) => {
+      const st = S4_START + i * S4_STEP, u = t - st;
+      const vis = u >= 0 && u < S4_STEP; show(it.el, vis);
+      if (!vis) return;
+      const z = lerp(1.17, 1.04, eOutExpo(prog(u, 0, .45))) + .035 * u;
+      const dir = i % 2 === 0 ? 1 : -1;
+      const x = dir * lerp(70, 0, eOutExpo(prog(u, 0, .4)));
+      it.fg.style.transform = `translateX(${x.toFixed(2)}px) scale(${z.toFixed(4)})`;
+      it.fg.style.filter = 'brightness(.9) contrast(1.12) saturate(1.12)';
+      textAnim(it.ey, u, .04, null, { dy: 18, blur: 6, dur: .26 });
+      textAnim(it.nm, u, .08, null, { dy: 30, blur: 10, dur: .26 });
+    });
+  }
+  // S5 16.2..19.2
+  const on5 = t >= 16.2 && t < 19.22; show($('s5'), on5);
+  if (on5) {
+    const u = t - 16.2;
+    $('s5bg').style.transform = `translateY(${lerp(0, -40, u / 3).toFixed(2)}px) scale(${lerp(1.0, 1.06, u / 3).toFixed(4)})`;
+    const c = eOutCubic(prog(t, 16.4, 17.4));
+    $('s5val').textContent = fmt(Math.round(c * 10000));
+    const pp = prog(t, 17.4, 17.7);
+    $('s5plus').style.opacity = pp > 0 ? 1 : 0;
+    $('s5plus').style.transform = `scale(${lerp(1.6, 1.0, eOutBack(pp)).toFixed(3)})`;
+    textAnim($('s5num'), t, 16.28, 19.12, { dy: 30, blur: 12, dur: .35 });
+    const lw = eOutCubic(prog(t, 17.35, 17.85));
+    $('s5line').style.transform = `scaleX(${lw.toFixed(3)})`;
+    $('s5line').style.opacity = (lw * (1 - prog(t, 18.95, 19.12))).toFixed(3);
+    textAnim($('s5sub'), t, 17.45, 19.12, { dy: 22, blur: 8 });
+  }
+  // S6 19.2..23.4
+  const on6 = t >= 19.2; show($('s6'), on6);
+  if (on6) {
+    const u = t - 19.2;
+    $('s6glow').style.opacity = (.8 + .2 * Math.sin(u * 2.2)).toFixed(3);
+    $('s6bg').style.transform = `scale(${lerp(1.05, 1.0, eOutCubic(prog(u, 0, 4.2))).toFixed(4)})`;
+    const lp = prog(t, 19.2, 19.8);
+    const ls = lerp(.55, 1.0, eOutBack(lp));
+    $('s6logo').style.opacity = eOutCubic(prog(t, 19.2, 19.45)).toFixed(3);
+    $('s6logo').style.transform = `scale(${ls.toFixed(4)})`;
+    $('s6logo').style.boxShadow = `0 0 ${Math.round(lerp(160, 90, eOutCubic(lp)))}px rgba(245,61,136,${lerp(.9, .55, eOutCubic(lp)).toFixed(3)})`;
+    $('s6shine').style.left = `${lerp(-60, 130, eInOutCubic(prog(t, 20.05, 20.75))).toFixed(1)}%`;
+    textAnim($('s6a'), t, 19.9, null);
+    textAnim($('s6b'), t, 20.05, null);
+    textAnim($('s6c'), t, 20.8, null, { dy: 22, blur: 8 });
+    textAnim($('s6d'), t, 20.95, null, { dy: 22, blur: 8 });
+    textAnim($('s6e'), t, 21.1, null, { dy: 22, blur: 8 });
+  }
+
+  // light leak over the S1 -> S2 cut
+  const lk = bell(t, 3.3, 3.6, 3.95);
+  $('leak').style.opacity = lk.toFixed(3);
+  $('leak').style.transform = `translateX(${lerp(-620, 620, prog(t, 3.3, 3.95)).toFixed(1)}px) scale(1.4)`;
+  // flashes on hits / cuts
+  let fl = 0;
+  const flashAt = (tc, peak, len) => { if (t >= tc && t < tc + len) fl = Math.max(fl, peak * (1 - eOutCubic((t - tc) / len))); };
+  flashAt(6.6, .55, .22);
+  for (let i = 0; i < ITEMS.length; i++) flashAt(S4_START + i * S4_STEP, i === 0 ? .6 : .38, .14);
+  flashAt(16.2, .3, .18);
+  flashAt(19.2, .5, .25);
+  $('flash').style.opacity = fl.toFixed(3);
+  // black: fade from black, dip before the reveal, fade out at the end
+  let bk = 1 - eOutCubic(prog(t, 0, .45));
+  bk = Math.max(bk, eInOutCubic(prog(t, 6.38, 6.58)) * (t < 6.6 ? 1 : 0));
+  bk = Math.max(bk, eInOutCubic(prog(t, 22.95, 23.4)));
+  $('black').style.opacity = bk.toFixed(3);
+  // grain
+  grainCtx.drawImage(grainTiles[fi % grainTiles.length], 0, 0);
+};
+
+window.assetsReady = async function () {
+  // Load every face up front: hidden scenes must not fall back to a system font on their first frame.
+  const sample = 'ÇçĞğİıÖöŞşÜü 0123456789 Açık ateşte pişer +·–';
+  const faces = ['400 50px "Playfair Display"', '600 50px "Playfair Display"', '700 50px "Playfair Display"', '800 50px "Playfair Display"',
+    'italic 600 50px "Playfair Display"', 'italic 400 50px "Playfair Display"',
+    '400 50px Inter', '500 50px Inter', '600 50px Inter', '700 50px Inter'];
+  await Promise.all(faces.map((f) => document.fonts.load(f, sample)));
+  await document.fonts.ready;
+  const imgs = [...document.images];
+  await Promise.all(imgs.map((im) => (im.complete && im.naturalWidth ? im.decode().catch(() => {}) : new Promise((r) => { im.onload = () => im.decode().then(r, r); im.onerror = r; }))));
+  const bad = imgs.filter((im) => !im.naturalWidth).map((im) => im.getAttribute('src'));
+  return { images: imgs.length, bad, fonts: [...document.fonts].filter((f) => f.status === 'loaded').length };
+};
+window.renderAt(0);
+</script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+name: Ortak sifre sifirla (tek seferlik)
+on:
+  push:
+    branches: [ops/reset-ortak-pin]
+permissions:
+  contents: write
+jobs:
+  reset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node scripts/reset-ortak-pin.mjs
+      - run: |
+          git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add reset-result.txt && git commit -m "sonuc" && git push

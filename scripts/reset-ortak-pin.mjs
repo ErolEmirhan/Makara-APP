@@ -2,7 +2,6 @@
 const NEW_PIN = 'Suri2026';
 const PROJECTS = [
   ['makara-16344', 'AIzaSyCdf-c13e0wCafRYHXhIls1epJgD1RjPUA'],
-  ['makarasurici', 'AIzaSyDnVpG-Hl7n2a1esMO4rZhq9JfqpKd3VUo'],
 ];
 const S = (v) => ({ stringValue: v });
 const out = [];

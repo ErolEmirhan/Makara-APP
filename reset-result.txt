@@ -6,4 +6,3 @@ makara-16344: okuma HATA 429 {
   }
 }
 
-makarasurici: TAMAM | kullanıcılar: Fatih[makara,makarasur,sultansomati], Ortak[makarasur], Suriçi[makarasur] | ortak güncellendi

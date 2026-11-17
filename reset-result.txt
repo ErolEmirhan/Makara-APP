@@ -1,0 +1,9 @@
+makara-16344: okuma HATA 429 {
+  "error": {
+    "code": 429,
+    "message": "Quota exceeded.",
+    "status": "RESOURCE_EXHAUSTED"
+  }
+}
+
+makarasurici: TAMAM | kullanıcılar: Fatih[makara,makarasur,sultansomati], Ortak[makarasur], Suriçi[makarasur] | ortak güncellendi

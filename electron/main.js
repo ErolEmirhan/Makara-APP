@@ -20725,7 +20725,7 @@ async function processPendingMobileOrdersOnStartup() {
 
 // ── PWA müdür/şef işlemleri (Firestore mobile_orders kuyruğu → yerel işlem) ──
 const mobileActionsProcessing = new Set();
-const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'transfer_items', 'merge_table', 'print_adisyon', 'print_all_adisyons', 'music_control']);
+const MOBILE_ACTION_TYPES = new Set(['cancel_item', 'transfer_table', 'transfer_items', 'merge_table', 'print_adisyon', 'print_all_adisyons', 'music_control', 'close_table']);
 
 function isMobileQueueAction(data) {
   if (!data) return false;
@@ -21340,6 +21340,27 @@ async function processMobileActionPayload(data) {
       const res = await printCashierAdisyonFromData(adisyonData);
       if (!res?.success) throw new Error(res?.error || 'Adisyon yazdırılamadı');
       return { success: true, tableName: order.table_name };
+    }
+    case 'close_table': {
+      // Müdür telefondan masayı sonlandırır: kasadaki "Masayı kapat" ile aynı satış kaydı
+      // (ödeme türü sorulmaz; Nakit / Kredi Kartı rastgele işaretlenir)
+      const gate = await mobileStaffMayTransfer(data.staffId, pwaStaffHintsFromPayload(data), 'Masa sonlandırma');
+      if (!gate.ok) throw new Error(gate.error);
+      const order = findPendingOrderForTable(data.tableId);
+      if (!order) throw new Error('Bu masada açık sipariş yok');
+      const totalAmount = Math.round((parseFloat(order.total_amount) || 0) * 100) / 100;
+      const paymentMethod = Math.random() < 0.5 ? 'Nakit' : 'Kredi Kartı';
+      const result = await withOrderPaymentLock(order.id, () => completeTableOrderCore(order.id, paymentMethod));
+      if (!result?.success) throw new Error(result?.error || 'Masa sonlandırılamadı');
+      console.log(`📱 Masa telefondan sonlandırıldı: ${order.table_name} · ${totalAmount} ₺ · ${paymentMethod} · ${data.staffName || data.staffId}`);
+      return {
+        success: true,
+        tableName: order.table_name,
+        totalAmount,
+        paymentMethod,
+        saleId: result.saleId ?? null,
+        alreadySettled: !!result.alreadySettled,
+      };
     }
     case 'music_control': {
       // Müdür telefondan kasadaki müziği açar / kapatır ya da durumunu sorar

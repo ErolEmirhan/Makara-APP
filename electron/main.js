@@ -2338,7 +2338,9 @@ ipcMain.handle('create-sale', async (event, saleData) => {
       product_name: item.name,
       quantity: item.quantity,
       price: item.price,
-      isGift: item.isGift || false
+      isGift: item.isGift || false,
+      ...(item.category_id != null ? { category_id: item.category_id } : {}),
+      ...(item.isKiloSale ? { isKiloSale: true } : {})
     });
   });
 
@@ -2368,7 +2370,9 @@ ipcMain.handle('create-sale', async (event, saleData) => {
           product_name: item.name,
           quantity: item.quantity,
           price: item.price,
-          isGift: item.isGift || false
+          isGift: item.isGift || false,
+          ...(item.category_id != null ? { category_id: item.category_id } : {}),
+          ...(item.isKiloSale ? { isKiloSale: true } : {})
         })),
         created_at: firebaseServerTimestamp()
       };

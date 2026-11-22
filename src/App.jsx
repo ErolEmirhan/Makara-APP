@@ -20,6 +20,7 @@ import CatalogSyncProgressBar from './components/CatalogSyncProgressBar';
 import ExitSplash from './components/ExitSplash';
 import KasaUpdateNotice, { useKasaUpdates } from './components/KasaUpdateNotice';
 import ExpenseModal from './components/ExpenseModal';
+import KiloSaleModal, { KiloSaleButton } from './components/KiloSaleModal';
 import YanUrunlerManagementModal from './components/YanUrunlerManagementModal';
 import Toast from './components/Toast';
 import BulkAdisyonHost from './components/BulkAdisyonHost';
@@ -80,6 +81,8 @@ function App() {
   const [userType, setUserType] = useState(HOT_RESUME?.userType || 'Admin'); // 'Admin' or 'Personel'
   const [activeRoleSplash, setActiveRoleSplash] = useState(null);
   const [saleSuccessInfo, setSaleSuccessInfo] = useState(null);
+  const [showKiloSaleModal, setShowKiloSaleModal] = useState(false); // Havzan · Baklavalar: tutarla kilo satışı
+  const [isSavingKiloSale, setIsSavingKiloSale] = useState(false);
   const [printToast, setPrintToast] = useState(null); // { status: 'printing' | 'success' | 'error', message: string }
   const hotResumePendingRef = useRef(HOT_RESUME);
   /** Arayüz güncellemesinden hemen önce kaydedilir; yenilenen sayfa buradan devam eder */
@@ -1089,6 +1092,58 @@ function App() {
     }
   };
 
+  // Havzan · Baklavalar: tartıdaki tutarla doğrudan satış (sepetten bağımsız)
+  const completeKiloSale = async ({ amount, paymentMethod }) => {
+    const totalAmount = Math.round(Number(amount) * 100) / 100;
+    if (!(totalAmount > 0) || isSavingKiloSale) return;
+    const categoryName = selectedCategory?.name || 'Baklava';
+    const item = {
+      id: 'kilo_' + Date.now(),
+      name: `${categoryName} (Kilo satışı)`,
+      price: totalAmount,
+      quantity: 1,
+      category_id: selectedCategory?.id ?? null,
+      isKiloSale: true
+    };
+    const saleData = { items: [item], totalAmount, paymentMethod, orderNote: null };
+
+    setIsSavingKiloSale(true);
+    try {
+      const result = await window.electronAPI.createSale(saleData);
+      if (!result?.success) {
+        setPrintToast({ status: 'error', message: result?.error || 'Kilo satışı kaydedilemedi' });
+        return;
+      }
+      setShowKiloSaleModal(false);
+      setSaleSuccessInfo({ totalAmount, paymentMethod });
+
+      if (window.electronAPI?.printReceipt) {
+        setPrintToast({ status: 'printing', message: 'Fiş yazdırılıyor...' });
+        window.electronAPI.printReceipt({
+          sale_id: result.saleId,
+          totalAmount,
+          paymentMethod,
+          sale_date: new Date().toLocaleDateString('tr-TR'),
+          sale_time: new Date().toLocaleTimeString('tr-TR'),
+          items: [item],
+          orderNote: null,
+          cashierOnly: true
+        }).then((r) => {
+          setPrintToast(r?.success
+            ? { status: 'success', message: 'Fiş başarıyla yazdırıldı' }
+            : { status: 'error', message: r?.error || 'Fiş yazdırılamadı' });
+        }).catch((err) => {
+          setPrintToast({ status: 'error', message: 'Fiş yazdırılamadı: ' + (err?.message || err) });
+        });
+      }
+    } catch (err) {
+      console.error('Kilo satışı hatası:', err);
+      setPrintToast({ status: 'error', message: 'Kilo satışı kaydedilemedi' });
+    } finally {
+      setIsSavingKiloSale(false);
+    }
+  };
+
   const handleSaveExpense = async (expenseData) => {
     const saleData = {
       items: [{
@@ -1508,6 +1563,11 @@ function App() {
                 </button>
               )}
             </div>
+            {isHavzanBranch &&
+              !searchQuery.trim() &&
+              String(selectedCategory?.name || '').toLocaleLowerCase('tr-TR').includes('baklava') && (
+                <KiloSaleButton onClick={() => setShowKiloSaleModal(true)} />
+              )}
             <ProductGrid
               products={filteredProducts}
               onAddToCart={addToCart}
@@ -1545,6 +1605,15 @@ function App() {
         <div className="p-6">
           <SalesHistory />
         </div>
+      )}
+
+      {showKiloSaleModal && (
+        <KiloSaleModal
+          categoryName={selectedCategory?.name || 'Baklava'}
+          busy={isSavingKiloSale}
+          onConfirm={completeKiloSale}
+          onCancel={() => { if (!isSavingKiloSale) setShowKiloSaleModal(false); }}
+        />
       )}
 
       {showPaymentModal && (

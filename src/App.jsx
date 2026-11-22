@@ -1093,13 +1093,14 @@ function App() {
   };
 
   // Havzan · Baklavalar: tartıdaki tutarla doğrudan satış (sepetten bağımsız)
-  const completeKiloSale = async ({ amount, paymentMethod }) => {
+  const completeKiloSale = async ({ product, amount, paymentMethod }) => {
     const totalAmount = Math.round(Number(amount) * 100) / 100;
-    if (!(totalAmount > 0) || isSavingKiloSale) return;
-    const categoryName = selectedCategory?.name || 'Baklava';
+    if (!product || !(totalAmount > 0) || isSavingKiloSale) return;
+    // Ayrı kimlik: kilo satışı ürünün adet stoğundan düşmez; asıl ürün base_product_id ile tutulur
     const item = {
-      id: 'kilo_' + Date.now(),
-      name: `${categoryName} (Kilo satışı)`,
+      id: `kilo_${product.id}_${Date.now()}`,
+      base_product_id: product.id,
+      name: `${product.name} (Kilo)`,
       price: totalAmount,
       quantity: 1,
       category_id: selectedCategory?.id ?? null,
@@ -1610,6 +1611,7 @@ function App() {
       {showKiloSaleModal && (
         <KiloSaleModal
           categoryName={selectedCategory?.name || 'Baklava'}
+          products={filteredProducts}
           busy={isSavingKiloSale}
           onConfirm={completeKiloSale}
           onCancel={() => { if (!isSavingKiloSale) setShowKiloSaleModal(false); }}

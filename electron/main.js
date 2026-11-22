@@ -2340,7 +2340,7 @@ ipcMain.handle('create-sale', async (event, saleData) => {
       price: item.price,
       isGift: item.isGift || false,
       ...(item.category_id != null ? { category_id: item.category_id } : {}),
-      ...(item.isKiloSale ? { isKiloSale: true } : {})
+      ...(item.isKiloSale ? { isKiloSale: true, base_product_id: item.base_product_id ?? null } : {})
     });
   });
 
@@ -2372,7 +2372,7 @@ ipcMain.handle('create-sale', async (event, saleData) => {
           price: item.price,
           isGift: item.isGift || false,
           ...(item.category_id != null ? { category_id: item.category_id } : {}),
-          ...(item.isKiloSale ? { isKiloSale: true } : {})
+          ...(item.isKiloSale ? { isKiloSale: true, base_product_id: item.base_product_id ?? null } : {})
         })),
         created_at: firebaseServerTimestamp()
       };

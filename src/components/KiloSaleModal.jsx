@@ -16,13 +16,16 @@ export function parseKiloAmount(text) {
 }
 
 /**
- * Kilo satışı: tutar (₺) girilir, Nakit / Kredi Kartı ile satış tamamlanır.
- * onConfirm({ amount, paymentMethod }) — işlem sürerken `busy` true gelir.
+ * Kilo satışı (2 adım): önce kategorideki baklava türü seçilir, sonra tartıdaki tutar (₺) girilip
+ * Nakit / Kredi Kartı ile satış tamamlanır.
+ * onConfirm({ product, amount, paymentMethod }) — işlem sürerken `busy` true gelir.
  */
-export default function KiloSaleModal({ categoryName = 'Baklava', busy = false, onConfirm, onCancel }) {
+export default function KiloSaleModal({ categoryName = 'Baklava', products = [], busy = false, onConfirm, onCancel }) {
+  const [product, setProduct] = useState(null);
   const [text, setText] = useState('');
   const amount = parseKiloAmount(text);
-  const canPay = !busy && amount > 0;
+  const canPay = !busy && !!product && amount > 0;
+  const list = (products || []).filter((p) => p && p.id != null && !p.isYanUrun);
 
   const pressKey = (k) => {
     if (busy) return;
@@ -37,24 +40,25 @@ export default function KiloSaleModal({ categoryName = 'Baklava', busy = false, 
     });
   };
 
-  // Fiziksel klavye: rakamlar, virgül/nokta, Backspace, Enter (nakit), Esc
+  // Fiziksel klavye (tutar adımında): rakamlar, virgül/nokta, Backspace; Esc her zaman kapatır
   useEffect(() => {
     const onKey = (e) => {
       if (busy) return;
-      if (/^[0-9]$/.test(e.key)) pressKey(e.key);
+      if (e.key === 'Escape') onCancel?.();
+      else if (!product) return;
+      else if (/^[0-9]$/.test(e.key)) pressKey(e.key);
       else if (e.key === ',' || e.key === '.') pressKey(',');
       else if (e.key === 'Backspace') pressKey('⌫');
-      else if (e.key === 'Escape') onCancel?.();
       else return;
       e.preventDefault();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [busy, onCancel]);
+  }, [busy, onCancel, product]);
 
   const pay = (paymentMethod) => {
     if (!canPay) return;
-    onConfirm({ amount, paymentMethod });
+    onConfirm({ product, amount, paymentMethod });
   };
 
   return createPortal(
@@ -78,8 +82,12 @@ export default function KiloSaleModal({ categoryName = 'Baklava', busy = false, 
                 <ScaleIcon className="h-7 w-7" />
               </span>
               <div className="min-w-0">
-                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/75">{categoryName}</p>
-                <h3 className="text-2xl font-black tracking-tight">Kilo satışı</h3>
+                <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/75">
+                  Kilo satışı · {product ? '2/2 Tutar' : '1/2 Tür seç'}
+                </p>
+                <h3 className="truncate text-2xl font-black tracking-tight">
+                  {product ? product.name : `${categoryName}`}
+                </h3>
               </div>
             </div>
             <button
@@ -94,14 +102,59 @@ export default function KiloSaleModal({ categoryName = 'Baklava', busy = false, 
               </svg>
             </button>
           </div>
-          <div className="relative mt-5 rounded-2xl bg-white/15 px-4 py-3 ring-1 ring-white/25">
-            <p className="text-xs font-semibold text-white/80">Tartıdaki tutar</p>
-            <p className={`mt-0.5 text-right text-5xl font-black tracking-tight tabular-nums ${text ? 'text-white' : 'text-white/45'}`}>
-              ₺{text || '0'}
+          {product ? (
+            <div className="relative mt-5 rounded-2xl bg-white/15 px-4 py-3 ring-1 ring-white/25">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-white/80">Tartıdaki tutar</p>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setProduct(null)}
+                  className="rounded-full bg-white/20 px-3 py-1 text-xs font-bold text-white ring-1 ring-white/30 transition hover:bg-white/30 disabled:opacity-40"
+                >
+                  Türü değiştir
+                </button>
+              </div>
+              <p className={`mt-0.5 text-right text-5xl font-black tracking-tight tabular-nums ${text ? 'text-white' : 'text-white/45'}`}>
+                ₺{text || '0'}
+              </p>
+            </div>
+          ) : (
+            <p className="relative mt-4 text-sm font-medium text-white/90">
+              Hangi baklavayı tartıyorsun? Türü seç, sonra tutarı gir.
             </p>
-          </div>
+          )}
         </div>
 
+        {!product ? (
+          <div className="p-6">
+            {list.length === 0 ? (
+              <p className="rounded-2xl bg-slate-50 px-4 py-6 text-center text-sm font-semibold text-slate-500">
+                Bu kategoride ürün yok
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2.5">
+                {list.map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => { setProduct(p); setText(''); }}
+                    className="group flex min-h-[72px] flex-col justify-between rounded-2xl bg-white px-4 py-3 text-left ring-1 ring-slate-200 transition hover:bg-amber-50 hover:ring-amber-400 active:scale-[0.98]"
+                  >
+                    <span className="text-[15px] font-bold leading-snug text-slate-900">{p.name}</span>
+                    <span className="mt-1 flex items-center justify-between text-xs font-semibold text-slate-400">
+                      <span>{p.price ? money(p.price) : ' '}</span>
+                      <svg className="h-4 w-4 text-amber-500 opacity-0 transition group-hover:opacity-100" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                      </svg>
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
         <div className="px-6 pt-5">
           <div className="grid grid-cols-3 gap-2">
             {PRESETS.map((a) => {
@@ -136,12 +189,11 @@ export default function KiloSaleModal({ categoryName = 'Baklava', busy = false, 
               </button>
             ))}
           </div>
-          <div className="mt-4 flex items-baseline justify-between rounded-2xl bg-slate-50 px-4 py-3">
-            <span className="text-sm font-bold text-slate-700">Satış tutarı</span>
-            <span className="text-3xl font-black tracking-tight text-slate-900">{money(amount)}</span>
+          <div className="mt-4 flex items-baseline justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
+            <span className="min-w-0 truncate text-sm font-bold text-slate-700">{product.name}</span>
+            <span className="shrink-0 text-3xl font-black tracking-tight text-slate-900">{money(amount)}</span>
           </div>
         </div>
-
         <div className="grid grid-cols-2 gap-3 p-6">
           {busy ? (
             <div className="col-span-2 flex items-center justify-center gap-3 rounded-2xl bg-slate-100 py-5">
@@ -175,6 +227,8 @@ export default function KiloSaleModal({ categoryName = 'Baklava', busy = false, 
             </>
           )}
         </div>
+          </>
+        )}
       </div>
     </div>,
     document.body

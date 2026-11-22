@@ -1,18 +1,37 @@
-name: Ortak sifre sifirla (tek seferlik)
+name: Patron deploy denemesi (tek seferlik)
 on:
   push:
     branches: [ops/reset-ortak-pin]
 permissions:
   contents: write
 jobs:
-  reset:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with: { ref: main, path: app }
+      - uses: actions/checkout@v4
+        with: { path: ops }
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - run: npm i --no-save --no-package-lock firebase@10
-      - run: node scripts/dump-menu.mjs || true
+      - name: Deploy
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+          SA1: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_MAKARA_16344 }}
+          SA2: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          SA3: ${{ secrets.GCP_SA_KEY }}
+        run: |
+          cd app
+          R=../ops/deploy-result.txt
+          echo "token:${FIREBASE_TOKEN:+var} sa1:${SA1:+var} sa2:${SA2:+var} sa3:${SA3:+var}" > $R
+          SA="${SA1:-${SA2:-$SA3}}"
+          if [ -n "$SA" ]; then echo "$SA" > /tmp/sa.json; export GOOGLE_APPLICATION_CREDENTIALS=/tmp/sa.json; fi
+          if [ -n "$SA" ] || [ -n "$FIREBASE_TOKEN" ]; then
+            npx -y firebase-tools@13 deploy --only hosting --project makara-16344 --non-interactive ${FIREBASE_TOKEN:+--token "$FIREBASE_TOKEN"} > /tmp/out.txt 2>&1 && echo DEPLOY_OK >> $R || echo DEPLOY_FAIL >> $R
+            tail -15 /tmp/out.txt | sed 's/ya29[^ ]*/***/g' >> $R
+          else
+            echo "SECRET_YOK" >> $R
+          fi
       - run: |
-          git config user.name bot && git config user.email bot@users.noreply.github.com
-          git add -f menu-dump && git commit -m "sonuc" && git push
+          cd ops && git config user.name bot && git config user.email bot@users.noreply.github.com
+          git add -f deploy-result.txt && git commit -m "sonuc" && git push

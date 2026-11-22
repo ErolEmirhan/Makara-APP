@@ -1,0 +1,2 @@
+token: sa1: sa2: sa3:
+SECRET_YOK
